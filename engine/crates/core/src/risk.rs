@@ -1,5 +1,12 @@
-/// Risk gates: last line of defense before an order goes out.
-/// If any gate rejects, no trade happens.
+//! Risk gates — last line of defense before an order goes out.
+//!
+//! Every signal must pass through risk checks before becoming an order.
+//! If any gate rejects, no trade happens. Risk management is the main strategy.
+//!
+//! V1 gates:
+//! - Kill switch: halt all trading if daily P&L exceeds max loss
+//! - Cost filter: reject if signal isn't strong enough relative to costs
+//! - Position sizing: cap notional exposure, allow fractional for expensive assets
 
 use crate::signals::{Side, SignalOutput};
 

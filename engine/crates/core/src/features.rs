@@ -1,5 +1,15 @@
-/// Incremental feature computation using ring buffers.
-/// No full recomputation — each update is O(1).
+//! Incremental feature computation from price bars.
+//!
+//! Features are the quantitative inputs to strategies. All computation is O(1)
+//! per bar using ring buffers — no full recomputation.
+//!
+//! V1 features:
+//! - Returns: 1-bar, 5-bar, 20-bar simple returns
+//! - SMA: 20-bar simple moving average of close
+//! - Volatility: 20-bar rolling std dev of returns
+//! - Z-score: current return normalized by rolling volatility
+//! - Volume: relative volume vs 20-bar average
+//! - Bar shape: range (high-low), close location within bar
 
 /// Fixed-size ring buffer for rolling computations.
 #[derive(Debug, Clone)]

@@ -1,7 +1,10 @@
-/// The engine: ties features → signals → risk → order intents.
-///
-/// `on_bar()` is the single entry point. Feed a bar, get back order intents.
-/// This is the entire pipeline in one call.
+//! Core engine: the single entry point that ties everything together.
+//!
+//! Feed a bar via `on_bar()`, get back order intents. Internally runs:
+//! features → strategy → risk gates → order intents.
+//!
+//! The engine is strategy-agnostic — it holds a boxed `Strategy` trait object.
+//! Swap strategies by passing a different one at construction time.
 
 use std::collections::HashMap;
 
@@ -9,7 +12,7 @@ use crate::features::{FeatureState, FeatureValues};
 use crate::market_data::Bar;
 use crate::portfolio::Portfolio;
 use crate::risk::{self, RiskConfig, RiskState};
-use crate::signals::{self, SignalConfig, Side};
+use crate::signals::{Side, Strategy, mean_reversion};
 
 /// An order the engine wants placed.
 #[derive(Debug, Clone)]
@@ -24,14 +27,14 @@ pub struct OrderIntent {
 /// Engine configuration.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
-    pub signal: SignalConfig,
+    pub signal: mean_reversion::Config,
     pub risk: RiskConfig,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            signal: SignalConfig::default(),
+            signal: mean_reversion::Config::default(),
             risk: RiskConfig::default(),
         }
     }
@@ -39,21 +42,37 @@ impl Default for EngineConfig {
 
 /// The core engine. Maintains all state, processes bars, emits order intents.
 pub struct Engine {
-    config: EngineConfig,
+    strategy: Box<dyn Strategy>,
     features: HashMap<String, FeatureState>,
     last_features: HashMap<String, FeatureValues>,
     portfolio: Portfolio,
     risk_state: RiskState,
+    risk_config: RiskConfig,
 }
 
 impl Engine {
+    /// Create engine with default mean-reversion strategy.
     pub fn new(config: EngineConfig) -> Self {
+        let strategy = mean_reversion::MeanReversion::new(config.signal);
         Self {
-            config,
+            strategy: Box::new(strategy),
             features: HashMap::new(),
             last_features: HashMap::new(),
             portfolio: Portfolio::new(),
             risk_state: RiskState::new(),
+            risk_config: config.risk,
+        }
+    }
+
+    /// Create engine with a custom strategy.
+    pub fn with_strategy(strategy: Box<dyn Strategy>, risk_config: RiskConfig) -> Self {
+        Self {
+            strategy,
+            features: HashMap::new(),
+            last_features: HashMap::new(),
+            portfolio: Portfolio::new(),
+            risk_state: RiskState::new(),
+            risk_config,
         }
     }
 
@@ -68,11 +87,9 @@ impl Engine {
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
         self.last_features.insert(bar.symbol.clone(), features.clone());
 
-        // 2. Score signals
+        // 2. Score via strategy
         let has_position = self.portfolio.has_position(&bar.symbol);
-        let signal = signals::score(&features, has_position, &self.config.signal);
-
-        let signal = match signal {
+        let signal = match self.strategy.score(&features, has_position) {
             Some(s) => s,
             None => return vec![],
         };
@@ -84,7 +101,7 @@ impl Engine {
             bar.close,
             position_qty,
             &self.risk_state,
-            &self.config.risk,
+            &self.risk_config,
         ) {
             Ok(qty) => qty,
             Err(_rejection) => return vec![],
@@ -99,20 +116,20 @@ impl Engine {
         }]
     }
 
-    /// Notify engine that an order was filled (so it updates portfolio/risk).
+    /// Notify engine that an order was filled (updates portfolio and risk).
     pub fn on_fill(&mut self, symbol: &str, side: Side, qty: f64, fill_price: f64) {
         let realized_pnl = self.portfolio.on_fill(symbol, side, qty, fill_price);
         if realized_pnl != 0.0 {
-            self.risk_state.record_pnl(realized_pnl, &self.config.risk);
+            self.risk_state.record_pnl(realized_pnl, &self.risk_config);
         }
     }
 
-    /// Reset daily risk state (call at start of each trading day).
+    /// Reset daily risk state.
     pub fn reset_daily(&mut self) {
         self.risk_state.reset_daily();
     }
 
-    /// Current feature values for a symbol (for debugging/display).
+    /// Current feature values for a symbol.
     pub fn current_features(&self, symbol: &str) -> Option<&FeatureValues> {
         self.last_features.get(symbol)
     }
@@ -145,84 +162,62 @@ mod tests {
     }
 
     #[test]
-    fn test_warmup_no_signals() {
+    fn warmup_produces_no_signals() {
         let mut engine = Engine::new(EngineConfig::default());
-        // First 19 bars should produce no signals (warmup)
         for i in 0..19 {
             let bar = steady_bar("AAPL", 100.0 + (i as f64 * 0.01), 1000.0);
-            let intents = engine.on_bar(&bar);
-            assert!(intents.is_empty(), "expected no signal during warmup, bar {i}");
+            assert!(engine.on_bar(&bar).is_empty(), "no signal during warmup, bar {i}");
         }
     }
 
     #[test]
-    fn test_big_drop_triggers_buy() {
+    fn big_drop_triggers_buy() {
         let config = EngineConfig {
-            risk: crate::risk::RiskConfig {
-                min_reward_cost_ratio: 0.0, // disable cost filter for this test
+            risk: RiskConfig {
+                min_reward_cost_ratio: 0.0,
                 ..Default::default()
             },
             ..Default::default()
         };
         let mut engine = Engine::new(config);
 
-        // Warm up with steady prices
         for _ in 0..25 {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
         }
 
-        // Big drop with volume spike
-        let crash_bar = Bar {
-            symbol: "AAPL".into(),
-            timestamp: 0,
-            open: 100.0,
-            high: 100.0,
-            low: 93.0,
-            close: 94.0,
-            volume: 2000.0,
+        let crash = Bar {
+            symbol: "AAPL".into(), timestamp: 0,
+            open: 100.0, high: 100.0, low: 93.0, close: 94.0, volume: 2000.0,
         };
-        let intents = engine.on_bar(&crash_bar);
+        let intents = engine.on_bar(&crash);
         assert!(!intents.is_empty(), "expected buy signal on big drop");
         assert_eq!(intents[0].side, Side::Buy);
     }
 
     #[test]
-    fn test_kill_switch_blocks_after_loss() {
+    fn kill_switch_blocks_after_loss() {
         let config = EngineConfig {
-            risk: RiskConfig {
-                max_daily_loss: 100.0,
-                ..Default::default()
-            },
+            risk: RiskConfig { max_daily_loss: 100.0, ..Default::default() },
             ..Default::default()
         };
         let mut engine = Engine::new(config);
 
-        // Simulate a big loss
         engine.on_fill("AAPL", Side::Buy, 10.0, 100.0);
         engine.on_fill("AAPL", Side::Sell, 10.0, 85.0); // -150 loss
-
         assert!(engine.risk_state().killed);
 
-        // Now even a strong signal should be blocked
         for _ in 0..25 {
             engine.on_bar(&steady_bar("TSLA", 100.0, 1000.0));
         }
         let crash = Bar {
-            symbol: "TSLA".into(),
-            timestamp: 0,
-            open: 100.0,
-            high: 100.0,
-            low: 90.0,
-            close: 91.0,
-            volume: 3000.0,
+            symbol: "TSLA".into(), timestamp: 0,
+            open: 100.0, high: 100.0, low: 90.0, close: 91.0, volume: 3000.0,
         };
-        let intents = engine.on_bar(&crash);
-        assert!(intents.is_empty(), "kill switch should block all trades");
+        assert!(engine.on_bar(&crash).is_empty(), "kill switch should block");
     }
 
     #[test]
-    fn test_deterministic() {
-        // Same inputs must produce same outputs
+    fn deterministic_replay() {
         let bars: Vec<Bar> = (0..30)
             .map(|i| Bar {
                 symbol: "TEST".into(),
@@ -240,13 +235,12 @@ mod tests {
             bars.iter().map(|b| engine.on_bar(b)).collect()
         };
 
-        let run1 = run(&bars);
-        let run2 = run(&bars);
+        let r1 = run(&bars);
+        let r2 = run(&bars);
 
-        assert_eq!(run1.len(), run2.len());
-        for (r1, r2) in run1.iter().zip(run2.iter()) {
-            assert_eq!(r1.len(), r2.len());
-            for (o1, o2) in r1.iter().zip(r2.iter()) {
+        for (a, b) in r1.iter().zip(r2.iter()) {
+            assert_eq!(a.len(), b.len());
+            for (o1, o2) in a.iter().zip(b.iter()) {
                 assert_eq!(o1.symbol, o2.symbol);
                 assert_eq!(o1.side, o2.side);
                 assert_eq!(o1.qty, o2.qty);

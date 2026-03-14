@@ -1,7 +1,11 @@
-/// Backtesting engine: replays historical bars through the same Engine,
-/// simulates fills, and computes performance metrics.
-///
-/// Same features, signals, risk gates as live. Only difference: data source.
+//! Backtesting engine — replays historical bars through the same Engine.
+//!
+//! Uses identical features, strategies, and risk gates as live trading.
+//! Only difference: data source (historical vs live) and fill model
+//! (next-bar-open vs broker).
+//!
+//! A backtest is a filter, not proof. Results include full trade records,
+//! equity curve, and stats (win rate, expectancy, Sharpe, drawdown).
 
 use crate::engine::{Engine, EngineConfig, OrderIntent};
 use crate::market_data::Bar;
@@ -69,7 +73,7 @@ pub fn run(bars: &[Bar], config: EngineConfig) -> BacktestResult {
     let mut equity_curve = Vec::with_capacity(bars.len());
 
     let mut signals_generated = 0_usize;
-    let mut signals_rejected = 0_usize;
+    let signals_rejected = 0_usize;
 
     for (bar_idx, bar) in bars.iter().enumerate() {
         // 1. Execute pending intents at this bar's open (next-bar-open fill)

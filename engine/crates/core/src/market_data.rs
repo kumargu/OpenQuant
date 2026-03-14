@@ -1,3 +1,8 @@
+//! Market data types — the canonical representation of price data.
+//!
+//! All data entering the engine is converted to these types first.
+//! Bar is the primary unit: one OHLCV candle for a symbol at a timestamp.
+
 /// A single OHLCV bar.
 #[derive(Debug, Clone)]
 pub struct Bar {

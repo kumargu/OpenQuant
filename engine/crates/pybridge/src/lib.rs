@@ -1,5 +1,5 @@
-/// Thin PyO3 bridge — just type conversion at the boundary.
-/// All logic lives in openquant-core. This is ~100 lines of glue.
+//! Thin PyO3 bridge — just type conversion at the boundary.
+//! All logic lives in openquant-core. Python never does math.
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -7,6 +7,7 @@ use pyo3::types::PyDict;
 use openquant_core::engine::{Engine as CoreEngine, EngineConfig};
 use openquant_core::market_data::Bar;
 use openquant_core::signals::Side;
+use openquant_core::signals::mean_reversion;
 
 #[pyclass]
 struct Engine {
@@ -31,7 +32,7 @@ impl Engine {
         min_relative_volume: f64,
     ) -> Self {
         let config = EngineConfig {
-            signal: openquant_core::signals::SignalConfig {
+            signal: mean_reversion::Config {
                 buy_z_threshold,
                 sell_z_threshold,
                 min_relative_volume,
@@ -49,7 +50,6 @@ impl Engine {
     }
 
     /// Feed a bar, get back list of order intent dicts.
-    /// Returns: [{"symbol", "side", "qty", "reason", "score"}, ...]
     #[pyo3(signature = (symbol, timestamp, open, high, low, close, volume))]
     fn on_bar<'py>(
         &mut self,
@@ -64,12 +64,7 @@ impl Engine {
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let bar = Bar {
             symbol: symbol.to_string(),
-            timestamp,
-            open,
-            high,
-            low,
-            close,
-            volume,
+            timestamp, open, high, low, close, volume,
         };
 
         let intents = self.inner.on_bar(&bar);
@@ -78,13 +73,10 @@ impl Engine {
         for intent in &intents {
             let dict = PyDict::new(py);
             dict.set_item("symbol", &intent.symbol)?;
-            dict.set_item(
-                "side",
-                match intent.side {
-                    Side::Buy => "buy",
-                    Side::Sell => "sell",
-                },
-            )?;
+            dict.set_item("side", match intent.side {
+                Side::Buy => "buy",
+                Side::Sell => "sell",
+            })?;
             dict.set_item("qty", intent.qty)?;
             dict.set_item("reason", &intent.reason)?;
             dict.set_item("score", intent.signal_score)?;
@@ -136,7 +128,6 @@ impl Engine {
     fn positions<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let positions = self.inner.positions().positions();
         let mut results = Vec::new();
-
         for pos in positions {
             let dict = PyDict::new(py);
             dict.set_item("symbol", &pos.symbol)?;
@@ -145,15 +136,11 @@ impl Engine {
             dict.set_item("unrealized_pnl", pos.unrealized_pnl)?;
             results.push(dict);
         }
-
         Ok(results)
     }
 }
 
 /// Run a backtest over historical bars. All computation in Rust.
-///
-/// bars: list of (symbol, timestamp, open, high, low, close, volume) tuples
-/// Returns dict with full stats + trade list + equity curve.
 #[pyfunction]
 #[pyo3(signature = (
     bars,
@@ -175,18 +162,12 @@ fn backtest<'py>(
     let core_bars: Vec<Bar> = bars
         .into_iter()
         .map(|(symbol, ts, o, h, l, c, v)| Bar {
-            symbol,
-            timestamp: ts,
-            open: o,
-            high: h,
-            low: l,
-            close: c,
-            volume: v,
+            symbol, timestamp: ts, open: o, high: h, low: l, close: c, volume: v,
         })
         .collect();
 
     let config = EngineConfig {
-        signal: openquant_core::signals::SignalConfig {
+        signal: mean_reversion::Config {
             buy_z_threshold,
             sell_z_threshold,
             min_relative_volume,
@@ -201,7 +182,6 @@ fn backtest<'py>(
 
     let result = openquant_core::backtest::run(&core_bars, config);
 
-    // Convert to Python dict
     let dict = PyDict::new(py);
     dict.set_item("total_bars", result.total_bars)?;
     dict.set_item("total_trades", result.total_trades)?;
@@ -219,7 +199,6 @@ fn backtest<'py>(
     dict.set_item("signals_generated", result.signals_generated)?;
     dict.set_item("equity_curve", result.equity_curve)?;
 
-    // Trade records as list of dicts
     let trades_list: Vec<Bound<'py, PyDict>> = result
         .trades
         .iter()

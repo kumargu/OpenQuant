@@ -1,5 +1,8 @@
-/// Portfolio accounting: tracks positions and P&L.
-/// Same logic used in backtesting and paper/live trading.
+//! Portfolio accounting — tracks positions and P&L.
+//!
+//! Same logic is used in backtesting, paper trading, and live trading.
+//! Positions are computed from fills, not stored separately.
+//! Supports averaging up/down and partial closes with realized P&L.
 
 use crate::signals::Side;
 
