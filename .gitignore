@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 data/paper_trades/
+engine/target/
+*.so
+*.dylib
+*.whl

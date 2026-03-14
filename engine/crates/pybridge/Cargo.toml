@@ -1,0 +1,12 @@
+[package]
+name = "openquant"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "openquant"
+crate-type = ["cdylib"]
+
+[dependencies]
+openquant-core = { path = "../core" }
+pyo3 = { version = "0.24", features = ["extension-module"] }
