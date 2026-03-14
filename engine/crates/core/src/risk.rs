@@ -100,8 +100,13 @@ pub fn check(
     // Gate 3: Position sizing — compute qty within notional limit
     let qty = match signal.side {
         Side::Buy => {
-            let max_qty = (config.max_position_notional / price).floor();
-            let desired = max_qty.min(100.0); // start conservative
+            let max_qty = config.max_position_notional / price;
+            // Allow fractional quantities (crypto). Cap at 100 units for stocks.
+            let desired = if price > 1000.0 {
+                max_qty // fractional for expensive assets
+            } else {
+                max_qty.min(100.0).floor() // whole shares for cheaper ones
+            };
             if desired <= 0.0 {
                 return Err(Rejection {
                     reason: format!("position size: price {price:.2} exceeds max notional"),

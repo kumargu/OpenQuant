@@ -4,3 +4,4 @@ pub mod signals;
 pub mod risk;
 pub mod portfolio;
 pub mod engine;
+pub mod backtest;

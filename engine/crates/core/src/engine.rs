@@ -41,6 +41,7 @@ impl Default for EngineConfig {
 pub struct Engine {
     config: EngineConfig,
     features: HashMap<String, FeatureState>,
+    last_features: HashMap<String, FeatureValues>,
     portfolio: Portfolio,
     risk_state: RiskState,
 }
@@ -50,6 +51,7 @@ impl Engine {
         Self {
             config,
             features: HashMap::new(),
+            last_features: HashMap::new(),
             portfolio: Portfolio::new(),
             risk_state: RiskState::new(),
         }
@@ -64,6 +66,7 @@ impl Engine {
             .or_insert_with(FeatureState::new);
 
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
+        self.last_features.insert(bar.symbol.clone(), features.clone());
 
         // 2. Score signals
         let has_position = self.portfolio.has_position(&bar.symbol);
@@ -110,12 +113,8 @@ impl Engine {
     }
 
     /// Current feature values for a symbol (for debugging/display).
-    pub fn current_features(&mut self, symbol: &str) -> Option<FeatureValues> {
-        // Return the last computed features by feeding a dummy? No — we just
-        // expose the state. But FeatureState doesn't cache the last output.
-        // For now, return None. We'll add caching if needed.
-        let _ = symbol;
-        None
+    pub fn current_features(&self, symbol: &str) -> Option<&FeatureValues> {
+        self.last_features.get(symbol)
     }
 
     /// Current portfolio positions.
