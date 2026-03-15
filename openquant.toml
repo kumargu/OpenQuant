@@ -1,36 +1,139 @@
 # OpenQuant Configuration
-# Tweak parameters here instead of changing code.
-# CLI flags and Python kwargs override these values.
+#
+# Central config for all tunable engine parameters. Tweak values here
+# instead of changing code — much faster for experimentation.
+#
+# Precedence (highest wins):
+#   1. CLI flags / Python kwargs
+#   2. This TOML file
+#   3. Rust-side defaults (compiled into the binary)
+#
+# After changing a value, re-run your backtest to see the effect:
+#   python -m paper_trading.benchmark --category crypto --days 7
 
+
+# ---------------------------------------------------------------------------
+# Metrics — controls the JSONL metrics recorder
+# ---------------------------------------------------------------------------
 [metrics]
+
+# Whether to install the metrics recorder at engine startup.
+# When false, all metric macros become no-op (~1ns atomic load).
+# Set to false for production trading where every nanosecond matters,
+# or true during development/backtesting for observability.
 enabled = true
 
+
+# ---------------------------------------------------------------------------
+# Signal — mean-reversion strategy parameters
+# ---------------------------------------------------------------------------
 [signal]
+
+# Z-score of returns below which a buy signal fires (must be negative).
+# More negative = stricter, fewer trades, higher conviction per trade.
+# Example: -2.0 fires on ~2.3% of bars; -2.5 fires on ~0.6%.
+# Tightened from -2.0 to -2.2 to reduce false entries in low-conviction dips.
 buy_z_threshold = -2.2
+
+# Z-score above which a sell signal fires (must be positive).
+# Higher = hold longer, waiting for a stronger reversion.
+# Lower = exit earlier, locking in smaller gains more often.
 sell_z_threshold = 2.0
+
+# Minimum relative volume (current / 20-bar avg) to confirm a buy.
+# Ensures the price drop has real market participation behind it.
+# 1.0 = average volume; 1.2 = 20% above average.
+# Higher = fewer but more confident entries; lower = more trades.
 min_relative_volume = 1.2
+
+# Minimum signal score to act on (0.0–∞).
+# Score = 0.6×|z - threshold| + 0.4×(relative_volume - 1.0) for buys.
+# Acts as a final quality gate — increase to be more selective.
 min_score = 0.5
+
+# When true, block buy signals when close < SMA-50 (downtrend filter).
+# Prevents catching falling knives in sustained bear moves.
+# Set to false if you want to trade mean-reversion in both directions.
 trend_filter = true
 
+
+# ---------------------------------------------------------------------------
+# Risk — position sizing and loss limits
+# ---------------------------------------------------------------------------
 [risk]
+
+# Maximum notional value (in USD) for any single position.
+# Caps exposure per trade. Increase for larger accounts,
+# decrease to limit single-trade risk.
 max_position_notional = 10_000.0
+
+# Maximum cumulative realized loss allowed per calendar day (USD).
+# Once hit, the engine stops opening new positions for the rest of the day.
+# Acts as a circuit breaker. Set higher for more aggressive strategies.
 max_daily_loss = 500.0
+
+# Minimum expected-reward / estimated-cost ratio to approve a trade.
+# A trade with score 1.5 and cost 0.5 has ratio 3.0.
+# Higher = only take trades where expected profit far exceeds cost.
+# Lower = allow more marginal trades through.
 min_reward_cost_ratio = 3.0
+
+# Estimated round-trip transaction cost in basis points (1 bp = 0.01%).
+# Used in the reward/cost check above. Set to your actual exchange fees.
+# Typical values: 0.001 (1 bp) for maker, 0.002-0.003 for taker.
 estimated_cost_bps = 0.001
 
+
+# ---------------------------------------------------------------------------
+# Exit — stop-loss, take-profit, and time-based exits
+# ---------------------------------------------------------------------------
 [exit]
+
+# Fixed percentage stop-loss (0.0 = disabled, use ATR-based instead).
+# When > 0, exit if position drops by this percentage from entry price.
+# Example: 0.05 = exit at 5% loss. Overrides ATR stop if set.
 stop_loss_pct = 0.0
+
+# ATR-multiplier for dynamic stop-loss (0.0 = disabled).
+# Stop price = entry - (ATR × this multiplier).
+# Higher = wider stop (more room for volatility); lower = tighter stop.
+# Only active when stop_loss_pct is 0.
 stop_loss_atr_mult = 2.5
+
+# Maximum number of bars to hold a position before forced exit (0 = no limit).
+# Prevents capital from being tied up in stale positions.
+# At 1-minute bars, 100 bars = ~1.7 hours.
 max_hold_bars = 100
+
+# Fixed percentage take-profit (0.0 = disabled).
+# When > 0, exit if position gains this percentage from entry price.
+# Example: 0.03 = take profit at 3% gain.
 take_profit_pct = 0.0
 
-[data]
-max_bar_age_seconds = 0      # 0 = disabled (for backtesting)
 
-# Per-symbol overrides. Any key omitted uses the default above.
+# ---------------------------------------------------------------------------
+# Data — market data staleness controls
+# ---------------------------------------------------------------------------
+[data]
+
+# Maximum age of a bar (in seconds) before it's considered stale.
+# Stale bars are rejected — the engine does nothing rather than trade
+# on delayed data. 0 = disabled (appropriate for backtesting).
+# For live trading, set to something like 120 (2 minutes).
+max_bar_age_seconds = 0
+
+
+# ---------------------------------------------------------------------------
+# Per-symbol overrides
+# ---------------------------------------------------------------------------
+# Override any signal/risk/exit parameter for a specific symbol.
+# Any key omitted uses the default from the sections above.
+#
+# Example: tighter entry for BTC, wider stop for ETH
+#
 # [symbol_overrides.BTCUSD]
-# buy_z_threshold = -2.5
-# stop_loss_atr_mult = 3.0
+# buy_z_threshold = -2.5      # stricter entry for BTC
+# stop_loss_atr_mult = 3.0    # wider stop for BTC volatility
 #
 # [symbol_overrides.ETHUSD]
-# min_relative_volume = 1.5
+# min_relative_volume = 1.5   # require more volume confirmation for ETH

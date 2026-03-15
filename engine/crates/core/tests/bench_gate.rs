@@ -92,10 +92,10 @@ fn median_ns(iterations: usize, mut f: impl FnMut()) -> f64 {
 // ---------------------------------------------------------------------------
 //
 // Baselines (Apple M4, 2026-03-15):
-//   feature_update:   9ns    → gate: 2µs
-//   on_bar:           66ns   → gate: 5µs
-//   backtest_1k:      69µs   → gate: 5ms
-//   backtest_10k:     681µs  → gate: 50ms
+//   feature_update:   8.9ns  → gate: 2µs
+//   on_bar:           64ns   → gate: 5µs
+//   backtest_1k:      67µs   → gate: 5ms
+//   backtest_10k:     673µs  → gate: 50ms
 //
 // CI Ubuntu runners are ~25x slower than local M4 in debug-like conditions.
 // Gates are set at ~30-50x baseline to prevent flakiness.
@@ -118,7 +118,7 @@ fn gate_feature_update() {
 
     assert!(
         ns < 2_000.0,
-        "feature_update took {ns:.0}ns, gate is 2µs (baseline ~9ns)"
+        "feature_update took {ns:.0}ns, gate is 2µs (baseline ~8.9ns)"
     );
 }
 
@@ -141,7 +141,7 @@ fn gate_on_bar() {
 
     assert!(
         ns < 5_000.0,
-        "on_bar took {ns:.0}ns, gate is 5µs (baseline ~66ns)"
+        "on_bar took {ns:.0}ns, gate is 5µs (baseline ~64ns)"
     );
 }
 
@@ -158,7 +158,7 @@ fn gate_backtest_1k() {
 
     assert!(
         us < 5_000.0,
-        "backtest_1k took {us:.0}µs, gate is 5ms (baseline ~69µs)"
+        "backtest_1k took {us:.0}µs, gate is 5ms (baseline ~67µs)"
     );
 }
 
@@ -175,6 +175,6 @@ fn gate_backtest_10k() {
 
     assert!(
         ms < 50.0,
-        "backtest_10k took {ms:.1}ms, gate is 50ms (baseline ~0.68ms)"
+        "backtest_10k took {ms:.1}ms, gate is 50ms (baseline ~0.67ms)"
     );
 }

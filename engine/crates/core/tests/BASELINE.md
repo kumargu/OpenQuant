@@ -6,13 +6,17 @@ Measured on Apple M4 (2026-03-15) with `cargo bench`.
 
 | Benchmark | Baseline | CI Gate |
 |---|---|---|
-| feature_update | 9ns | 500ns |
-| signal_eval_no_fire | 7ns | — |
-| signal_eval_buy_fire | 9ns | — |
+| feature_update | 8.9ns | 2µs |
+| signal_eval_no_fire | 7.0ns | — |
+| signal_eval_buy_fire | 8.9ns | — |
 | risk_check_pass | 1.7ns | — |
-| on_bar_no_signal | 66ns | 500ns |
-| backtest_1k | 69µs | 500µs |
-| backtest_10k | 681µs | 5ms |
+| risk_check_killed | 90ns | — |
+| exit_check_no_trigger | 2.2ns | — |
+| exit_check_stop_loss | 13.9ns | — |
+| on_bar_no_signal | 64ns | 5µs |
+| on_bar_journaled | 69ns | — |
+| backtest_1k | 67µs | 5ms |
+| backtest_10k | 673µs | 50ms |
 
 ## Metrics Overhead (criterion)
 
@@ -26,6 +30,6 @@ Measured on Apple M4 (2026-03-15) with `cargo bench`.
 ## CI Gate Thresholds
 
 Gates run as `cargo test --test bench_gate --release` in CI.
-Thresholds are ~7x baseline to accommodate slower CI runners
+Thresholds are ~30-70x baseline to accommodate slower CI runners
 and prevent flakiness. A gate failure means something got
 catastrophically slower — investigate with `cargo bench`.
