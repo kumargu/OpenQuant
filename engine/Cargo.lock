@@ -544,6 +544,7 @@ name = "openquant-core"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "metrics",
  "serde",
  "tempfile",
  "toml",
@@ -553,6 +554,7 @@ dependencies = [
 name = "openquant-journal"
 version = "0.1.0"
 dependencies = [
+ "metrics",
  "openquant-core",
  "rusqlite",
  "tokio",
@@ -563,6 +565,7 @@ name = "openquant-metrics"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "criterion",
  "metrics",
  "metrics-util",
  "serde",

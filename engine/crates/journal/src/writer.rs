@@ -87,11 +87,41 @@ impl DropCounters {
     }
 }
 
+/// Cached metric handles for journal channel health.
+#[derive(Clone)]
+struct JournalMetrics {
+    drops_bar: metrics::Counter,
+    drops_fill: metrics::Counter,
+    channel_pending: metrics::Gauge,
+    buffer_size: usize,
+}
+
+impl JournalMetrics {
+    fn new(buffer_size: usize) -> Self {
+        let m = Self {
+            drops_bar: metrics::counter!("journal.channel.drops.bar"),
+            drops_fill: metrics::counter!("journal.channel.drops.fill"),
+            channel_pending: metrics::gauge!("journal.channel.pending"),
+            buffer_size,
+        };
+        // Record static capacity for dashboards
+        metrics::gauge!("journal.channel.capacity").set(buffer_size as f64);
+        m
+    }
+
+    /// Update pending count from sender's remaining capacity.
+    fn record_pending(&self, sender_capacity: usize) {
+        let pending = self.buffer_size.saturating_sub(sender_capacity);
+        self.channel_pending.set(pending as f64);
+    }
+}
+
 /// Handle for sending records to the journal writer.
 #[derive(Clone)]
 pub struct JournalHandle {
     tx: mpsc::Sender<JournalMessage>,
     drops: DropCounters,
+    metrics: JournalMetrics,
 }
 
 impl JournalHandle {
@@ -99,10 +129,12 @@ impl JournalHandle {
     /// Tracks drops per-symbol so one symbol's backpressure is visible.
     pub fn log_bar(&self, record: BarRecord) {
         let symbol = record.symbol.clone();
+        self.metrics.record_pending(self.tx.capacity());
         if let Err(mpsc::error::TrySendError::Full(_)) =
             self.tx.try_send(JournalMessage::Bar(record))
         {
             self.drops.record_drop(&symbol);
+            self.metrics.drops_bar.increment(1);
             let count = self.drops.total();
             if count % 100 == 1 {
                 eprintln!(
@@ -116,10 +148,12 @@ impl JournalHandle {
     /// Fills are critical — warns on every drop.
     pub fn log_fill(&self, record: FillRecord) {
         let symbol = record.symbol.clone();
+        self.metrics.record_pending(self.tx.capacity());
         if let Err(mpsc::error::TrySendError::Full(_)) =
             self.tx.try_send(JournalMessage::Fill(record))
         {
             self.drops.record_drop(&symbol);
+            self.metrics.drops_fill.increment(1);
             let count = self.drops.total();
             eprintln!(
                 "[journal] WARNING: fill record dropped! {count} total drops (symbol: {symbol})"
@@ -164,6 +198,7 @@ pub fn start(db_path: &Path, buffer_size: usize) -> (JournalHandle, tokio::task:
     let handle = JournalHandle {
         tx,
         drops: DropCounters::default(),
+        metrics: JournalMetrics::new(buffer_size),
     };
 
     (handle, join_handle)
@@ -174,6 +209,11 @@ async fn writer_loop(mut rx: mpsc::Receiver<JournalMessage>, db_path: &Path) {
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         .expect("failed to set journal pragmas");
     schema::init(&conn).expect("failed to init journal schema");
+
+    // Writer-side metrics (separate from the channel-side handles)
+    let flush_duration = metrics::histogram!("journal.flush.duration_ns");
+    let flush_batch_size = metrics::histogram!("journal.flush.batch_size");
+    let flush_count = metrics::counter!("journal.flush.count");
 
     let mut batch: Vec<JournalMessage> = Vec::with_capacity(64);
 
@@ -195,7 +235,11 @@ async fn writer_loop(mut rx: mpsc::Receiver<JournalMessage>, db_path: &Path) {
             }
         }
 
+        let start = std::time::Instant::now();
         flush_batch(&conn, &batch);
+        flush_duration.record(start.elapsed().as_nanos() as f64);
+        flush_batch_size.record(batch.len() as f64);
+        flush_count.increment(1);
         batch.clear();
     }
 }

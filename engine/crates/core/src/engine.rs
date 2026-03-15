@@ -15,9 +15,11 @@
 //! The engine is strategy-agnostic — it holds a boxed `Strategy` trait object.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::exit::{self, ExitConfig, OpenPosition};
 use crate::features::{FeatureState, FeatureValues};
+use crate::hot_metrics::HotMetrics;
 use crate::market_data::Bar;
 use crate::portfolio::Portfolio;
 use crate::risk::{self, RiskConfig, RiskState};
@@ -75,6 +77,8 @@ pub struct EngineConfig {
     /// Stale bars still update features (for warmup) but never generate signals.
     /// 0 = disabled (no staleness check). Default: 0 (disabled for backtesting).
     pub max_bar_age_ms: i64,
+    /// Enable hot-path metrics instrumentation. Default: false.
+    pub metrics_enabled: bool,
 }
 
 /// The core engine. Maintains all state, processes bars, emits order intents.
@@ -92,6 +96,7 @@ pub struct Engine {
     bar_counter: usize,
     max_bar_age_ms: i64,
     stale_bars_skipped: HashMap<String, u64>,
+    hot_metrics: HotMetrics,
 }
 
 impl Engine {
@@ -145,6 +150,7 @@ impl Engine {
             bar_counter: 0,
             max_bar_age_ms: config.max_bar_age_ms,
             stale_bars_skipped: HashMap::new(),
+            hot_metrics: HotMetrics::new(config.metrics_enabled),
         }
     }
 
@@ -196,6 +202,11 @@ impl Engine {
     /// still updated (to keep warmup accurate) but no signals are generated.
     /// It's better to do nothing than to act on stale data.
     pub fn on_bar(&mut self, bar: &Bar) -> Vec<OrderIntent> {
+        let start = if self.hot_metrics.get(&bar.symbol).is_some() {
+            Some(Instant::now())
+        } else {
+            None
+        };
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
@@ -205,8 +216,18 @@ impl Engine {
         self.last_features
             .insert(bar.symbol.clone(), features.clone());
 
+        // Record feature distributions
+        if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+            m.bars_processed.increment(1);
+            m.z_score.record(features.return_z_score);
+            m.relative_volume.record(features.relative_volume);
+        }
+
         // 1b. Stale data gate — update features but don't act
         if self.is_stale(bar) {
+            if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+                m.stale_bars_skipped.increment(1);
+            }
             return vec![];
         }
 
@@ -216,6 +237,17 @@ impl Engine {
             && let Some(exit_intent) =
                 exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config)
         {
+            if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+                match exit_intent.reason {
+                    SignalReason::StopLoss => m.exit_stop_loss.increment(1),
+                    SignalReason::TakeProfit => m.exit_take_profit.increment(1),
+                    SignalReason::MaxHoldTime => m.exit_max_hold.increment(1),
+                    _ => {}
+                }
+                if let Some(s) = start {
+                    m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
+                }
+            }
             return vec![exit_intent];
         }
 
@@ -224,36 +256,81 @@ impl Engine {
         let strategy = self.strategy_for(&bar.symbol);
         let signal = match strategy.score(&features, has_position) {
             Some(s) => s,
-            None => return vec![],
+            None => {
+                if let Some(s) = start
+                    && let Some(m) = self.hot_metrics.get(&bar.symbol)
+                {
+                    m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
+                }
+                return vec![];
+            }
         };
+
+        // Record signal metrics
+        if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+            match signal.side {
+                Side::Buy => m.signal_buy.increment(1),
+                Side::Sell => m.signal_sell.increment(1),
+            }
+            m.signal_score.record(signal.score);
+        }
 
         // 4. Risk gates
         let position_qty = self.portfolio.position_qty(&bar.symbol);
-        let qty = match risk::check(
+        let result = risk::check(
             &signal,
             bar.close,
             position_qty,
             &self.risk_state,
             &self.risk_config,
-        ) {
-            Ok(qty) => qty,
-            Err(_rejection) => return vec![],
+        );
+
+        let intents = match result {
+            Ok(qty) => {
+                if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+                    m.risk_passed.increment(1);
+                }
+                vec![OrderIntent {
+                    symbol: bar.symbol.clone(),
+                    side: signal.side,
+                    qty,
+                    reason: signal.reason,
+                    signal_score: signal.score,
+                    z_score: signal.z_score,
+                    relative_volume: signal.relative_volume,
+                }]
+            }
+            Err(rejection) => {
+                if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+                    if rejection.reason.contains("kill switch") {
+                        m.risk_rejected_kill_switch.increment(1);
+                    } else if rejection.reason.contains("cost filter") {
+                        m.risk_rejected_cost_filter.increment(1);
+                    } else {
+                        m.risk_rejected_position_sizing.increment(1);
+                    }
+                }
+                vec![]
+            }
         };
 
-        vec![OrderIntent {
-            symbol: bar.symbol.clone(),
-            side: signal.side,
-            qty,
-            reason: signal.reason,
-            signal_score: signal.score,
-            z_score: signal.z_score,
-            relative_volume: signal.relative_volume,
-        }]
+        if let Some(s) = start
+            && let Some(m) = self.hot_metrics.get(&bar.symbol)
+        {
+            m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
+        }
+
+        intents
     }
 
     /// Process a bar and return full decision details for journaling.
     /// Same logic as `on_bar()` but captures feature state, signal, and risk gate results.
     pub fn on_bar_journaled(&mut self, bar: &Bar) -> BarOutcome {
+        let start = if self.hot_metrics.get(&bar.symbol).is_some() {
+            Some(Instant::now())
+        } else {
+            None
+        };
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars)
@@ -263,8 +340,18 @@ impl Engine {
         self.last_features
             .insert(bar.symbol.clone(), features.clone());
 
+        // Record feature distributions
+        if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+            m.bars_processed.increment(1);
+            m.z_score.record(features.return_z_score);
+            m.relative_volume.record(features.relative_volume);
+        }
+
         // 1b. Stale data gate — record features but don't generate signals
         if self.is_stale(bar) {
+            if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+                m.stale_bars_skipped.increment(1);
+            }
             return BarOutcome {
                 features,
                 intents: vec![],
@@ -284,6 +371,17 @@ impl Engine {
             && let Some(exit_intent) =
                 exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config)
         {
+            if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+                match exit_intent.reason {
+                    SignalReason::StopLoss => m.exit_stop_loss.increment(1),
+                    SignalReason::TakeProfit => m.exit_take_profit.increment(1),
+                    SignalReason::MaxHoldTime => m.exit_max_hold.increment(1),
+                    _ => {}
+                }
+                if let Some(s) = start {
+                    m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
+                }
+            }
             return BarOutcome {
                 features,
                 signal_fired: true,
@@ -303,6 +401,11 @@ impl Engine {
         let signal = match strategy.score(&features, has_position) {
             Some(s) => s,
             None => {
+                if let Some(s) = start
+                    && let Some(m) = self.hot_metrics.get(&bar.symbol)
+                {
+                    m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
+                }
                 return BarOutcome {
                     features,
                     intents: vec![],
@@ -317,16 +420,30 @@ impl Engine {
             }
         };
 
+        // Record signal metrics
+        if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+            match signal.side {
+                Side::Buy => m.signal_buy.increment(1),
+                Side::Sell => m.signal_sell.increment(1),
+            }
+            m.signal_score.record(signal.score);
+        }
+
         // 4. Risk gates
         let position_qty = self.portfolio.position_qty(&bar.symbol);
-        match risk::check(
+        let risk_result = risk::check(
             &signal,
             bar.close,
             position_qty,
             &self.risk_state,
             &self.risk_config,
-        ) {
+        );
+
+        let outcome = match risk_result {
             Ok(qty) => {
+                if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+                    m.risk_passed.increment(1);
+                }
                 let intent = OrderIntent {
                     symbol: bar.symbol.clone(),
                     side: signal.side,
@@ -348,18 +465,37 @@ impl Engine {
                     intents: vec![intent],
                 }
             }
-            Err(rejection) => BarOutcome {
-                features,
-                intents: vec![],
-                signal_fired: true,
-                signal_side: Some(signal.side),
-                signal_score: Some(signal.score),
-                signal_reason: Some(signal.reason),
-                risk_passed: Some(false),
-                risk_rejection: Some(rejection.reason),
-                qty_approved: None,
-            },
+            Err(rejection) => {
+                if let Some(m) = self.hot_metrics.get(&bar.symbol) {
+                    if rejection.reason.contains("kill switch") {
+                        m.risk_rejected_kill_switch.increment(1);
+                    } else if rejection.reason.contains("cost filter") {
+                        m.risk_rejected_cost_filter.increment(1);
+                    } else {
+                        m.risk_rejected_position_sizing.increment(1);
+                    }
+                }
+                BarOutcome {
+                    features,
+                    intents: vec![],
+                    signal_fired: true,
+                    signal_side: Some(signal.side),
+                    signal_score: Some(signal.score),
+                    signal_reason: Some(signal.reason),
+                    risk_passed: Some(false),
+                    risk_rejection: Some(rejection.reason),
+                    qty_approved: None,
+                }
+            }
+        };
+
+        if let Some(s) = start
+            && let Some(m) = self.hot_metrics.get(&bar.symbol)
+        {
+            m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
         }
+
+        outcome
     }
 
     /// Notify engine that an order was filled (updates portfolio, risk, position tracking).

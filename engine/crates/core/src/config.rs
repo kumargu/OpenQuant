@@ -60,6 +60,7 @@ impl ConfigFile {
             exit: self.exit,
             symbol_overrides: self.symbol_overrides,
             max_bar_age_ms: self.data.max_bar_age_seconds * 1000,
+            metrics_enabled: self.metrics.enabled,
         }
     }
 
