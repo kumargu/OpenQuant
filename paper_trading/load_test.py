@@ -167,10 +167,78 @@ def scenario_journal_stress(duration_s: int) -> dict:
         dropped = engine.journal_dropped()
         stats["journal_drops"] = dropped
 
+        # Flush and measure how many bars the writer actually persisted
         engine.shutdown_journal()
 
+        # Count persisted rows to measure writer throughput
+        import sqlite3
+        conn = sqlite3.connect(journal_path)
+        persisted = conn.execute("SELECT COUNT(*) FROM bars").fetchone()[0]
+        conn.close()
+
+    written = n_bars - dropped
+    drop_pct = (dropped / n_bars * 100) if n_bars > 0 else 0
     stats["scenario"] = "journal-stress"
-    stats["description"] = f"journal enabled, {n_bars:,} bars, {dropped} drops"
+    stats["journal_persisted"] = persisted
+    stats["journal_drop_pct"] = round(drop_pct, 1)
+    stats["description"] = (
+        f"journal enabled, {n_bars:,} bars, "
+        f"{persisted:,} persisted, {dropped:,} drops ({drop_pct:.1f}%)"
+    )
+    return stats
+
+
+def scenario_journal_realistic(duration_s: int) -> dict:
+    """Journal at realistic rate (~1k bars/sec) — should have zero drops."""
+    # 1k bars/sec is 60x faster than production (1 bar/min) but realistic
+    # for multi-symbol scenarios (e.g. 10 symbols × 1 bar/sec each)
+    n_bars = min(5_000, duration_s * 100)  # keep it short
+    bars = generate_bars("BTCUSD", n_bars)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        journal_path = os.path.join(tmp, "load_test_realistic.db")
+        engine = Engine(journal_path=journal_path)
+
+        latencies_ns = []
+        for bar in bars:
+            sym, ts, o, h, l, c, v = bar
+            t0 = time.perf_counter_ns()
+            engine.on_bar(sym, ts, o, h, l, c, v)
+            elapsed = time.perf_counter_ns() - t0
+            latencies_ns.append(elapsed)
+            # Throttle to ~1k bars/sec (1ms between bars)
+            time.sleep(0.001)
+
+        dropped = engine.journal_dropped()
+        engine.shutdown_journal()
+
+        import sqlite3
+        conn = sqlite3.connect(journal_path)
+        persisted = conn.execute("SELECT COUNT(*) FROM bars").fetchone()[0]
+        conn.close()
+
+    latencies_ns.sort()
+    n = len(latencies_ns)
+
+    stats = {
+        "bars": n,
+        "p50_us": latencies_ns[n // 2] / 1000,
+        "p95_us": latencies_ns[int(n * 0.95)] / 1000,
+        "p99_us": latencies_ns[int(n * 0.99)] / 1000,
+        "max_us": latencies_ns[-1] / 1000,
+        "mean_us": statistics.mean(latencies_ns) / 1000,
+        "stdev_us": statistics.stdev(latencies_ns) / 1000 if n > 1 else 0,
+        "total_ms": sum(latencies_ns) / 1_000_000,
+        "throughput_bars_per_sec": 1000,  # throttled rate
+        "scenario": "journal-realistic",
+        "journal_drops": dropped,
+        "journal_persisted": persisted,
+        "journal_drop_pct": round((dropped / n * 100) if n > 0 else 0, 1),
+        "description": (
+            f"journal at ~1k bars/s, {n:,} bars, "
+            f"{persisted:,} persisted, {dropped} drops"
+        ),
+    }
     return stats
 
 
@@ -179,6 +247,7 @@ SCENARIOS = {
     "multi-symbol": scenario_multi_symbol,
     "burst": scenario_burst,
     "journal-stress": scenario_journal_stress,
+    "journal-realistic": scenario_journal_realistic,
 }
 
 
