@@ -8,9 +8,9 @@
 //! The trading hot path (synchronous, zero-alloc) sends records through
 //! an mpsc channel to the journal writer running on a Tokio data runtime.
 
+pub mod runtime;
 pub mod schema;
 pub mod writer;
-pub mod runtime;
 
 pub use runtime::DataRuntime;
 pub use writer::{BarRecord, FillRecord, JournalHandle, JournalMessage};

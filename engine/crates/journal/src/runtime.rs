@@ -38,9 +38,8 @@ impl DataRuntime {
             .build()
             .expect("failed to create data runtime");
 
-        let (handle, writer_task) = runtime.block_on(async {
-            writer::start(journal_path, channel_buffer)
-        });
+        let (handle, writer_task) =
+            runtime.block_on(async { writer::start(journal_path, channel_buffer) });
 
         Self {
             runtime,

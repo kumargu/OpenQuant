@@ -19,8 +19,8 @@
 //! - Max hold: close after N bars regardless
 //! - Take profit: close if price rises X% above entry
 
-use crate::signals::{Side, SignalReason};
 use crate::engine::OrderIntent;
+use crate::signals::{Side, SignalReason};
 
 /// Exit rule configuration.
 #[derive(Debug, Clone)]
@@ -46,10 +46,10 @@ pub struct ExitConfig {
 impl Default for ExitConfig {
     fn default() -> Self {
         Self {
-            stop_loss_pct: 0.0,     // disabled — ATR stop is preferred
+            stop_loss_pct: 0.0,      // disabled — ATR stop is preferred
             stop_loss_atr_mult: 2.5, // 2.5x ATR dynamic stop
-            max_hold_bars: 100,     // ~8 hours on 5-min bars
-            take_profit_pct: 0.0,   // disabled by default
+            max_hold_bars: 100,      // ~8 hours on 5-min bars
+            take_profit_pct: 0.0,    // disabled by default
         }
     }
 }
@@ -178,7 +178,11 @@ mod tests {
     #[test]
     fn stop_loss_does_not_fire_when_disabled() {
         let p = pos(100.0, 0);
-        let config = ExitConfig { stop_loss_pct: 0.0, stop_loss_atr_mult: 0.0, ..fixed_stop_config() };
+        let config = ExitConfig {
+            stop_loss_pct: 0.0,
+            stop_loss_atr_mult: 0.0,
+            ..fixed_stop_config()
+        };
         assert!(check(&p, 90.0, 5, 0.0, &config).is_none());
     }
 
@@ -224,8 +228,8 @@ mod tests {
     fn atr_stop_overrides_fixed_pct() {
         let p = pos(100.0, 0);
         let config = ExitConfig {
-            stop_loss_pct: 0.02,       // 2% → stop at 98.0
-            stop_loss_atr_mult: 3.0,   // ATR=1.5, 3x → stop at 95.5
+            stop_loss_pct: 0.02,     // 2% → stop at 98.0
+            stop_loss_atr_mult: 3.0, // ATR=1.5, 3x → stop at 95.5
             max_hold_bars: 0,
             take_profit_pct: 0.0,
         };
@@ -255,7 +259,10 @@ mod tests {
     #[test]
     fn take_profit_does_not_fire_when_disabled() {
         let p = pos(100.0, 0);
-        let config = ExitConfig { take_profit_pct: 0.0, ..fixed_stop_config() };
+        let config = ExitConfig {
+            take_profit_pct: 0.0,
+            ..fixed_stop_config()
+        };
         assert!(check(&p, 200.0, 5, 0.0, &config).is_none());
     }
 
@@ -278,7 +285,10 @@ mod tests {
     #[test]
     fn max_hold_does_not_fire_when_disabled() {
         let p = pos(100.0, 0);
-        let config = ExitConfig { max_hold_bars: 0, ..fixed_stop_config() };
+        let config = ExitConfig {
+            max_hold_bars: 0,
+            ..fixed_stop_config()
+        };
         assert!(check(&p, 100.0, 9999, 0.0, &config).is_none());
     }
 

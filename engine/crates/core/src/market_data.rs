@@ -73,17 +73,21 @@ pub fn validate_bars(bars: &[Bar], gap_threshold_ms: i64) -> DataQualityReport {
 
     for (i, bar) in bars.iter().enumerate() {
         // OHLC consistency: high >= max(open, close), low <= min(open, close)
-        if bar.high < bar.open || bar.high < bar.close
-            || bar.low > bar.open || bar.low > bar.close
+        if bar.high < bar.open || bar.high < bar.close || bar.low > bar.open || bar.low > bar.close
         {
             report.ohlc_violations += 1;
         }
 
         // Price positivity and finiteness (NaN comparisons are always false,
         // so we must explicitly check with is_finite)
-        if !bar.open.is_finite() || !bar.high.is_finite()
-            || !bar.low.is_finite() || !bar.close.is_finite()
-            || bar.open <= 0.0 || bar.high <= 0.0 || bar.low <= 0.0 || bar.close <= 0.0
+        if !bar.open.is_finite()
+            || !bar.high.is_finite()
+            || !bar.low.is_finite()
+            || !bar.close.is_finite()
+            || bar.open <= 0.0
+            || bar.high <= 0.0
+            || bar.low <= 0.0
+            || bar.close <= 0.0
         {
             report.non_positive_prices += 1;
         }
@@ -255,8 +259,8 @@ mod tests {
     fn validate_detects_gaps() {
         let bars = vec![
             tbar(1000, 100.0, 10.0),
-            tbar(2000, 101.0, 10.0),  // 1s gap (ok)
-            tbar(10000, 99.0, 10.0),  // 8s gap (flagged at 5s threshold)
+            tbar(2000, 101.0, 10.0), // 1s gap (ok)
+            tbar(10000, 99.0, 10.0), // 8s gap (flagged at 5s threshold)
         ];
         let report = validate_bars(&bars, 5000);
         assert_eq!(report.gaps.len(), 1);

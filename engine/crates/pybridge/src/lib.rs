@@ -2,16 +2,16 @@
 //! All logic lives in openquant-core. Python never does math.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyAnyMethods};
+use pyo3::types::{PyAnyMethods, PyDict};
 
 use openquant_core::engine::{Engine as CoreEngine, EngineConfig, SymbolOverrides};
-use std::collections::HashMap;
 use openquant_core::market_data::Bar;
 use openquant_core::signals::Side;
 use openquant_core::signals::mean_reversion;
+use std::collections::HashMap;
 
-use openquant_journal::writer::{BarRecord, FillRecord};
 use openquant_journal::DataRuntime;
+use openquant_journal::writer::{BarRecord, FillRecord};
 
 #[pyclass]
 struct Engine {
@@ -62,14 +62,38 @@ impl Engine {
                     let symbol: String = key.extract()?;
                     let params: &Bound<'_, PyDict> = val.downcast()?;
                     let ovr = SymbolOverrides {
-                        buy_z_threshold: params.get_item("buy_z_threshold")?.map(|v| v.extract()).transpose()?,
-                        sell_z_threshold: params.get_item("sell_z_threshold")?.map(|v| v.extract()).transpose()?,
-                        min_relative_volume: params.get_item("min_relative_volume")?.map(|v| v.extract()).transpose()?,
-                        trend_filter: params.get_item("trend_filter")?.map(|v| v.extract()).transpose()?,
-                        stop_loss_pct: params.get_item("stop_loss_pct")?.map(|v| v.extract()).transpose()?,
-                        stop_loss_atr_mult: params.get_item("stop_loss_atr_mult")?.map(|v| v.extract()).transpose()?,
-                        max_hold_bars: params.get_item("max_hold_bars")?.map(|v| v.extract()).transpose()?,
-                        take_profit_pct: params.get_item("take_profit_pct")?.map(|v| v.extract()).transpose()?,
+                        buy_z_threshold: params
+                            .get_item("buy_z_threshold")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        sell_z_threshold: params
+                            .get_item("sell_z_threshold")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        min_relative_volume: params
+                            .get_item("min_relative_volume")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        trend_filter: params
+                            .get_item("trend_filter")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        stop_loss_pct: params
+                            .get_item("stop_loss_pct")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        stop_loss_atr_mult: params
+                            .get_item("stop_loss_atr_mult")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        max_hold_bars: params
+                            .get_item("max_hold_bars")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        take_profit_pct: params
+                            .get_item("take_profit_pct")?
+                            .map(|v| v.extract())
+                            .transpose()?,
                     };
                     map.insert(symbol, ovr);
                 }
@@ -132,6 +156,7 @@ impl Engine {
 
     /// Feed a bar, get back list of order intent dicts.
     /// If journal is enabled, logs the full bar record (features + decision).
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (symbol, timestamp, open, high, low, close, volume))]
     fn on_bar<'py>(
         &mut self,
@@ -146,7 +171,12 @@ impl Engine {
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let bar = Bar {
             symbol: symbol.to_string(),
-            timestamp, open, high, low, close, volume,
+            timestamp,
+            open,
+            high,
+            low,
+            close,
+            volume,
         };
 
         // Use journaled path if journal is active, otherwise fast path
@@ -187,15 +217,23 @@ impl Engine {
         for intent in &intents {
             let dict = PyDict::new(py);
             dict.set_item("symbol", &intent.symbol)?;
-            dict.set_item("side", match intent.side {
-                Side::Buy => "buy",
-                Side::Sell => "sell",
-            })?;
+            dict.set_item(
+                "side",
+                match intent.side {
+                    Side::Buy => "buy",
+                    Side::Sell => "sell",
+                },
+            )?;
             dict.set_item("qty", intent.qty)?;
-            dict.set_item("reason", format!(
-                "{}: z={:.2}, vol={:.2}",
-                intent.reason.describe(), intent.z_score, intent.relative_volume
-            ))?;
+            dict.set_item(
+                "reason",
+                format!(
+                    "{}: z={:.2}, vol={:.2}",
+                    intent.reason.describe(),
+                    intent.z_score,
+                    intent.relative_volume
+                ),
+            )?;
             dict.set_item("score", intent.signal_score)?;
             results.push(dict);
         }
@@ -209,7 +247,11 @@ impl Engine {
         let side_enum = match side {
             "buy" => Side::Buy,
             "sell" => Side::Sell,
-            _ => return Err(pyo3::exceptions::PyValueError::new_err("side must be 'buy' or 'sell'")),
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "side must be 'buy' or 'sell'",
+                ));
+            }
         };
         self.inner.on_fill(symbol, side_enum, qty, fill_price);
 
@@ -274,7 +316,8 @@ impl Engine {
 
     /// Number of journal records dropped due to backpressure.
     fn journal_dropped(&self) -> u64 {
-        self.journal.as_ref()
+        self.journal
+            .as_ref()
             .map(|rt| rt.journal().dropped_count())
             .unwrap_or(0)
     }
@@ -319,6 +362,7 @@ impl Drop for Engine {
     trend_filter = true,
     stop_loss_atr_mult = 0.0,
 ))]
+#[allow(clippy::too_many_arguments)]
 fn backtest<'py>(
     py: Python<'py>,
     bars: Vec<(String, i64, f64, f64, f64, f64, f64)>,
@@ -336,7 +380,13 @@ fn backtest<'py>(
     let core_bars: Vec<Bar> = bars
         .into_iter()
         .map(|(symbol, ts, o, h, l, c, v)| Bar {
-            symbol, timestamp: ts, open: o, high: h, low: l, close: c, volume: v,
+            symbol,
+            timestamp: ts,
+            open: o,
+            high: h,
+            low: l,
+            close: c,
+            volume: v,
         })
         .collect();
 
@@ -395,8 +445,10 @@ fn backtest<'py>(
             td.set_item("exit_time", t.exit_time).unwrap();
             td.set_item("pnl", t.pnl).unwrap();
             td.set_item("return_pct", t.return_pct).unwrap();
-            td.set_item("entry_reason", t.entry_reason.describe()).unwrap();
-            td.set_item("exit_reason", t.exit_reason.describe()).unwrap();
+            td.set_item("entry_reason", t.entry_reason.describe())
+                .unwrap();
+            td.set_item("exit_reason", t.exit_reason.describe())
+                .unwrap();
             td.set_item("bars_held", t.bars_held).unwrap();
             td
         })
@@ -417,7 +469,13 @@ fn validate_bars<'py>(
     let core_bars: Vec<Bar> = bars
         .into_iter()
         .map(|(symbol, ts, o, h, l, c, v)| Bar {
-            symbol, timestamp: ts, open: o, high: h, low: l, close: c, volume: v,
+            symbol,
+            timestamp: ts,
+            open: o,
+            high: h,
+            low: l,
+            close: c,
+            volume: v,
         })
         .collect();
 

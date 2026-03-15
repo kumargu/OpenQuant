@@ -64,7 +64,7 @@ pub struct SymbolOverrides {
 }
 
 /// Engine configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EngineConfig {
     pub signal: mean_reversion::Config,
     pub risk: RiskConfig,
@@ -74,18 +74,6 @@ pub struct EngineConfig {
     /// Stale bars still update features (for warmup) but never generate signals.
     /// 0 = disabled (no staleness check). Default: 0 (disabled for backtesting).
     pub max_bar_age_ms: i64,
-}
-
-impl Default for EngineConfig {
-    fn default() -> Self {
-        Self {
-            signal: mean_reversion::Config::default(),
-            risk: RiskConfig::default(),
-            exit: ExitConfig::default(),
-            symbol_overrides: HashMap::new(),
-            max_bar_age_ms: 0, // disabled by default (safe for backtesting)
-        }
-    }
 }
 
 /// The core engine. Maintains all state, processes bars, emits order intents.
@@ -117,16 +105,25 @@ impl Engine {
         for (symbol, ovr) in &config.symbol_overrides {
             let sig = mean_reversion::Config {
                 buy_z_threshold: ovr.buy_z_threshold.unwrap_or(config.signal.buy_z_threshold),
-                sell_z_threshold: ovr.sell_z_threshold.unwrap_or(config.signal.sell_z_threshold),
-                min_relative_volume: ovr.min_relative_volume.unwrap_or(config.signal.min_relative_volume),
+                sell_z_threshold: ovr
+                    .sell_z_threshold
+                    .unwrap_or(config.signal.sell_z_threshold),
+                min_relative_volume: ovr
+                    .min_relative_volume
+                    .unwrap_or(config.signal.min_relative_volume),
                 trend_filter: ovr.trend_filter.unwrap_or(config.signal.trend_filter),
                 ..config.signal.clone()
             };
-            symbol_strategies.insert(symbol.clone(), Box::new(mean_reversion::MeanReversion::new(sig)));
+            symbol_strategies.insert(
+                symbol.clone(),
+                Box::new(mean_reversion::MeanReversion::new(sig)),
+            );
 
             let exit = ExitConfig {
                 stop_loss_pct: ovr.stop_loss_pct.unwrap_or(config.exit.stop_loss_pct),
-                stop_loss_atr_mult: ovr.stop_loss_atr_mult.unwrap_or(config.exit.stop_loss_atr_mult),
+                stop_loss_atr_mult: ovr
+                    .stop_loss_atr_mult
+                    .unwrap_or(config.exit.stop_loss_atr_mult),
                 max_hold_bars: ovr.max_hold_bars.unwrap_or(config.exit.max_hold_bars),
                 take_profit_pct: ovr.take_profit_pct.unwrap_or(config.exit.take_profit_pct),
             };
@@ -177,7 +174,8 @@ impl Engine {
             .as_millis() as i64;
         let age = now_ms - bar.timestamp;
         if age > self.max_bar_age_ms {
-            *self.stale_bars_skipped
+            *self
+                .stale_bars_skipped
                 .entry(bar.symbol.clone())
                 .or_insert(0) += 1;
             true
@@ -200,13 +198,11 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
-        let feature_state = self
-            .features
-            .entry(bar.symbol.clone())
-            .or_insert_with(FeatureState::new);
+        let feature_state = self.features.entry(bar.symbol.clone()).or_default();
 
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
-        self.last_features.insert(bar.symbol.clone(), features.clone());
+        self.last_features
+            .insert(bar.symbol.clone(), features.clone());
 
         // 1b. Stale data gate — update features but don't act
         if self.is_stale(bar) {
@@ -215,10 +211,11 @@ impl Engine {
 
         // 2. Check exit rules on open positions (per-symbol exit config)
         let exit_config = self.exit_config_for(&bar.symbol);
-        if let Some(pos) = self.open_positions.get(&bar.symbol) {
-            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config) {
-                return vec![exit_intent];
-            }
+        if let Some(pos) = self.open_positions.get(&bar.symbol)
+            && let Some(exit_intent) =
+                exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config)
+        {
+            return vec![exit_intent];
         }
 
         // 3. Score via strategy (per-symbol strategy, only if no exit and no position)
@@ -259,13 +256,11 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars)
-        let feature_state = self
-            .features
-            .entry(bar.symbol.clone())
-            .or_insert_with(FeatureState::new);
+        let feature_state = self.features.entry(bar.symbol.clone()).or_default();
 
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
-        self.last_features.insert(bar.symbol.clone(), features.clone());
+        self.last_features
+            .insert(bar.symbol.clone(), features.clone());
 
         // 1b. Stale data gate — record features but don't generate signals
         if self.is_stale(bar) {
@@ -284,20 +279,21 @@ impl Engine {
 
         // 2. Check exit rules on open positions (per-symbol exit config)
         let exit_config = self.exit_config_for(&bar.symbol);
-        if let Some(pos) = self.open_positions.get(&bar.symbol) {
-            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config) {
-                return BarOutcome {
-                    features,
-                    signal_fired: true,
-                    signal_side: Some(exit_intent.side),
-                    signal_score: Some(exit_intent.signal_score),
-                    signal_reason: Some(exit_intent.reason),
-                    risk_passed: Some(true),
-                    risk_rejection: None,
-                    qty_approved: Some(exit_intent.qty),
-                    intents: vec![exit_intent],
-                };
-            }
+        if let Some(pos) = self.open_positions.get(&bar.symbol)
+            && let Some(exit_intent) =
+                exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config)
+        {
+            return BarOutcome {
+                features,
+                signal_fired: true,
+                signal_side: Some(exit_intent.side),
+                signal_score: Some(exit_intent.signal_score),
+                signal_reason: Some(exit_intent.reason),
+                risk_passed: Some(true),
+                risk_rejection: None,
+                qty_approved: Some(exit_intent.qty),
+                intents: vec![exit_intent],
+            };
         }
 
         // 3. Score via strategy (per-symbol)
@@ -441,16 +437,25 @@ mod tests {
         let mut engine = Engine::new(EngineConfig::default());
         for i in 0..49 {
             let bar = steady_bar("AAPL", 100.0 + (i as f64 * 0.01), 1000.0);
-            assert!(engine.on_bar(&bar).is_empty(), "no signal during warmup, bar {i}");
+            assert!(
+                engine.on_bar(&bar).is_empty(),
+                "no signal during warmup, bar {i}"
+            );
         }
     }
 
     #[test]
     fn big_drop_triggers_buy() {
         let config = EngineConfig {
-            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            risk: RiskConfig {
+                min_reward_cost_ratio: 0.0,
+                ..Default::default()
+            },
             exit: no_exit_config(),
-            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
+            signal: mean_reversion::Config {
+                trend_filter: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut engine = Engine::new(config);
@@ -460,8 +465,13 @@ mod tests {
         }
 
         let crash = Bar {
-            symbol: "AAPL".into(), timestamp: 0,
-            open: 100.0, high: 100.0, low: 93.0, close: 94.0, volume: 2000.0,
+            symbol: "AAPL".into(),
+            timestamp: 0,
+            open: 100.0,
+            high: 100.0,
+            low: 93.0,
+            close: 94.0,
+            volume: 2000.0,
         };
         let intents = engine.on_bar(&crash);
         assert!(!intents.is_empty(), "expected buy signal on big drop");
@@ -471,7 +481,10 @@ mod tests {
     #[test]
     fn kill_switch_blocks_after_loss() {
         let config = EngineConfig {
-            risk: RiskConfig { max_daily_loss: 100.0, ..Default::default() },
+            risk: RiskConfig {
+                max_daily_loss: 100.0,
+                ..Default::default()
+            },
             exit: no_exit_config(),
             ..Default::default()
         };
@@ -485,8 +498,13 @@ mod tests {
             engine.on_bar(&steady_bar("TSLA", 100.0, 1000.0));
         }
         let crash = Bar {
-            symbol: "TSLA".into(), timestamp: 0,
-            open: 100.0, high: 100.0, low: 90.0, close: 91.0, volume: 3000.0,
+            symbol: "TSLA".into(),
+            timestamp: 0,
+            open: 100.0,
+            high: 100.0,
+            low: 90.0,
+            close: 91.0,
+            volume: 3000.0,
         };
         assert!(engine.on_bar(&crash).is_empty(), "kill switch should block");
     }
@@ -494,14 +512,20 @@ mod tests {
     #[test]
     fn stop_loss_exits_position() {
         let config = EngineConfig {
-            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            risk: RiskConfig {
+                min_reward_cost_ratio: 0.0,
+                ..Default::default()
+            },
             exit: ExitConfig {
                 stop_loss_pct: 0.02, // 2% stop
                 stop_loss_atr_mult: 0.0,
                 max_hold_bars: 0,
                 take_profit_pct: 0.0,
             },
-            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
+            signal: mean_reversion::Config {
+                trend_filter: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut engine = Engine::new(config);
@@ -511,8 +535,13 @@ mod tests {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
         }
         let crash = Bar {
-            symbol: "AAPL".into(), timestamp: 0,
-            open: 100.0, high: 100.0, low: 93.0, close: 94.0, volume: 2000.0,
+            symbol: "AAPL".into(),
+            timestamp: 0,
+            open: 100.0,
+            high: 100.0,
+            low: 93.0,
+            close: 94.0,
+            volume: 2000.0,
         };
         let intents = engine.on_bar(&crash);
         assert_eq!(intents[0].side, Side::Buy);
@@ -520,8 +549,13 @@ mod tests {
 
         // Price drops further — should trigger stop loss
         let drop = Bar {
-            symbol: "AAPL".into(), timestamp: 0,
-            open: 92.0, high: 92.0, low: 91.0, close: 91.0, volume: 1000.0,
+            symbol: "AAPL".into(),
+            timestamp: 0,
+            open: 92.0,
+            high: 92.0,
+            low: 91.0,
+            close: 91.0,
+            volume: 1000.0,
         };
         let intents = engine.on_bar(&drop);
         assert!(!intents.is_empty(), "stop loss should fire");
@@ -532,7 +566,10 @@ mod tests {
     #[test]
     fn max_hold_exits_position() {
         let config = EngineConfig {
-            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            risk: RiskConfig {
+                min_reward_cost_ratio: 0.0,
+                ..Default::default()
+            },
             exit: ExitConfig {
                 stop_loss_pct: 0.0,
                 stop_loss_atr_mult: 0.0,
@@ -558,7 +595,10 @@ mod tests {
     #[test]
     fn take_profit_exits_position() {
         let config = EngineConfig {
-            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            risk: RiskConfig {
+                min_reward_cost_ratio: 0.0,
+                ..Default::default()
+            },
             exit: ExitConfig {
                 stop_loss_pct: 0.0,
                 stop_loss_atr_mult: 0.0,
@@ -573,8 +613,13 @@ mod tests {
 
         // Price rises 4% — should take profit
         let rise = Bar {
-            symbol: "AAPL".into(), timestamp: 0,
-            open: 104.0, high: 104.5, low: 103.5, close: 104.0, volume: 1000.0,
+            symbol: "AAPL".into(),
+            timestamp: 0,
+            open: 104.0,
+            high: 104.5,
+            low: 103.5,
+            close: 104.0,
+            volume: 1000.0,
         };
         let intents = engine.on_bar(&rise);
         assert!(!intents.is_empty(), "take profit should fire");
@@ -617,9 +662,15 @@ mod tests {
     #[test]
     fn stale_data_skips_signals() {
         let config = EngineConfig {
-            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            risk: RiskConfig {
+                min_reward_cost_ratio: 0.0,
+                ..Default::default()
+            },
             exit: no_exit_config(),
-            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
+            signal: mean_reversion::Config {
+                trend_filter: false,
+                ..Default::default()
+            },
             max_bar_age_ms: 60_000, // 1 minute staleness window
             ..Default::default()
         };
@@ -660,16 +711,25 @@ mod tests {
 
         // Features should still have been updated despite staleness
         let features = engine.current_features("AAPL").unwrap();
-        assert!(features.warmed_up, "features should warm up even with stale data");
+        assert!(
+            features.warmed_up,
+            "features should warm up even with stale data"
+        );
     }
 
     #[test]
     fn stale_data_disabled_allows_old_bars() {
         // max_bar_age_ms = 0 means disabled (default for backtesting)
         let config = EngineConfig {
-            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            risk: RiskConfig {
+                min_reward_cost_ratio: 0.0,
+                ..Default::default()
+            },
             exit: no_exit_config(),
-            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
+            signal: mean_reversion::Config {
+                trend_filter: false,
+                ..Default::default()
+            },
             max_bar_age_ms: 0, // disabled
             ..Default::default()
         };
@@ -680,16 +740,27 @@ mod tests {
             engine.on_bar(&Bar {
                 symbol: "AAPL".into(),
                 timestamp: old_ts + i * 60_000,
-                open: 100.0, high: 100.5, low: 99.5, close: 100.0, volume: 1000.0,
+                open: 100.0,
+                high: 100.5,
+                low: 99.5,
+                close: 100.0,
+                volume: 1000.0,
             });
         }
 
         let crash = Bar {
             symbol: "AAPL".into(),
             timestamp: old_ts + 55 * 60_000,
-            open: 100.0, high: 100.0, low: 93.0, close: 94.0, volume: 2000.0,
+            open: 100.0,
+            high: 100.0,
+            low: 93.0,
+            close: 94.0,
+            volume: 2000.0,
         };
         let intents = engine.on_bar(&crash);
-        assert!(!intents.is_empty(), "disabled staleness check should allow old bars");
+        assert!(
+            !intents.is_empty(),
+            "disabled staleness check should allow old bars"
+        );
     }
 }
