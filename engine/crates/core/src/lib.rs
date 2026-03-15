@@ -13,6 +13,7 @@
 //! - `backtest`    — replay historical bars through engine, compute stats
 
 pub mod backtest;
+pub mod config;
 pub mod engine;
 pub mod exit;
 pub mod features;

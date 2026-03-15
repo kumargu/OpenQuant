@@ -337,6 +337,45 @@ impl Engine {
             rt.shutdown();
         }
     }
+
+    /// Create engine from a TOML config file.
+    ///
+    /// Reads the file, parses all sections, and builds the engine.
+    /// Optional `journal_path` enables journaling (not in TOML — runtime concern).
+    #[staticmethod]
+    #[pyo3(signature = (config_path, journal_path = None))]
+    fn from_toml(config_path: &str, journal_path: Option<String>) -> PyResult<Self> {
+        let cfg_file = openquant_core::config::ConfigFile::load(std::path::Path::new(config_path))
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+
+        let engine_version = option_env!("CARGO_PKG_VERSION")
+            .unwrap_or("dev")
+            .to_string();
+
+        let config = cfg_file.into_engine_config();
+
+        let journal = match journal_path {
+            Some(path) => {
+                let p = std::path::PathBuf::from(&path);
+                if let Some(parent) = p.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        pyo3::exceptions::PyIOError::new_err(format!(
+                            "cannot create journal directory '{}': {e}",
+                            parent.display()
+                        ))
+                    })?;
+                }
+                Some(DataRuntime::new(&p, 4096))
+            }
+            None => None,
+        };
+
+        Ok(Self {
+            inner: CoreEngine::new(config),
+            journal,
+            engine_version,
+        })
+    }
 }
 
 impl Drop for Engine {
@@ -499,10 +538,21 @@ fn validate_bars<'py>(
     Ok(dict)
 }
 
+/// Load and return the parsed TOML config as a JSON string (for Python inspection).
+#[pyfunction]
+#[pyo3(signature = (config_path))]
+fn load_config(config_path: &str) -> PyResult<String> {
+    let cfg = openquant_core::config::ConfigFile::load(std::path::Path::new(config_path))
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    serde_json::to_string_pretty(&cfg)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("serialize error: {e}")))
+}
+
 #[pymodule]
 fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Engine>()?;
     m.add_function(wrap_pyfunction!(backtest, m)?)?;
     m.add_function(wrap_pyfunction!(validate_bars, m)?)?;
+    m.add_function(wrap_pyfunction!(load_config, m)?)?;
     Ok(())
 }

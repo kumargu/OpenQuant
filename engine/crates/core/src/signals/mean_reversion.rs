@@ -31,7 +31,8 @@ use super::{Side, SignalOutput, SignalReason, Strategy};
 use crate::features::FeatureValues;
 
 /// Configuration for mean-reversion strategy.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Config {
     /// Z-score below this triggers a buy (negative value). Default: -2.2
     /// Tightened from -2.0 to reduce false entries in low-conviction dips.

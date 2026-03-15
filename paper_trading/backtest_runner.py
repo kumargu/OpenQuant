@@ -142,21 +142,30 @@ def print_result(result: dict):
 
 
 def main():
+    from paper_trading.config import engine_kwargs, merge_cli_overrides
+
     parser = argparse.ArgumentParser(description="OpenQuant Backtester")
     parser.add_argument("--symbol", "-s", default="BTC/USD")
     parser.add_argument("--days", "-d", type=int, default=7)
     parser.add_argument("--timeframe", "-t", default="1Min")
-    parser.add_argument("--max-position", type=float, default=10_000.0)
-    parser.add_argument("--max-daily-loss", type=float, default=500.0)
-    parser.add_argument("--buy-z", type=float, default=-2.2)
-    parser.add_argument("--sell-z", type=float, default=2.0)
-    parser.add_argument("--min-vol", type=float, default=1.2)
-    parser.add_argument("--stop-loss", type=float, default=0.0, help="Fixed stop loss pct (0 = disabled, use ATR)")
-    parser.add_argument("--stop-loss-atr", type=float, default=2.5, help="ATR multiplier for dynamic stop (0 = disabled)")
-    parser.add_argument("--max-hold", type=int, default=100, help="Max bars to hold (0 = disabled)")
-    parser.add_argument("--take-profit", type=float, default=0.0, help="Take profit pct (0 = disabled)")
+    parser.add_argument("--config", default=None, help="Path to openquant.toml (default: repo root)")
+    parser.add_argument("--max-position", type=float, default=None)
+    parser.add_argument("--max-daily-loss", type=float, default=None)
+    parser.add_argument("--buy-z", type=float, default=None)
+    parser.add_argument("--sell-z", type=float, default=None)
+    parser.add_argument("--min-vol", type=float, default=None)
+    parser.add_argument("--stop-loss", type=float, default=None, help="Fixed stop loss pct (0 = disabled, use ATR)")
+    parser.add_argument("--stop-loss-atr", type=float, default=None, help="ATR multiplier for dynamic stop (0 = disabled)")
+    parser.add_argument("--max-hold", type=int, default=None, help="Max bars to hold (0 = disabled)")
+    parser.add_argument("--take-profit", type=float, default=None, help="Take profit pct (0 = disabled)")
     parser.add_argument("--no-trend-filter", action="store_true", help="Disable SMA-50 trend filter")
     args = parser.parse_args()
+
+    # Load TOML after parsing so --config can rescue a broken default file
+    toml_kw = engine_kwargs(args.config)
+
+    # CLI flags override TOML values
+    kw = merge_cli_overrides(toml_kw, args)
 
     bars = fetch_bars(args.symbol, args.days, args.timeframe)
     if not bars:
@@ -164,18 +173,20 @@ def main():
 
     from openquant import backtest
 
+    # Build backtest kwargs: start from TOML+CLI merged values, apply hardcoded defaults
+    # for anything not specified in either source
     result = backtest(
         bars,
-        max_position_notional=args.max_position,
-        max_daily_loss=args.max_daily_loss,
-        buy_z_threshold=args.buy_z,
-        sell_z_threshold=args.sell_z,
-        min_relative_volume=args.min_vol,
-        stop_loss_pct=args.stop_loss,
-        max_hold_bars=args.max_hold,
-        take_profit_pct=args.take_profit,
-        trend_filter=not args.no_trend_filter,
-        stop_loss_atr_mult=args.stop_loss_atr,
+        max_position_notional=kw.get("max_position_notional", 10_000.0),
+        max_daily_loss=kw.get("max_daily_loss", 500.0),
+        buy_z_threshold=kw.get("buy_z_threshold", -2.2),
+        sell_z_threshold=kw.get("sell_z_threshold", 2.0),
+        min_relative_volume=kw.get("min_relative_volume", 1.2),
+        stop_loss_pct=kw.get("stop_loss_pct", 0.0),
+        max_hold_bars=kw.get("max_hold_bars", 100),
+        take_profit_pct=kw.get("take_profit_pct", 0.0),
+        trend_filter=kw.get("trend_filter", True),
+        stop_loss_atr_mult=kw.get("stop_loss_atr_mult", 2.5),
     )
 
     print_result(result)

@@ -51,7 +51,8 @@ pub struct BarOutcome {
 }
 
 /// Per-symbol parameter overrides. None = use default from EngineConfig.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SymbolOverrides {
     pub buy_z_threshold: Option<f64>,
     pub sell_z_threshold: Option<f64>,

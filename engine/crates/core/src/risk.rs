@@ -11,7 +11,8 @@
 use crate::signals::{Side, SignalOutput};
 
 /// Risk configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RiskConfig {
     /// Max notional value per position (in USD). Default: 10_000
     pub max_position_notional: f64,
