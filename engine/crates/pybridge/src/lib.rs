@@ -2,9 +2,10 @@
 //! All logic lives in openquant-core. Python never does math.
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyAnyMethods};
 
-use openquant_core::engine::{Engine as CoreEngine, EngineConfig};
+use openquant_core::engine::{Engine as CoreEngine, EngineConfig, SymbolOverrides};
+use std::collections::HashMap;
 use openquant_core::market_data::Bar;
 use openquant_core::signals::Side;
 use openquant_core::signals::mean_reversion;
@@ -33,8 +34,10 @@ impl Engine {
         take_profit_pct = 0.0,
         trend_filter = true,
         stop_loss_atr_mult = 0.0,
+        symbol_overrides = None,
         journal_path = None,
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         max_position_notional: f64,
         max_daily_loss: f64,
@@ -46,8 +49,33 @@ impl Engine {
         take_profit_pct: f64,
         trend_filter: bool,
         stop_loss_atr_mult: f64,
+        symbol_overrides: Option<&Bound<'_, PyDict>>,
         journal_path: Option<String>,
     ) -> PyResult<Self> {
+        // Parse per-symbol overrides from Python dict
+        let overrides = match symbol_overrides {
+            Some(py_dict) => {
+                let mut map = HashMap::new();
+                for (key, val) in py_dict.iter() {
+                    let symbol: String = key.extract()?;
+                    let params: &Bound<'_, PyDict> = val.downcast()?;
+                    let ovr = SymbolOverrides {
+                        buy_z_threshold: params.get_item("buy_z_threshold")?.map(|v| v.extract()).transpose()?,
+                        sell_z_threshold: params.get_item("sell_z_threshold")?.map(|v| v.extract()).transpose()?,
+                        min_relative_volume: params.get_item("min_relative_volume")?.map(|v| v.extract()).transpose()?,
+                        trend_filter: params.get_item("trend_filter")?.map(|v| v.extract()).transpose()?,
+                        stop_loss_pct: params.get_item("stop_loss_pct")?.map(|v| v.extract()).transpose()?,
+                        stop_loss_atr_mult: params.get_item("stop_loss_atr_mult")?.map(|v| v.extract()).transpose()?,
+                        max_hold_bars: params.get_item("max_hold_bars")?.map(|v| v.extract()).transpose()?,
+                        take_profit_pct: params.get_item("take_profit_pct")?.map(|v| v.extract()).transpose()?,
+                    };
+                    map.insert(symbol, ovr);
+                }
+                map
+            }
+            None => HashMap::new(),
+        };
+
         let config = EngineConfig {
             signal: mean_reversion::Config {
                 buy_z_threshold,
@@ -67,6 +95,7 @@ impl Engine {
                 take_profit_pct,
                 stop_loss_atr_mult,
             },
+            symbol_overrides: overrides,
         };
 
         // Get engine version from git
@@ -318,6 +347,7 @@ fn backtest<'py>(
             take_profit_pct,
             stop_loss_atr_mult,
         },
+        symbol_overrides: HashMap::new(),
     };
 
     let result = openquant_core::backtest::run(&core_bars, config);
