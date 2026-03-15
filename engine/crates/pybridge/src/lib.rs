@@ -31,6 +31,8 @@ impl Engine {
         stop_loss_pct = 0.02,
         max_hold_bars = 100,
         take_profit_pct = 0.0,
+        trend_filter = true,
+        stop_loss_atr_mult = 0.0,
         journal_path = None,
     ))]
     fn new(
@@ -42,13 +44,16 @@ impl Engine {
         stop_loss_pct: f64,
         max_hold_bars: usize,
         take_profit_pct: f64,
+        trend_filter: bool,
+        stop_loss_atr_mult: f64,
         journal_path: Option<String>,
-    ) -> Self {
+    ) -> PyResult<Self> {
         let config = EngineConfig {
             signal: mean_reversion::Config {
                 buy_z_threshold,
                 sell_z_threshold,
                 min_relative_volume,
+                trend_filter,
                 ..Default::default()
             },
             risk: openquant_core::risk::RiskConfig {
@@ -60,6 +65,7 @@ impl Engine {
                 stop_loss_pct,
                 max_hold_bars,
                 take_profit_pct,
+                stop_loss_atr_mult,
             },
         };
 
@@ -68,20 +74,28 @@ impl Engine {
             .unwrap_or("dev")
             .to_string();
 
-        // Start journal if path provided
-        let journal = journal_path.map(|path| {
-            let p = std::path::PathBuf::from(path);
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent).ok();
+        // Start journal if path provided — fail fast on bad path
+        let journal = match journal_path {
+            Some(path) => {
+                let p = std::path::PathBuf::from(&path);
+                if let Some(parent) = p.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        pyo3::exceptions::PyIOError::new_err(format!(
+                            "cannot create journal directory '{}': {e}",
+                            parent.display()
+                        ))
+                    })?;
+                }
+                Some(DataRuntime::new(&p, 4096))
             }
-            DataRuntime::new(&p, 4096)
-        });
+            None => None,
+        };
 
-        Self {
+        Ok(Self {
             inner: CoreEngine::new(config),
             journal,
             engine_version,
-        }
+        })
     }
 
     /// Feed a bar, get back list of order intent dicts.
@@ -199,8 +213,11 @@ impl Engine {
                 dict.set_item("return_std_20", f.return_std_20)?;
                 dict.set_item("return_z_score", f.return_z_score)?;
                 dict.set_item("relative_volume", f.relative_volume)?;
+                dict.set_item("sma_50", f.sma_50)?;
+                dict.set_item("atr", f.atr)?;
                 dict.set_item("bar_range", f.bar_range)?;
                 dict.set_item("close_location", f.close_location)?;
+                dict.set_item("trend_up", f.trend_up)?;
                 dict.set_item("warmed_up", f.warmed_up)?;
                 Ok(Some(dict))
             }
@@ -238,6 +255,14 @@ impl Engine {
     }
 }
 
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Some(rt) = self.journal.take() {
+            rt.shutdown();
+        }
+    }
+}
+
 /// Run a backtest over historical bars. All computation in Rust.
 #[pyfunction]
 #[pyo3(signature = (
@@ -250,6 +275,8 @@ impl Engine {
     stop_loss_pct = 0.02,
     max_hold_bars = 100,
     take_profit_pct = 0.0,
+    trend_filter = true,
+    stop_loss_atr_mult = 0.0,
 ))]
 fn backtest<'py>(
     py: Python<'py>,
@@ -262,6 +289,8 @@ fn backtest<'py>(
     stop_loss_pct: f64,
     max_hold_bars: usize,
     take_profit_pct: f64,
+    trend_filter: bool,
+    stop_loss_atr_mult: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
     let core_bars: Vec<Bar> = bars
         .into_iter()
@@ -275,6 +304,7 @@ fn backtest<'py>(
             buy_z_threshold,
             sell_z_threshold,
             min_relative_volume,
+            trend_filter,
             ..Default::default()
         },
         risk: openquant_core::risk::RiskConfig {
@@ -286,6 +316,7 @@ fn backtest<'py>(
             stop_loss_pct,
             max_hold_bars,
             take_profit_pct,
+            stop_loss_atr_mult,
         },
     };
 

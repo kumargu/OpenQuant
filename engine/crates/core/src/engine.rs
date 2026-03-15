@@ -132,7 +132,7 @@ impl Engine {
 
         // 2. Check exit rules on open positions
         if let Some(pos) = self.open_positions.get(&bar.symbol) {
-            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, &self.exit_config) {
+            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, features.atr, &self.exit_config) {
                 return vec![exit_intent];
             }
         }
@@ -184,7 +184,7 @@ impl Engine {
 
         // 2. Check exit rules on open positions
         if let Some(pos) = self.open_positions.get(&bar.symbol) {
-            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, &self.exit_config) {
+            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, features.atr, &self.exit_config) {
                 return BarOutcome {
                     features,
                     signal_fired: true,
@@ -328,6 +328,7 @@ mod tests {
     fn no_exit_config() -> ExitConfig {
         ExitConfig {
             stop_loss_pct: 0.0,
+            stop_loss_atr_mult: 0.0,
             max_hold_bars: 0,
             take_profit_pct: 0.0,
         }
@@ -336,7 +337,7 @@ mod tests {
     #[test]
     fn warmup_produces_no_signals() {
         let mut engine = Engine::new(EngineConfig::default());
-        for i in 0..19 {
+        for i in 0..49 {
             let bar = steady_bar("AAPL", 100.0 + (i as f64 * 0.01), 1000.0);
             assert!(engine.on_bar(&bar).is_empty(), "no signal during warmup, bar {i}");
         }
@@ -347,11 +348,11 @@ mod tests {
         let config = EngineConfig {
             risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
             exit: no_exit_config(),
-            ..Default::default()
+            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
         };
         let mut engine = Engine::new(config);
 
-        for _ in 0..25 {
+        for _ in 0..55 {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
         }
 
@@ -377,7 +378,7 @@ mod tests {
         engine.on_fill("AAPL", Side::Sell, 10.0, 85.0);
         assert!(engine.risk_state().killed);
 
-        for _ in 0..25 {
+        for _ in 0..55 {
             engine.on_bar(&steady_bar("TSLA", 100.0, 1000.0));
         }
         let crash = Bar {
@@ -393,15 +394,16 @@ mod tests {
             risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
             exit: ExitConfig {
                 stop_loss_pct: 0.02, // 2% stop
+                stop_loss_atr_mult: 0.0,
                 max_hold_bars: 0,
                 take_profit_pct: 0.0,
             },
-            ..Default::default()
+            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
         };
         let mut engine = Engine::new(config);
 
         // Warm up and trigger buy
-        for _ in 0..25 {
+        for _ in 0..55 {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
         }
         let crash = Bar {
@@ -429,6 +431,7 @@ mod tests {
             risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
             exit: ExitConfig {
                 stop_loss_pct: 0.0,
+                stop_loss_atr_mult: 0.0,
                 max_hold_bars: 5,
                 take_profit_pct: 0.0,
             },
@@ -454,6 +457,7 @@ mod tests {
             risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
             exit: ExitConfig {
                 stop_loss_pct: 0.0,
+                stop_loss_atr_mult: 0.0,
                 max_hold_bars: 0,
                 take_profit_pct: 0.03, // 3%
             },
@@ -475,7 +479,7 @@ mod tests {
 
     #[test]
     fn deterministic_replay() {
-        let bars: Vec<Bar> = (0..30)
+        let bars: Vec<Bar> = (0..60)
             .map(|i| Bar {
                 symbol: "TEST".into(),
                 timestamp: i * 60000,

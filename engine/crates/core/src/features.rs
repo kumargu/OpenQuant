@@ -243,11 +243,14 @@ pub struct FeatureValues {
     pub return_5: f64,         // 5-bar return
     pub return_20: f64,        // 20-bar return
     pub sma_20: f64,           // 20-bar simple moving average of close
+    pub sma_50: f64,           // 50-bar simple moving average of close (trend)
+    pub atr: f64,              // average true range (14-bar)
     pub return_std_20: f64,    // 20-bar rolling std dev of 1-bar returns
     pub return_z_score: f64,   // return_1 / return_std_20
     pub relative_volume: f64,  // current volume / 20-bar avg volume
     pub bar_range: f64,        // high - low
     pub close_location: f64,   // (close - low) / (high - low)
+    pub trend_up: bool,        // true when close > sma_50 (bullish trend)
     pub warmed_up: bool,       // true once all features have enough data
 }
 
@@ -255,10 +258,13 @@ pub struct FeatureValues {
 /// Uses power-of-2 capacity (32) for a 20-bar lookback window.
 #[derive(Clone)]
 pub struct FeatureState {
-    closes: RingBuf<32>,          // last N closes for lookback returns
+    closes: RingBuf<64>,          // last N closes for lookback returns (64 for SMA-50)
     sma: Sma<32>,                 // 20-bar SMA via running sum
+    sma_long: Sma<64>,           // 50-bar SMA for trend detection
+    atr_stats: RollingStats<16>, // 14-bar ATR via rolling mean of true range
     return_stats: RollingStats<32>, // rolling std of 1-bar returns
     volume_stats: RollingStats<32>, // rolling avg of volume
+    prev_close: Option<f64>,     // previous close for true range calculation
     bar_count: usize,
     warmup_period: usize,
 }
@@ -268,10 +274,13 @@ impl FeatureState {
         Self {
             closes: RingBuf::new(),
             sma: Sma::new(),
+            sma_long: Sma::new(),
+            atr_stats: RollingStats::new(),
             return_stats: RollingStats::new(),
             volume_stats: RollingStats::new(),
+            prev_close: None,
             bar_count: 0,
-            warmup_period: 20,
+            warmup_period: 50, // increased from 20 to accommodate SMA-50
         }
     }
 
@@ -304,6 +313,23 @@ impl FeatureState {
         // SMA-20 via running sum (O(1), no iteration)
         let sma_20 = self.sma.push(close);
 
+        // SMA-50 for trend detection
+        let sma_50 = self.sma_long.push(close);
+
+        // ATR: True Range = max(H-L, |H-prev_close|, |L-prev_close|)
+        let true_range = match self.prev_close {
+            Some(pc) => {
+                let hl = high - low;
+                let hc = (high - pc).abs();
+                let lc = (low - pc).abs();
+                hl.max(hc).max(lc)
+            }
+            None => high - low, // first bar: just use range
+        };
+        self.atr_stats.push(true_range);
+        self.prev_close = Some(close);
+        let atr = self.atr_stats.mean();
+
         // Volume
         self.volume_stats.push(volume);
         let avg_volume = self.volume_stats.mean();
@@ -329,16 +355,22 @@ impl FeatureState {
             0.5
         };
 
+        // Trend: close above SMA-50 = bullish
+        let trend_up = close > sma_50;
+
         FeatureValues {
             return_1,
             return_5,
             return_20,
             sma_20,
+            sma_50,
+            atr,
             return_std_20: std_dev,
             return_z_score,
             relative_volume,
             bar_range: range,
             close_location,
+            trend_up,
             warmed_up: self.bar_count >= self.warmup_period,
         }
     }
@@ -497,12 +529,12 @@ mod tests {
     #[test]
     fn feature_warmup() {
         let mut state = FeatureState::new();
-        for i in 0..19 {
+        for i in 0..49 {
             let f = state.update(100.0 + i as f64, 101.0 + i as f64, 99.0 + i as f64, 1000.0);
             assert!(!f.warmed_up, "should not be warmed up at bar {i}");
         }
         let f = state.update(120.0, 121.0, 119.0, 1000.0);
-        assert!(f.warmed_up, "should be warmed up at bar 20");
+        assert!(f.warmed_up, "should be warmed up at bar 50");
     }
 
     #[test]

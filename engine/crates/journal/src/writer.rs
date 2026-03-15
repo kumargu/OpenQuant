@@ -187,20 +187,23 @@ fn write_bar_record(conn: &Connection, rec: &BarRecord) {
 
     // Insert features
     conn.execute(
-        "INSERT INTO features (bar_id, return_1, return_5, return_20, sma_20,
-         return_std_20, return_z_score, relative_volume, bar_range, close_location, warmed_up)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO features (bar_id, return_1, return_5, return_20, sma_20, sma_50, atr,
+         return_std_20, return_z_score, relative_volume, bar_range, close_location, trend_up, warmed_up)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         rusqlite::params![
             bar_id,
             rec.features.return_1,
             rec.features.return_5,
             rec.features.return_20,
             rec.features.sma_20,
+            rec.features.sma_50,
+            rec.features.atr,
             rec.features.return_std_20,
             rec.features.return_z_score,
             rec.features.relative_volume,
             rec.features.bar_range,
             rec.features.close_location,
+            rec.features.trend_up as i32,
             rec.features.warmed_up as i32,
         ],
     )
@@ -254,11 +257,14 @@ mod tests {
                 return_5: 0.02,
                 return_20: 0.05,
                 sma_20: 100.0,
+                sma_50: 99.5,
+                atr: 1.5,
                 return_std_20: 0.01,
                 return_z_score: 0.5,
                 relative_volume: 1.2,
                 bar_range: 2.0,
                 close_location: 0.75,
+                trend_up: true,
                 warmed_up: true,
             },
             signal_fired: false,

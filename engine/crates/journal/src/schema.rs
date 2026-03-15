@@ -28,11 +28,14 @@ CREATE TABLE IF NOT EXISTS features (
     return_5        REAL NOT NULL,
     return_20       REAL NOT NULL,
     sma_20          REAL NOT NULL,
+    sma_50          REAL NOT NULL,
+    atr             REAL NOT NULL,
     return_std_20   REAL NOT NULL,
     return_z_score  REAL NOT NULL,
     relative_volume REAL NOT NULL,
     bar_range       REAL NOT NULL,
     close_location  REAL NOT NULL,
+    trend_up        INTEGER NOT NULL,
     warmed_up       INTEGER NOT NULL
 );
 

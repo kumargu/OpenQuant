@@ -42,6 +42,8 @@ pub struct Config {
     pub min_relative_volume: f64,
     /// Minimum score to act on. Default: 0.5
     pub min_score: f64,
+    /// When true, block buy signals when close < SMA-50 (downtrend). Default: true
+    pub trend_filter: bool,
 }
 
 impl Default for Config {
@@ -51,6 +53,7 @@ impl Default for Config {
             sell_z_threshold: 2.0,
             min_relative_volume: 1.2,
             min_score: 0.5,
+            trend_filter: true,
         }
     }
 }
@@ -72,10 +75,11 @@ impl Strategy for MeanReversion {
             return None;
         }
 
-        // Buy: oversold + volume confirmation + not already holding
+        // Buy: oversold + volume confirmation + not already holding + trend filter
         if features.return_z_score < self.config.buy_z_threshold
             && features.relative_volume > self.config.min_relative_volume
             && !has_position
+            && (!self.config.trend_filter || features.trend_up)
         {
             let z_strength = (self.config.buy_z_threshold - features.return_z_score).abs();
             let vol_strength = features.relative_volume - 1.0;
@@ -120,6 +124,7 @@ mod tests {
             return_z_score: z,
             relative_volume: rel_vol,
             warmed_up: true,
+            trend_up: true, // default to bullish for existing tests
             ..Default::default()
         }
     }
@@ -216,6 +221,7 @@ mod tests {
             sell_z_threshold: 1.0,
             min_relative_volume: 0.0,
             min_score: 0.0,
+            trend_filter: false,
         });
         assert!(s.score(&features(-1.5, 0.5), false).is_some());
         assert!(s.score(&features(1.5, 0.5), true).is_some());
@@ -239,5 +245,41 @@ mod tests {
         let sig = strategy().score(&features(-3.5, 1.8), false).unwrap();
         assert!((sig.z_score - (-3.5)).abs() < 1e-10);
         assert!((sig.relative_volume - 1.8).abs() < 1e-10);
+    }
+
+    // --- Trend filter tests ---
+
+    #[test]
+    fn trend_filter_blocks_buy_in_downtrend() {
+        let mut f = features(-3.0, 1.5);
+        f.trend_up = false;
+        assert!(strategy().score(&f, false).is_none());
+    }
+
+    #[test]
+    fn trend_filter_allows_buy_in_uptrend() {
+        let mut f = features(-3.0, 1.5);
+        f.trend_up = true;
+        assert!(strategy().score(&f, false).is_some());
+    }
+
+    #[test]
+    fn trend_filter_disabled_allows_buy_in_downtrend() {
+        let s = MeanReversion::new(Config {
+            trend_filter: false,
+            min_score: 0.0,
+            ..Config::default()
+        });
+        let mut f = features(-3.0, 1.5);
+        f.trend_up = false;
+        assert!(s.score(&f, false).is_some());
+    }
+
+    #[test]
+    fn trend_filter_does_not_affect_sells() {
+        let mut f = features(3.0, 1.5);
+        f.trend_up = false;
+        // Sell should still fire even in downtrend
+        assert!(strategy().score(&f, true).is_some());
     }
 }
