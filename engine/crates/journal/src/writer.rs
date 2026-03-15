@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::Connection;
 use tokio::sync::mpsc;
@@ -80,7 +80,10 @@ impl DropCounters {
 
     /// Per-symbol drop counts (for diagnosing which symbol is causing backpressure).
     pub fn per_symbol(&self) -> HashMap<String, u64> {
-        self.per_symbol.lock().map(|m| m.clone()).unwrap_or_default()
+        self.per_symbol
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -96,11 +99,15 @@ impl JournalHandle {
     /// Tracks drops per-symbol so one symbol's backpressure is visible.
     pub fn log_bar(&self, record: BarRecord) {
         let symbol = record.symbol.clone();
-        if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(JournalMessage::Bar(record)) {
+        if let Err(mpsc::error::TrySendError::Full(_)) =
+            self.tx.try_send(JournalMessage::Bar(record))
+        {
             self.drops.record_drop(&symbol);
             let count = self.drops.total();
             if count % 100 == 1 {
-                eprintln!("[journal] WARNING: channel full, dropped {count} records total (symbol: {symbol})");
+                eprintln!(
+                    "[journal] WARNING: channel full, dropped {count} records total (symbol: {symbol})"
+                );
             }
         }
     }
@@ -109,10 +116,14 @@ impl JournalHandle {
     /// Fills are critical — warns on every drop.
     pub fn log_fill(&self, record: FillRecord) {
         let symbol = record.symbol.clone();
-        if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(JournalMessage::Fill(record)) {
+        if let Err(mpsc::error::TrySendError::Full(_)) =
+            self.tx.try_send(JournalMessage::Fill(record))
+        {
             self.drops.record_drop(&symbol);
             let count = self.drops.total();
-            eprintln!("[journal] WARNING: fill record dropped! {count} total drops (symbol: {symbol})");
+            eprintln!(
+                "[journal] WARNING: fill record dropped! {count} total drops (symbol: {symbol})"
+            );
         }
     }
 
@@ -194,7 +205,9 @@ fn flush_batch(conn: &Connection, batch: &[JournalMessage]) {
         return;
     }
 
-    let tx = conn.unchecked_transaction().expect("failed to start transaction");
+    let tx = conn
+        .unchecked_transaction()
+        .expect("failed to start transaction");
 
     for msg in batch {
         match msg {
@@ -214,7 +227,13 @@ fn write_bar_record(conn: &Connection, rec: &BarRecord) {
         "INSERT INTO bars (symbol, timestamp, open, high, low, close, volume)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
-            rec.symbol, rec.timestamp, rec.open, rec.high, rec.low, rec.close, rec.volume
+            rec.symbol,
+            rec.timestamp,
+            rec.open,
+            rec.high,
+            rec.low,
+            rec.close,
+            rec.volume
         ],
     )
     .expect("failed to insert bar");
@@ -269,7 +288,14 @@ fn write_fill_record(conn: &Connection, rec: &FillRecord) {
     conn.execute(
         "INSERT INTO fills (symbol, side, qty, fill_price, slippage, engine_version)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![rec.symbol, rec.side, rec.qty, rec.fill_price, rec.slippage, rec.engine_version],
+        rusqlite::params![
+            rec.symbol,
+            rec.side,
+            rec.qty,
+            rec.fill_price,
+            rec.slippage,
+            rec.engine_version
+        ],
     )
     .expect("failed to insert fill");
 }

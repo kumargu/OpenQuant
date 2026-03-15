@@ -51,6 +51,12 @@ pub struct RingBuf<const N: usize> {
     len: usize,
 }
 
+impl<const N: usize> Default for RingBuf<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const N: usize> RingBuf<N> {
     const MASK: usize = N - 1; // only valid when N is power of 2
 
@@ -80,6 +86,11 @@ impl<const N: usize> RingBuf<N> {
     #[inline]
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     /// Most recent value pushed.
@@ -139,6 +150,12 @@ pub struct RollingStats<const N: usize> {
     sum_sq: f64,
 }
 
+impl<const N: usize> Default for RollingStats<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const N: usize> RollingStats<N> {
     pub fn new() -> Self {
         Self {
@@ -167,7 +184,7 @@ impl<const N: usize> RollingStats<N> {
 
     #[inline]
     pub fn mean(&self) -> f64 {
-        if self.buf.len() == 0 {
+        if self.buf.is_empty() {
             return 0.0;
         }
         self.sum / self.buf.len() as f64
@@ -208,6 +225,12 @@ pub struct Sma<const N: usize> {
     sum: f64,
 }
 
+impl<const N: usize> Default for Sma<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const N: usize> Sma<N> {
     pub fn new() -> Self {
         Self {
@@ -239,27 +262,27 @@ impl<const N: usize> Sma<N> {
 /// All computed features for a single symbol at current bar.
 #[derive(Debug, Clone, Default)]
 pub struct FeatureValues {
-    pub return_1: f64,         // 1-bar return
-    pub return_5: f64,         // 5-bar return
-    pub return_20: f64,        // 20-bar return
-    pub sma_20: f64,           // 20-bar simple moving average of close
-    pub sma_50: f64,           // 50-bar simple moving average of close (trend)
-    pub atr: f64,              // average true range (14-bar)
-    pub return_std_20: f64,    // 20-bar rolling std dev of 1-bar returns
-    pub return_z_score: f64,   // return_1 / return_std_20
-    pub relative_volume: f64,  // current volume / 20-bar avg volume
-    pub bar_range: f64,        // high - low
-    pub close_location: f64,   // (close - low) / (high - low)
-    pub trend_up: bool,        // true when close > sma_50 (bullish trend)
-    pub warmed_up: bool,       // true once all features have enough data
+    pub return_1: f64,        // 1-bar return
+    pub return_5: f64,        // 5-bar return
+    pub return_20: f64,       // 20-bar return
+    pub sma_20: f64,          // 20-bar simple moving average of close
+    pub sma_50: f64,          // 50-bar simple moving average of close (trend)
+    pub atr: f64,             // average true range (14-bar)
+    pub return_std_20: f64,   // 20-bar rolling std dev of 1-bar returns
+    pub return_z_score: f64,  // return_1 / return_std_20
+    pub relative_volume: f64, // current volume / 20-bar avg volume
+    pub bar_range: f64,       // high - low
+    pub close_location: f64,  // (close - low) / (high - low)
+    pub trend_up: bool,       // true when close > sma_50 (bullish trend)
+    pub warmed_up: bool,      // true once all features have enough data
 }
 
 /// Per-symbol feature state. All buffers are stack-allocated, fixed-size.
 /// Uses power-of-2 capacity (32) for a 20-bar lookback window.
 #[derive(Clone)]
 pub struct FeatureState {
-    closes: RingBuf<64>,          // last N closes for lookback returns (64 for SMA-50)
-    sma: Sma<32>,                 // 20-bar SMA via running sum
+    closes: RingBuf<64>,         // last N closes for lookback returns (64 for SMA-50)
+    sma: Sma<32>,                // 20-bar SMA via running sum
     sma_long: Sma<64>,           // 50-bar SMA for trend detection
     atr_stats: RollingStats<16>, // 14-bar ATR via rolling mean of true range
     return_stats: RollingStats<32>, // rolling std of 1-bar returns
@@ -267,6 +290,12 @@ pub struct FeatureState {
     prev_close: Option<f64>,     // previous close for true range calculation
     bar_count: usize,
     warmup_period: usize,
+}
+
+impl Default for FeatureState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FeatureState {
@@ -300,12 +329,16 @@ impl FeatureState {
         self.return_stats.push(return_1);
 
         // N-bar returns via lookback
-        let return_5 = self.closes.ago(5)
+        let return_5 = self
+            .closes
+            .ago(5)
             .filter(|&pc| pc != 0.0)
             .map(|pc| (close - pc) / pc)
             .unwrap_or(0.0);
 
-        let return_20 = self.closes.ago(19)
+        let return_20 = self
+            .closes
+            .ago(19)
             .filter(|&pc| pc != 0.0)
             .map(|pc| (close - pc) / pc)
             .unwrap_or(0.0);
@@ -486,7 +519,10 @@ mod tests {
         for _ in 0..4 {
             rs.push(5.0);
         }
-        assert!(rs.std_dev() < 1e-10, "constant values should have zero std dev");
+        assert!(
+            rs.std_dev() < 1e-10,
+            "constant values should have zero std dev"
+        );
     }
 
     // --- SMA tests ---
@@ -562,7 +598,11 @@ mod tests {
         let f = state.update(100.0, 101.0, 99.0, 2000.0);
         // 2000 bar is included in rolling avg: (19*1000 + 2000) / 20 = 1050
         // Relative = 2000/1050 ≈ 1.905
-        assert!(f.relative_volume > 1.5, "expected high relative volume, got {}", f.relative_volume);
+        assert!(
+            f.relative_volume > 1.5,
+            "expected high relative volume, got {}",
+            f.relative_volume
+        );
     }
 
     #[test]
@@ -572,7 +612,11 @@ mod tests {
             state.update(100.0, 100.5, 99.5, 1000.0);
         }
         let f = state.update(95.0, 100.0, 94.0, 1500.0);
-        assert!(f.return_z_score < -2.0, "expected z < -2, got {}", f.return_z_score);
+        assert!(
+            f.return_z_score < -2.0,
+            "expected z < -2, got {}",
+            f.return_z_score
+        );
     }
 
     #[test]
@@ -582,7 +626,8 @@ mod tests {
             let f = state.update(100.0, 100.0, 100.0, 1000.0);
             assert!(
                 f.return_z_score.abs() < 1e-10,
-                "constant prices should give z=0, got {}", f.return_z_score
+                "constant prices should give z=0, got {}",
+                f.return_z_score
             );
         }
     }
@@ -608,7 +653,10 @@ mod tests {
     fn zero_range_bar_close_location() {
         let mut state = FeatureState::new();
         let f = state.update(100.0, 100.0, 100.0, 1000.0);
-        assert!((f.close_location - 0.5).abs() < 1e-10, "zero range bar should default to 0.5");
+        assert!(
+            (f.close_location - 0.5).abs() < 1e-10,
+            "zero range bar should default to 0.5"
+        );
     }
 
     #[test]
