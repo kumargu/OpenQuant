@@ -41,6 +41,12 @@ pub struct RiskState {
     pub killed: bool,
 }
 
+impl Default for RiskState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RiskState {
     pub fn new() -> Self {
         Self {

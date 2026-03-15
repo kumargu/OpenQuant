@@ -52,8 +52,8 @@ pub struct BacktestResult {
     pub profit_factor: f64,
     pub max_drawdown: f64,
     pub max_drawdown_pct: f64,
-    pub expectancy: f64,       // avg pnl per trade
-    pub sharpe_approx: f64,    // simplified: mean(returns) / std(returns)
+    pub expectancy: f64,    // avg pnl per trade
+    pub sharpe_approx: f64, // simplified: mean(returns) / std(returns)
     pub trades: Vec<TradeRecord>,
     pub equity_curve: Vec<f64>,
     pub signals_generated: usize,
@@ -73,8 +73,10 @@ pub fn run(bars: &[Bar], config: EngineConfig) -> BacktestResult {
         #[cfg(debug_assertions)]
         eprintln!(
             "WARNING: bar data has critical issues: ohlc={}, neg_price={}, ts_back={}, dupes={}",
-            report.ohlc_violations, report.non_positive_prices,
-            report.timestamp_backwards, report.duplicate_timestamps
+            report.ohlc_violations,
+            report.non_positive_prices,
+            report.timestamp_backwards,
+            report.duplicate_timestamps
         );
     }
 
@@ -208,7 +210,8 @@ pub fn run(bars: &[Bar], config: EngineConfig) -> BacktestResult {
     let sharpe_approx = if total_trades > 1 {
         let returns: Vec<f64> = trades.iter().map(|t| t.return_pct).collect();
         let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-        let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (returns.len() - 1) as f64;
+        let var =
+            returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (returns.len() - 1) as f64;
         let std = var.sqrt();
         if std > 0.0 { mean / std } else { 0.0 }
     } else {
@@ -314,7 +317,10 @@ mod tests {
         };
 
         let result = run(&bars, config);
-        assert!(result.signals_generated > 0, "should have generated signals");
+        assert!(
+            result.signals_generated > 0,
+            "should have generated signals"
+        );
         assert_eq!(result.equity_curve.len(), bars.len());
     }
 

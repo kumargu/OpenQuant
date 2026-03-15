@@ -12,11 +12,11 @@
 //! - `engine`      — ties it all together: feed bar → get order intents
 //! - `backtest`    — replay historical bars through engine, compute stats
 
-pub mod market_data;
-pub mod features;
-pub mod signals;
-pub mod risk;
-pub mod portfolio;
-pub mod exit;
-pub mod engine;
 pub mod backtest;
+pub mod engine;
+pub mod exit;
+pub mod features;
+pub mod market_data;
+pub mod portfolio;
+pub mod risk;
+pub mod signals;

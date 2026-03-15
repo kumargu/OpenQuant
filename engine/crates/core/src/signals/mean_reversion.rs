@@ -27,8 +27,8 @@
 //!   buy:  0.6 × |z - threshold| + 0.4 × (relative_volume - 1.0)
 //!   sell: |z - threshold|
 
-use crate::features::FeatureValues;
 use super::{Side, SignalOutput, SignalReason, Strategy};
+use crate::features::FeatureValues;
 
 /// Configuration for mean-reversion strategy.
 #[derive(Debug, Clone)]
