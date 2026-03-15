@@ -51,3 +51,38 @@ Track the impact of each engine improvement. Each entry is one commit.
 1. Widen stop to 3-4% (let mean-reversion work)
 2. Use ATR-based stops (adapt to volatility)
 3. Keep exits but pair with a trend filter (avoid entering against trend)
+
+---
+
+## Optimization 2: Tighten buy z-score threshold (-2.0 → -2.2)
+**Commit:** df6ae2c
+**Change:** Raised entry bar from z < -2.0 to z < -2.2 across engine, pybridge, and CLI defaults
+
+**Data:** BTC/USD + ETH/USD, 30 days, 1-min bars (77k bars total)
+
+| Metric | Old Baseline (7d, z=-2.0) | New Baseline (30d, z=-2.2) | Notes |
+|---|---|---|---|
+| Trades | 59 | 120 | More data → more trades |
+| Win rate | 61.0% | 62.5% | +1.5% (fewer false entries) |
+| Total P&L | $645.03 | $1,176.17 | +$531 (longer window) |
+| Expectancy/trade | $10.93 | $9.80 | Slightly lower per-trade |
+| Profit factor | 1.61 | 1.99 | Significantly improved |
+| Sharpe | 0.17 | 0.18 | Marginal improvement |
+| Max drawdown | $465.35 | $656.11 | Worse — driven entirely by ETH |
+
+**Per-asset breakdown:**
+| Asset | Trades | Win Rate | P&L | Verdict |
+|---|---|---|---|---|
+| BTC/USD | 114 | 65.8% | +$1,832.28 | Strong fit |
+| ETH/USD | 6 | 0.0% | -$656.11 | Strategy doesn't work here |
+
+**Analysis:**
+- Tighter z-score threshold improved selectivity (win rate up, PF up)
+- BTC is the primary profit driver — strategy fits well
+- ETH is a consistent loser with 0% win rate — mean-reversion fails on ETH in this period
+- Max drawdown increase is entirely from ETH losses
+
+**Conclusion:** The -2.2 threshold is an improvement. Next priorities:
+1. Add trend filter to avoid ETH-style downtrend entries (#9)
+2. ATR-based dynamic stops instead of fixed 2% (#10)
+3. Per-asset parameter tuning — BTC and ETH need different configs (#11)

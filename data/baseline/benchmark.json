@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-03-15T07:20:47.926570+00:00",
+  "engine_version": "df6ae2c",
+  "days": 30,
+  "timeframe": "1Min",
+  "params": {
+    "max_position_notional": 10000.0,
+    "max_daily_loss": 500.0,
+    "buy_z_threshold": -2.2,
+    "sell_z_threshold": 2.0,
+    "min_relative_volume": 1.2,
+    "stop_loss_pct": 0.02,
+    "max_hold_bars": 100,
+    "take_profit_pct": 0.0
+  },
+  "categories": {
+    "crypto": {
+      "symbols": {
+        "BTC/USD": {
+          "total_trades": 114,
+          "win_rate": 0.6578947368421053,
+          "total_pnl": 1832.282573788935,
+          "profit_factor": 2.0935507558987925,
+          "max_drawdown": 315.79585961840417,
+          "expectancy": 16.07265415604329,
+          "sharpe_approx": 0.2644422888979284,
+          "winning_trades": 75,
+          "losing_trades": 39,
+          "total_bars": 42747
+        },
+        "ETH/USD": {
+          "total_trades": 6,
+          "win_rate": 0.0,
+          "total_pnl": -656.1082406139991,
+          "profit_factor": -0.0,
+          "max_drawdown": 656.1082406139991,
+          "expectancy": -109.35137343566652,
+          "sharpe_approx": -1.4649567800234877,
+          "winning_trades": 0,
+          "losing_trades": 6,
+          "total_bars": 34421
+        }
+      },
+      "aggregated": {
+        "total_trades": 120,
+        "winning_trades": 75,
+        "losing_trades": 45,
+        "win_rate": 0.625,
+        "total_pnl": 1176.1743331749358,
+        "expectancy": 9.801452776457799,
+        "profit_factor": 1.9888732181038526,
+        "sharpe_approx": 0.1779723354518576,
+        "max_drawdown": 656.1082406139991
+      }
+    }
+  },
+  "aggregated": {
+    "total_trades": 120,
+    "winning_trades": 75,
+    "losing_trades": 45,
+    "win_rate": 0.625,
+    "total_pnl": 1176.1743331749358,
+    "expectancy": 9.801452776457799,
+    "profit_factor": 1.9888732181038526,
+    "sharpe_approx": 0.1779723354518576,
+    "max_drawdown": 656.1082406139991
+  }
+}
