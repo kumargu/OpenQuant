@@ -34,6 +34,7 @@ impl Engine {
         take_profit_pct = 0.0,
         trend_filter = true,
         stop_loss_atr_mult = 0.0,
+        max_bar_age_seconds = 0,
         symbol_overrides = None,
         journal_path = None,
     ))]
@@ -49,6 +50,7 @@ impl Engine {
         take_profit_pct: f64,
         trend_filter: bool,
         stop_loss_atr_mult: f64,
+        max_bar_age_seconds: i64,
         symbol_overrides: Option<&Bound<'_, PyDict>>,
         journal_path: Option<String>,
     ) -> PyResult<Self> {
@@ -96,6 +98,7 @@ impl Engine {
                 stop_loss_atr_mult,
             },
             symbol_overrides: overrides,
+            max_bar_age_ms: max_bar_age_seconds * 1000,
         };
 
         // Get engine version from git
@@ -276,6 +279,15 @@ impl Engine {
             .unwrap_or(0)
     }
 
+    /// Per-symbol count of bars skipped due to stale data.
+    fn stale_bars_skipped<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        for (symbol, count) in self.inner.stale_bars_skipped() {
+            dict.set_item(symbol, *count)?;
+        }
+        Ok(dict)
+    }
+
     /// Gracefully shut down the journal (flushes all pending writes).
     fn shutdown_journal(&mut self) {
         if let Some(rt) = self.journal.take() {
@@ -348,6 +360,7 @@ fn backtest<'py>(
             stop_loss_atr_mult,
         },
         symbol_overrides: HashMap::new(),
+        max_bar_age_ms: 0, // disabled for backtesting — historical data is always "old"
     };
 
     let result = openquant_core::backtest::run(&core_bars, config);
@@ -393,9 +406,45 @@ fn backtest<'py>(
     Ok(dict)
 }
 
+/// Validate bar data quality. Returns a dict with quality metrics.
+#[pyfunction]
+#[pyo3(signature = (bars, gap_threshold_minutes = 5))]
+fn validate_bars<'py>(
+    py: Python<'py>,
+    bars: Vec<(String, i64, f64, f64, f64, f64, f64)>,
+    gap_threshold_minutes: i64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let core_bars: Vec<Bar> = bars
+        .into_iter()
+        .map(|(symbol, ts, o, h, l, c, v)| Bar {
+            symbol, timestamp: ts, open: o, high: h, low: l, close: c, volume: v,
+        })
+        .collect();
+
+    let gap_threshold_ms = gap_threshold_minutes * 60 * 1000;
+    let report = openquant_core::market_data::validate_bars(&core_bars, gap_threshold_ms);
+
+    let dict = PyDict::new(py);
+    dict.set_item("total_bars", report.total_bars)?;
+    dict.set_item("ohlc_violations", report.ohlc_violations)?;
+    dict.set_item("non_positive_prices", report.non_positive_prices)?;
+    dict.set_item("zero_volume_bars", report.zero_volume_bars)?;
+    dict.set_item("zero_volume_pct", report.zero_volume_pct())?;
+    dict.set_item("timestamp_backwards", report.timestamp_backwards)?;
+    dict.set_item("duplicate_timestamps", report.duplicate_timestamps)?;
+    dict.set_item("has_critical_issues", report.has_critical_issues())?;
+
+    let gaps: Vec<(usize, i64)> = report.gaps;
+    dict.set_item("gap_count", gaps.len())?;
+    dict.set_item("gaps", gaps)?;
+
+    Ok(dict)
+}
+
 #[pymodule]
 fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Engine>()?;
     m.add_function(wrap_pyfunction!(backtest, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_bars, m)?)?;
     Ok(())
 }

@@ -71,7 +71,7 @@ def fetch_bars(symbol: str, days: int, timeframe: str = "1Min"):
     print(f"Fetched {len(raw_bars)} bars for {symbol} ({days} days, {timeframe})")
 
     # Convert to tuples for Rust: (symbol, timestamp, open, high, low, close, volume)
-    return [
+    bars = [
         (
             symbol.replace("/", ""),
             int(b.timestamp.timestamp() * 1000),
@@ -83,6 +83,18 @@ def fetch_bars(symbol: str, days: int, timeframe: str = "1Min"):
         )
         for b in raw_bars
     ]
+
+    # Quick validation: warn on high zero-volume ratio
+    if bars:
+        zero_vol = sum(1 for b in bars if b[6] == 0.0)
+        pct = zero_vol / len(bars)
+        if pct > 0.5:
+            print(f"  WARNING: {pct:.0%} zero-volume bars — volume signals unreliable. "
+                  f"Consider --timeframe 5Min or higher.")
+        elif pct > 0.1:
+            print(f"  NOTE: {pct:.0%} zero-volume bars detected.")
+
+    return bars
 
 
 def print_result(result: dict):

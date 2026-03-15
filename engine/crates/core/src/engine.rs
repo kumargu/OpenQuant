@@ -70,6 +70,10 @@ pub struct EngineConfig {
     pub risk: RiskConfig,
     pub exit: ExitConfig,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
+    /// Maximum allowed age (in milliseconds) of a bar before it's considered stale.
+    /// Stale bars still update features (for warmup) but never generate signals.
+    /// 0 = disabled (no staleness check). Default: 0 (disabled for backtesting).
+    pub max_bar_age_ms: i64,
 }
 
 impl Default for EngineConfig {
@@ -79,6 +83,7 @@ impl Default for EngineConfig {
             risk: RiskConfig::default(),
             exit: ExitConfig::default(),
             symbol_overrides: HashMap::new(),
+            max_bar_age_ms: 0, // disabled by default (safe for backtesting)
         }
     }
 }
@@ -96,6 +101,8 @@ pub struct Engine {
     risk_config: RiskConfig,
     open_positions: HashMap<String, OpenPosition>,
     bar_counter: usize,
+    max_bar_age_ms: i64,
+    stale_bars_skipped: HashMap<String, u64>,
 }
 
 impl Engine {
@@ -138,6 +145,8 @@ impl Engine {
             risk_config: config.risk,
             open_positions: HashMap::new(),
             bar_counter: 0,
+            max_bar_age_ms: config.max_bar_age_ms,
+            stale_bars_skipped: HashMap::new(),
         }
     }
 
@@ -156,11 +165,41 @@ impl Engine {
             .unwrap_or(&self.default_exit_config)
     }
 
+    /// Check if a bar is stale (too old to act on).
+    /// Returns true if the bar should be skipped for signal generation.
+    fn is_stale(&mut self, bar: &Bar) -> bool {
+        if self.max_bar_age_ms <= 0 {
+            return false;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let age = now_ms - bar.timestamp;
+        if age > self.max_bar_age_ms {
+            *self.stale_bars_skipped
+                .entry(bar.symbol.clone())
+                .or_insert(0) += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Per-symbol stale bar skip counts.
+    pub fn stale_bars_skipped(&self) -> &HashMap<String, u64> {
+        &self.stale_bars_skipped
+    }
+
     /// Process a new bar. Returns order intents (may be empty).
+    ///
+    /// If `max_bar_age_ms` is set and the bar is older than that, features are
+    /// still updated (to keep warmup accurate) but no signals are generated.
+    /// It's better to do nothing than to act on stale data.
     pub fn on_bar(&mut self, bar: &Bar) -> Vec<OrderIntent> {
         self.bar_counter += 1;
 
-        // 1. Update features
+        // 1. Update features (always, even for stale bars — keeps warmup state correct)
         let feature_state = self
             .features
             .entry(bar.symbol.clone())
@@ -168,6 +207,11 @@ impl Engine {
 
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
         self.last_features.insert(bar.symbol.clone(), features.clone());
+
+        // 1b. Stale data gate — update features but don't act
+        if self.is_stale(bar) {
+            return vec![];
+        }
 
         // 2. Check exit rules on open positions (per-symbol exit config)
         let exit_config = self.exit_config_for(&bar.symbol);
@@ -214,7 +258,7 @@ impl Engine {
     pub fn on_bar_journaled(&mut self, bar: &Bar) -> BarOutcome {
         self.bar_counter += 1;
 
-        // 1. Update features
+        // 1. Update features (always, even for stale bars)
         let feature_state = self
             .features
             .entry(bar.symbol.clone())
@@ -222,6 +266,21 @@ impl Engine {
 
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
         self.last_features.insert(bar.symbol.clone(), features.clone());
+
+        // 1b. Stale data gate — record features but don't generate signals
+        if self.is_stale(bar) {
+            return BarOutcome {
+                features,
+                intents: vec![],
+                signal_fired: false,
+                signal_side: None,
+                signal_score: None,
+                signal_reason: None,
+                risk_passed: None,
+                risk_rejection: Some("stale data".to_string()),
+                qty_approved: None,
+            };
+        }
 
         // 2. Check exit rules on open positions (per-symbol exit config)
         let exit_config = self.exit_config_for(&bar.symbol);
@@ -553,5 +612,84 @@ mod tests {
                 assert_eq!(o1.signal_score, o2.signal_score);
             }
         }
+    }
+
+    #[test]
+    fn stale_data_skips_signals() {
+        let config = EngineConfig {
+            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            exit: no_exit_config(),
+            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
+            max_bar_age_ms: 60_000, // 1 minute staleness window
+            ..Default::default()
+        };
+        let mut engine = Engine::new(config);
+
+        // Use a timestamp far in the past (definitely stale)
+        let old_ts = 1_000_000_000_000_i64; // year 2001
+
+        // Warm up with stale bars — features should still update
+        for i in 0..55 {
+            let bar = Bar {
+                symbol: "AAPL".into(),
+                timestamp: old_ts + i * 60_000,
+                open: 100.0,
+                high: 100.5,
+                low: 99.5,
+                close: 100.0,
+                volume: 1000.0,
+            };
+            assert!(engine.on_bar(&bar).is_empty());
+        }
+
+        // A crash bar that would normally trigger a buy — but it's stale
+        let crash = Bar {
+            symbol: "AAPL".into(),
+            timestamp: old_ts + 55 * 60_000,
+            open: 100.0,
+            high: 100.0,
+            low: 93.0,
+            close: 94.0,
+            volume: 2000.0,
+        };
+        let intents = engine.on_bar(&crash);
+        assert!(intents.is_empty(), "stale data should not generate signals");
+
+        // Verify the skip was tracked
+        assert_eq!(*engine.stale_bars_skipped().get("AAPL").unwrap(), 56);
+
+        // Features should still have been updated despite staleness
+        let features = engine.current_features("AAPL").unwrap();
+        assert!(features.warmed_up, "features should warm up even with stale data");
+    }
+
+    #[test]
+    fn stale_data_disabled_allows_old_bars() {
+        // max_bar_age_ms = 0 means disabled (default for backtesting)
+        let config = EngineConfig {
+            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            exit: no_exit_config(),
+            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
+            max_bar_age_ms: 0, // disabled
+            ..Default::default()
+        };
+        let mut engine = Engine::new(config);
+
+        let old_ts = 1_000_000_000_000_i64;
+        for i in 0..55 {
+            engine.on_bar(&Bar {
+                symbol: "AAPL".into(),
+                timestamp: old_ts + i * 60_000,
+                open: 100.0, high: 100.5, low: 99.5, close: 100.0, volume: 1000.0,
+            });
+        }
+
+        let crash = Bar {
+            symbol: "AAPL".into(),
+            timestamp: old_ts + 55 * 60_000,
+            open: 100.0, high: 100.0, low: 93.0, close: 94.0, volume: 2000.0,
+        };
+        let intents = engine.on_bar(&crash);
+        assert!(!intents.is_empty(), "disabled staleness check should allow old bars");
     }
 }

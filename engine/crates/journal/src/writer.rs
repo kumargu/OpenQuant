@@ -4,6 +4,7 @@
 //! Uses an mpsc channel: trading thread sends records, writer task batches
 //! and flushes them to SQLite.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -57,21 +58,49 @@ pub enum JournalMessage {
     Shutdown,
 }
 
+/// Per-symbol drop counters for journal backpressure isolation.
+#[derive(Clone, Default)]
+pub struct DropCounters {
+    total: Arc<AtomicU64>,
+    per_symbol: Arc<std::sync::Mutex<HashMap<String, u64>>>,
+}
+
+impl DropCounters {
+    fn record_drop(&self, symbol: &str) {
+        self.total.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut map) = self.per_symbol.lock() {
+            *map.entry(symbol.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Total drops across all symbols.
+    pub fn total(&self) -> u64 {
+        self.total.load(Ordering::Relaxed)
+    }
+
+    /// Per-symbol drop counts (for diagnosing which symbol is causing backpressure).
+    pub fn per_symbol(&self) -> HashMap<String, u64> {
+        self.per_symbol.lock().map(|m| m.clone()).unwrap_or_default()
+    }
+}
+
 /// Handle for sending records to the journal writer.
 #[derive(Clone)]
 pub struct JournalHandle {
     tx: mpsc::Sender<JournalMessage>,
-    dropped: Arc<AtomicU64>,
+    drops: DropCounters,
 }
 
 impl JournalHandle {
     /// Send a bar record to the journal (non-blocking).
-    /// Increments drop counter and warns if channel is full.
+    /// Tracks drops per-symbol so one symbol's backpressure is visible.
     pub fn log_bar(&self, record: BarRecord) {
+        let symbol = record.symbol.clone();
         if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(JournalMessage::Bar(record)) {
-            let count = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            self.drops.record_drop(&symbol);
+            let count = self.drops.total();
             if count % 100 == 1 {
-                eprintln!("[journal] WARNING: channel full, dropped {count} records total");
+                eprintln!("[journal] WARNING: channel full, dropped {count} records total (symbol: {symbol})");
             }
         }
     }
@@ -79,9 +108,11 @@ impl JournalHandle {
     /// Send a fill record to the journal (non-blocking).
     /// Fills are critical — warns on every drop.
     pub fn log_fill(&self, record: FillRecord) {
+        let symbol = record.symbol.clone();
         if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(JournalMessage::Fill(record)) {
-            let count = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-            eprintln!("[journal] WARNING: fill record dropped! {count} total drops");
+            self.drops.record_drop(&symbol);
+            let count = self.drops.total();
+            eprintln!("[journal] WARNING: fill record dropped! {count} total drops (symbol: {symbol})");
         }
     }
 
@@ -92,7 +123,12 @@ impl JournalHandle {
 
     /// Number of records dropped due to channel backpressure.
     pub fn dropped_count(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
+        self.drops.total()
+    }
+
+    /// Per-symbol drop counts for diagnosing backpressure.
+    pub fn dropped_per_symbol(&self) -> HashMap<String, u64> {
+        self.drops.per_symbol()
     }
 
     /// Shut down the journal writer.
@@ -116,7 +152,7 @@ pub fn start(db_path: &Path, buffer_size: usize) -> (JournalHandle, tokio::task:
 
     let handle = JournalHandle {
         tx,
-        dropped: Arc::new(AtomicU64::new(0)),
+        drops: DropCounters::default(),
     };
 
     (handle, join_handle)
