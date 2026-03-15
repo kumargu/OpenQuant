@@ -1,0 +1,22 @@
+#!/bin/sh
+# Pre-commit hook: format, lint, then test.
+# Install: git config core.hooksPath .githooks
+
+set -e
+
+echo "Running cargo fmt..."
+cd engine
+cargo fmt --all -- --check 2>&1
+if [ $? -ne 0 ]; then
+    echo "BLOCKED: formatting issues found. Run 'cd engine && cargo fmt --all' and re-commit."
+    exit 1
+fi
+
+echo "Running cargo clippy..."
+cargo clippy --workspace -- -D warnings 2>&1
+if [ $? -ne 0 ]; then
+    echo "BLOCKED: clippy found warnings. Fix them before committing."
+    exit 1
+fi
+
+echo "Pre-commit checks passed."

@@ -47,8 +47,8 @@ pub struct DataConfig {
 impl ConfigFile {
     /// Read and parse a TOML config file.
     pub fn load(path: &Path) -> Result<Self, String> {
-        let contents =
-            std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         toml::from_str(&contents).map_err(|e| format!("invalid TOML in {}: {e}", path.display()))
     }
 
