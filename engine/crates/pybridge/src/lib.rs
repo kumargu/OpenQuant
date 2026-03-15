@@ -123,6 +123,7 @@ impl Engine {
             },
             symbol_overrides: overrides,
             max_bar_age_ms: max_bar_age_seconds * 1000,
+            metrics_enabled: false,
         };
 
         // Get engine version from git
@@ -450,6 +451,7 @@ fn backtest<'py>(
         },
         symbol_overrides: HashMap::new(),
         max_bar_age_ms: 0, // disabled for backtesting — historical data is always "old"
+        metrics_enabled: false,
     };
 
     let result = openquant_core::backtest::run(&core_bars, config);

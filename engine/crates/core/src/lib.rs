@@ -17,6 +17,7 @@ pub mod config;
 pub mod engine;
 pub mod exit;
 pub mod features;
+pub mod hot_metrics;
 pub mod market_data;
 pub mod portfolio;
 pub mod risk;
