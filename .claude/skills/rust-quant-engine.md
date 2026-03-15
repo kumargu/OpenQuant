@@ -912,6 +912,18 @@ The trading hot path must never block on I/O. Journal writes happen on the data 
 
 ---
 
+### 36. Claude monitors PRs after creation
+
+After creating a PR, Claude should automatically poll for review comments using `/loop 5m` and iterate on feedback without waiting for the user to relay comments. The loop should:
+1. Fetch new review comments via `gh api`
+2. Assess whether the comment is actionable
+3. Fix the code, commit, and push
+4. Continue polling until the PR is merged or the user stops the loop
+
+This replaces manual polling scripts — Claude IS the watcher. No separate infrastructure needed.
+
+---
+
 ## Operating instructions
 
 When applying this skill:
