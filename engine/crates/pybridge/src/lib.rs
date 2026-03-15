@@ -34,6 +34,7 @@ impl Engine {
         take_profit_pct = 0.0,
         trend_filter = true,
         stop_loss_atr_mult = 0.0,
+        max_bar_age_seconds = 0,
         symbol_overrides = None,
         journal_path = None,
     ))]
@@ -49,6 +50,7 @@ impl Engine {
         take_profit_pct: f64,
         trend_filter: bool,
         stop_loss_atr_mult: f64,
+        max_bar_age_seconds: i64,
         symbol_overrides: Option<&Bound<'_, PyDict>>,
         journal_path: Option<String>,
     ) -> PyResult<Self> {
@@ -96,6 +98,7 @@ impl Engine {
                 stop_loss_atr_mult,
             },
             symbol_overrides: overrides,
+            max_bar_age_ms: max_bar_age_seconds * 1000,
         };
 
         // Get engine version from git
@@ -276,6 +279,15 @@ impl Engine {
             .unwrap_or(0)
     }
 
+    /// Per-symbol count of bars skipped due to stale data.
+    fn stale_bars_skipped<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        for (symbol, count) in self.inner.stale_bars_skipped() {
+            dict.set_item(symbol, *count)?;
+        }
+        Ok(dict)
+    }
+
     /// Gracefully shut down the journal (flushes all pending writes).
     fn shutdown_journal(&mut self) {
         if let Some(rt) = self.journal.take() {
@@ -348,6 +360,7 @@ fn backtest<'py>(
             stop_loss_atr_mult,
         },
         symbol_overrides: HashMap::new(),
+        max_bar_age_ms: 0, // disabled for backtesting — historical data is always "old"
     };
 
     let result = openquant_core::backtest::run(&core_bars, config);

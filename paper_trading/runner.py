@@ -104,9 +104,11 @@ def run(symbol: str, interval_seconds: int, engine: Engine, max_retries: int = 1
                 )
             elif bars_processed % heartbeat_interval == 0:
                 dropped = engine.journal_dropped()
+                stale = engine.stale_bars_skipped()
+                stale_total = sum(stale.values()) if stale else 0
                 log.info(
-                    "Heartbeat: %d bars processed, %d trades, %d journal drops",
-                    bars_processed, trades_placed, dropped,
+                    "Heartbeat: %d bars processed, %d trades, %d journal drops, %d stale skipped",
+                    bars_processed, trades_placed, dropped, stale_total,
                 )
 
             # Execute intents
@@ -206,6 +208,8 @@ def main():
     parser.add_argument("--journal", type=str, default=None, help="SQLite journal path")
     parser.add_argument("--no-trend-filter", action="store_true")
     parser.add_argument("--max-retries", type=int, default=10, help="Max consecutive errors before exit")
+    parser.add_argument("--max-bar-age", type=int, default=300,
+                        help="Max bar age in seconds before skipping signals (0=disabled, default=300)")
     args = parser.parse_args()
 
     engine = Engine(
@@ -213,6 +217,7 @@ def main():
         max_daily_loss=args.max_daily_loss,
         trend_filter=not args.no_trend_filter,
         journal_path=args.journal,
+        max_bar_age_seconds=args.max_bar_age,
     )
 
     run(args.symbol, args.interval, engine, max_retries=args.max_retries)
