@@ -83,9 +83,35 @@ CREATE INDEX IF NOT EXISTS idx_fills_symbol ON fills(symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 ";
 
-/// Initialize journal database with schema.
+/// Initialize journal database with schema, then apply migrations for upgrades.
 pub fn init(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(SCHEMA)
+    conn.execute_batch(SCHEMA)?;
+    migrate(conn)?;
+    Ok(())
+}
+
+/// Apply forward-only migrations for columns added after the initial schema.
+/// Each ALTER TABLE uses IF NOT EXISTS–style guards (SQLite errors on duplicate
+/// column adds, so we catch and ignore "duplicate column name" errors).
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let new_columns = [
+        ("features", "sma_50", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "atr", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "trend_up", "INTEGER NOT NULL DEFAULT 0"),
+    ];
+
+    for (table, column, col_type) in &new_columns {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {col_type}");
+        match conn.execute_batch(&sql) {
+            Ok(()) => {}
+            Err(e) if e.to_string().contains("duplicate column name") => {
+                // Column already exists (fresh schema or previously migrated)
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -118,5 +144,39 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init(&conn).unwrap();
         init(&conn).unwrap(); // second call should not fail
+    }
+
+    #[test]
+    fn migrate_adds_columns_to_old_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Simulate the old schema without sma_50, atr, trend_up
+        conn.execute_batch("
+            CREATE TABLE features (
+                bar_id          INTEGER NOT NULL,
+                return_1        REAL NOT NULL,
+                return_5        REAL NOT NULL,
+                return_20       REAL NOT NULL,
+                sma_20          REAL NOT NULL,
+                return_std_20   REAL NOT NULL,
+                return_z_score  REAL NOT NULL,
+                relative_volume REAL NOT NULL,
+                bar_range       REAL NOT NULL,
+                close_location  REAL NOT NULL,
+                warmed_up       INTEGER NOT NULL
+            );
+        ").unwrap();
+
+        // Migration should add the 3 missing columns
+        migrate(&conn).unwrap();
+
+        // Verify we can insert with the new columns
+        conn.execute(
+            "INSERT INTO features (bar_id, return_1, return_5, return_20, sma_20,
+             return_std_20, return_z_score, relative_volume, bar_range, close_location,
+             warmed_up, sma_50, atr, trend_up)
+             VALUES (1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 99.5, 1.5, 1)",
+            [],
+        ).unwrap();
     }
 }
