@@ -130,7 +130,7 @@ def run_benchmark(
     params: dict | None = None,
 ) -> dict:
     """Run backtest across all symbols. Returns per-symbol and aggregated results."""
-    from openquant import backtest
+    from openquant import backtest, validate_bars
 
     params = params or DEFAULT_PARAMS
     results = {}
@@ -141,14 +141,27 @@ def run_benchmark(
             print(f"  {symbol}: NO DATA — skipping")
             continue
 
+        # Data quality gate
+        quality = validate_bars(bars)
+        if quality["has_critical_issues"]:
+            print(f"  {symbol}: SKIPPED — critical data quality issues "
+                  f"(ohlc={quality['ohlc_violations']}, ts_back={quality['timestamp_backwards']})")
+            continue
+
+        zvp = quality["zero_volume_pct"]
+        quality_note = ""
+        if zvp > 0.5:
+            quality_note = f" [!vol:{zvp:.0%}]"
+
         result = backtest(bars, **params)
         results[symbol] = {k: result[k] for k in METRICS_KEYS if k in result}
         results[symbol]["total_bars"] = result["total_bars"]
+        results[symbol]["zero_volume_pct"] = zvp
 
         pnl = result["total_pnl"]
         wr = result["win_rate"]
         trades = result["total_trades"]
-        print(f"  {symbol}: {trades} trades, {wr:.0%} win rate, ${pnl:+,.2f} P&L")
+        print(f"  {symbol}: {trades} trades, {wr:.0%} win rate, ${pnl:+,.2f} P&L{quality_note}")
 
     return results
 

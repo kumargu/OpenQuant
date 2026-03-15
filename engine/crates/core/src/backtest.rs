@@ -61,7 +61,23 @@ pub struct BacktestResult {
 }
 
 /// Run a backtest: replay bars through the engine, simulate fills at next-bar open.
+///
+/// Performs basic data quality validation before running. Bars with critical issues
+/// (OHLC violations, non-positive prices) are logged but the backtest continues —
+/// the caller is responsible for checking data quality beforehand.
 pub fn run(bars: &[Bar], config: EngineConfig) -> BacktestResult {
+    // Validate data quality (60_000ms = 1 min gap threshold for 1-min bars)
+    let report = crate::market_data::validate_bars(bars, 60_000 * 3);
+    if report.has_critical_issues() {
+        // Log but don't fail — caller should validate beforehand
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "WARNING: bar data has critical issues: ohlc={}, neg_price={}, ts_back={}, dupes={}",
+            report.ohlc_violations, report.non_positive_prices,
+            report.timestamp_backwards, report.duplicate_timestamps
+        );
+    }
+
     let mut engine = Engine::new(config);
     let mut trades: Vec<TradeRecord> = Vec::new();
     let mut open_trades: Vec<OpenTrade> = Vec::new();

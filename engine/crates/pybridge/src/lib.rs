@@ -393,9 +393,45 @@ fn backtest<'py>(
     Ok(dict)
 }
 
+/// Validate bar data quality. Returns a dict with quality metrics.
+#[pyfunction]
+#[pyo3(signature = (bars, gap_threshold_minutes = 5))]
+fn validate_bars<'py>(
+    py: Python<'py>,
+    bars: Vec<(String, i64, f64, f64, f64, f64, f64)>,
+    gap_threshold_minutes: i64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let core_bars: Vec<Bar> = bars
+        .into_iter()
+        .map(|(symbol, ts, o, h, l, c, v)| Bar {
+            symbol, timestamp: ts, open: o, high: h, low: l, close: c, volume: v,
+        })
+        .collect();
+
+    let gap_threshold_ms = gap_threshold_minutes * 60 * 1000;
+    let report = openquant_core::market_data::validate_bars(&core_bars, gap_threshold_ms);
+
+    let dict = PyDict::new(py);
+    dict.set_item("total_bars", report.total_bars)?;
+    dict.set_item("ohlc_violations", report.ohlc_violations)?;
+    dict.set_item("non_positive_prices", report.non_positive_prices)?;
+    dict.set_item("zero_volume_bars", report.zero_volume_bars)?;
+    dict.set_item("zero_volume_pct", report.zero_volume_pct())?;
+    dict.set_item("timestamp_backwards", report.timestamp_backwards)?;
+    dict.set_item("duplicate_timestamps", report.duplicate_timestamps)?;
+    dict.set_item("has_critical_issues", report.has_critical_issues())?;
+
+    let gaps: Vec<(usize, i64)> = report.gaps;
+    dict.set_item("gap_count", gaps.len())?;
+    dict.set_item("gaps", gaps)?;
+
+    Ok(dict)
+}
+
 #[pymodule]
 fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Engine>()?;
     m.add_function(wrap_pyfunction!(backtest, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_bars, m)?)?;
     Ok(())
 }
