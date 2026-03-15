@@ -1,13 +1,22 @@
 //! Core engine: the single entry point that ties everything together.
 //!
 //! Feed a bar via `on_bar()`, get back order intents. Internally runs:
-//! features → strategy → risk gates → order intents.
+//!
+//! ```text
+//!  on_bar(bar):
+//!    1. Update features
+//!    2. Check exit rules on open positions  ← NEW
+//!       (stop loss, take profit, max hold)
+//!    3. If no exit, check strategy for new entry
+//!    4. Risk gates on any signal
+//!    5. Return order intents
+//! ```
 //!
 //! The engine is strategy-agnostic — it holds a boxed `Strategy` trait object.
-//! Swap strategies by passing a different one at construction time.
 
 use std::collections::HashMap;
 
+use crate::exit::{self, ExitConfig, OpenPosition};
 use crate::features::{FeatureState, FeatureValues};
 use crate::market_data::Bar;
 use crate::portfolio::Portfolio;
@@ -31,6 +40,7 @@ pub struct OrderIntent {
 pub struct EngineConfig {
     pub signal: mean_reversion::Config,
     pub risk: RiskConfig,
+    pub exit: ExitConfig,
 }
 
 impl Default for EngineConfig {
@@ -38,6 +48,7 @@ impl Default for EngineConfig {
         Self {
             signal: mean_reversion::Config::default(),
             risk: RiskConfig::default(),
+            exit: ExitConfig::default(),
         }
     }
 }
@@ -50,6 +61,9 @@ pub struct Engine {
     portfolio: Portfolio,
     risk_state: RiskState,
     risk_config: RiskConfig,
+    exit_config: ExitConfig,
+    open_positions: HashMap<String, OpenPosition>,
+    bar_counter: usize,
 }
 
 impl Engine {
@@ -63,11 +77,18 @@ impl Engine {
             portfolio: Portfolio::new(),
             risk_state: RiskState::new(),
             risk_config: config.risk,
+            exit_config: config.exit,
+            open_positions: HashMap::new(),
+            bar_counter: 0,
         }
     }
 
     /// Create engine with a custom strategy.
-    pub fn with_strategy(strategy: Box<dyn Strategy>, risk_config: RiskConfig) -> Self {
+    pub fn with_strategy(
+        strategy: Box<dyn Strategy>,
+        risk_config: RiskConfig,
+        exit_config: ExitConfig,
+    ) -> Self {
         Self {
             strategy,
             features: HashMap::new(),
@@ -75,11 +96,16 @@ impl Engine {
             portfolio: Portfolio::new(),
             risk_state: RiskState::new(),
             risk_config,
+            exit_config,
+            open_positions: HashMap::new(),
+            bar_counter: 0,
         }
     }
 
     /// Process a new bar. Returns order intents (may be empty).
     pub fn on_bar(&mut self, bar: &Bar) -> Vec<OrderIntent> {
+        self.bar_counter += 1;
+
         // 1. Update features
         let feature_state = self
             .features
@@ -89,14 +115,21 @@ impl Engine {
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
         self.last_features.insert(bar.symbol.clone(), features.clone());
 
-        // 2. Score via strategy
-        let has_position = self.portfolio.has_position(&bar.symbol);
+        // 2. Check exit rules on open positions
+        if let Some(pos) = self.open_positions.get(&bar.symbol) {
+            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, &self.exit_config) {
+                return vec![exit_intent];
+            }
+        }
+
+        // 3. Score via strategy (only if no exit and no position)
+        let has_position = self.open_positions.contains_key(&bar.symbol);
         let signal = match self.strategy.score(&features, has_position) {
             Some(s) => s,
             None => return vec![],
         };
 
-        // 3. Risk gates
+        // 4. Risk gates
         let position_qty = self.portfolio.position_qty(&bar.symbol);
         let qty = match risk::check(
             &signal,
@@ -120,11 +153,28 @@ impl Engine {
         }]
     }
 
-    /// Notify engine that an order was filled (updates portfolio and risk).
+    /// Notify engine that an order was filled (updates portfolio, risk, position tracking).
     pub fn on_fill(&mut self, symbol: &str, side: Side, qty: f64, fill_price: f64) {
         let realized_pnl = self.portfolio.on_fill(symbol, side, qty, fill_price);
         if realized_pnl != 0.0 {
             self.risk_state.record_pnl(realized_pnl, &self.risk_config);
+        }
+
+        match side {
+            Side::Buy => {
+                self.open_positions.insert(
+                    symbol.to_string(),
+                    OpenPosition {
+                        symbol: symbol.to_string(),
+                        entry_price: fill_price,
+                        qty,
+                        entry_bar: self.bar_counter,
+                    },
+                );
+            }
+            Side::Sell => {
+                self.open_positions.remove(symbol);
+            }
         }
     }
 
@@ -165,6 +215,14 @@ mod tests {
         }
     }
 
+    fn no_exit_config() -> ExitConfig {
+        ExitConfig {
+            stop_loss_pct: 0.0,
+            max_hold_bars: 0,
+            take_profit_pct: 0.0,
+        }
+    }
+
     #[test]
     fn warmup_produces_no_signals() {
         let mut engine = Engine::new(EngineConfig::default());
@@ -177,10 +235,8 @@ mod tests {
     #[test]
     fn big_drop_triggers_buy() {
         let config = EngineConfig {
-            risk: RiskConfig {
-                min_reward_cost_ratio: 0.0,
-                ..Default::default()
-            },
+            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            exit: no_exit_config(),
             ..Default::default()
         };
         let mut engine = Engine::new(config);
@@ -202,12 +258,13 @@ mod tests {
     fn kill_switch_blocks_after_loss() {
         let config = EngineConfig {
             risk: RiskConfig { max_daily_loss: 100.0, ..Default::default() },
+            exit: no_exit_config(),
             ..Default::default()
         };
         let mut engine = Engine::new(config);
 
         engine.on_fill("AAPL", Side::Buy, 10.0, 100.0);
-        engine.on_fill("AAPL", Side::Sell, 10.0, 85.0); // -150 loss
+        engine.on_fill("AAPL", Side::Sell, 10.0, 85.0);
         assert!(engine.risk_state().killed);
 
         for _ in 0..25 {
@@ -218,6 +275,92 @@ mod tests {
             open: 100.0, high: 100.0, low: 90.0, close: 91.0, volume: 3000.0,
         };
         assert!(engine.on_bar(&crash).is_empty(), "kill switch should block");
+    }
+
+    #[test]
+    fn stop_loss_exits_position() {
+        let config = EngineConfig {
+            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            exit: ExitConfig {
+                stop_loss_pct: 0.02, // 2% stop
+                max_hold_bars: 0,
+                take_profit_pct: 0.0,
+            },
+            ..Default::default()
+        };
+        let mut engine = Engine::new(config);
+
+        // Warm up and trigger buy
+        for _ in 0..25 {
+            engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
+        }
+        let crash = Bar {
+            symbol: "AAPL".into(), timestamp: 0,
+            open: 100.0, high: 100.0, low: 93.0, close: 94.0, volume: 2000.0,
+        };
+        let intents = engine.on_bar(&crash);
+        assert_eq!(intents[0].side, Side::Buy);
+        engine.on_fill("AAPL", Side::Buy, intents[0].qty, 94.0);
+
+        // Price drops further — should trigger stop loss
+        let drop = Bar {
+            symbol: "AAPL".into(), timestamp: 0,
+            open: 92.0, high: 92.0, low: 91.0, close: 91.0, volume: 1000.0,
+        };
+        let intents = engine.on_bar(&drop);
+        assert!(!intents.is_empty(), "stop loss should fire");
+        assert_eq!(intents[0].side, Side::Sell);
+        assert_eq!(intents[0].reason, SignalReason::StopLoss);
+    }
+
+    #[test]
+    fn max_hold_exits_position() {
+        let config = EngineConfig {
+            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            exit: ExitConfig {
+                stop_loss_pct: 0.0,
+                max_hold_bars: 5,
+                take_profit_pct: 0.0,
+            },
+            ..Default::default()
+        };
+        let mut engine = Engine::new(config);
+
+        // Simulate a fill
+        engine.on_fill("AAPL", Side::Buy, 10.0, 100.0);
+
+        // Feed bars until max hold
+        for _ in 0..4 {
+            assert!(engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0)).is_empty());
+        }
+        let intents = engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
+        assert!(!intents.is_empty(), "max hold should fire");
+        assert_eq!(intents[0].reason, SignalReason::MaxHoldTime);
+    }
+
+    #[test]
+    fn take_profit_exits_position() {
+        let config = EngineConfig {
+            risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
+            exit: ExitConfig {
+                stop_loss_pct: 0.0,
+                max_hold_bars: 0,
+                take_profit_pct: 0.03, // 3%
+            },
+            ..Default::default()
+        };
+        let mut engine = Engine::new(config);
+
+        engine.on_fill("AAPL", Side::Buy, 10.0, 100.0);
+
+        // Price rises 4% — should take profit
+        let rise = Bar {
+            symbol: "AAPL".into(), timestamp: 0,
+            open: 104.0, high: 104.5, low: 103.5, close: 104.0, volume: 1000.0,
+        };
+        let intents = engine.on_bar(&rise);
+        assert!(!intents.is_empty(), "take profit should fire");
+        assert_eq!(intents[0].reason, SignalReason::TakeProfit);
     }
 
     #[test]

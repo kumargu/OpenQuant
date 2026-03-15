@@ -23,6 +23,9 @@ impl Engine {
         buy_z_threshold = -2.0,
         sell_z_threshold = 2.0,
         min_relative_volume = 1.2,
+        stop_loss_pct = 0.02,
+        max_hold_bars = 100,
+        take_profit_pct = 0.0,
     ))]
     fn new(
         max_position_notional: f64,
@@ -30,6 +33,9 @@ impl Engine {
         buy_z_threshold: f64,
         sell_z_threshold: f64,
         min_relative_volume: f64,
+        stop_loss_pct: f64,
+        max_hold_bars: usize,
+        take_profit_pct: f64,
     ) -> Self {
         let config = EngineConfig {
             signal: mean_reversion::Config {
@@ -42,6 +48,11 @@ impl Engine {
                 max_position_notional,
                 max_daily_loss,
                 ..Default::default()
+            },
+            exit: openquant_core::exit::ExitConfig {
+                stop_loss_pct,
+                max_hold_bars,
+                take_profit_pct,
             },
         };
         Self {
@@ -152,6 +163,9 @@ impl Engine {
     buy_z_threshold = -2.0,
     sell_z_threshold = 2.0,
     min_relative_volume = 1.2,
+    stop_loss_pct = 0.02,
+    max_hold_bars = 100,
+    take_profit_pct = 0.0,
 ))]
 fn backtest<'py>(
     py: Python<'py>,
@@ -161,6 +175,9 @@ fn backtest<'py>(
     buy_z_threshold: f64,
     sell_z_threshold: f64,
     min_relative_volume: f64,
+    stop_loss_pct: f64,
+    max_hold_bars: usize,
+    take_profit_pct: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
     let core_bars: Vec<Bar> = bars
         .into_iter()
@@ -180,6 +197,11 @@ fn backtest<'py>(
             max_position_notional,
             max_daily_loss,
             ..Default::default()
+        },
+        exit: openquant_core::exit::ExitConfig {
+            stop_loss_pct,
+            max_hold_bars,
+            take_profit_pct,
         },
     };
 

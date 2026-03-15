@@ -43,6 +43,9 @@ pub enum Side {
 pub enum SignalReason {
     MeanReversionBuy,
     MeanReversionSell,
+    StopLoss,
+    TakeProfit,
+    MaxHoldTime,
 }
 
 impl SignalReason {
@@ -50,6 +53,9 @@ impl SignalReason {
         match self {
             Self::MeanReversionBuy => "mean-reversion buy: oversold + volume confirmation",
             Self::MeanReversionSell => "mean-reversion sell: overbought reversion",
+            Self::StopLoss => "stop loss: price dropped below threshold",
+            Self::TakeProfit => "take profit: price rose above threshold",
+            Self::MaxHoldTime => "max hold time: position held too long",
         }
     }
 }

@@ -17,5 +17,6 @@ pub mod features;
 pub mod signals;
 pub mod risk;
 pub mod portfolio;
+pub mod exit;
 pub mod engine;
 pub mod backtest;

@@ -119,13 +119,13 @@ def print_result(result: dict):
 
     if result["trades"]:
         print(f"\n--- Trades ---")
-        print(f"{'Entry':<12} {'Exit':<12} {'Qty':<8} {'P&L':<12} {'Return':<10} {'Bars':<6} {'Reason'}")
-        print("-" * 80)
+        print(f"{'Entry':<12} {'Exit':<12} {'Qty':<8} {'P&L':<12} {'Return':<10} {'Bars':<6} {'Exit Reason'}")
+        print("-" * 85)
         for t in result["trades"]:
             print(
                 f"${t['entry_price']:<11,.2f} ${t['exit_price']:<11,.2f} "
                 f"{t['qty']:<8.1f} ${t['pnl']:<11,.2f} {t['return_pct']:>8.2%}  "
-                f"{t['bars_held']:<6} {t['entry_reason'][:30]}"
+                f"{t['bars_held']:<6} {t['exit_reason'][:35]}"
             )
 
 
@@ -139,6 +139,9 @@ def main():
     parser.add_argument("--buy-z", type=float, default=-2.0)
     parser.add_argument("--sell-z", type=float, default=2.0)
     parser.add_argument("--min-vol", type=float, default=1.2)
+    parser.add_argument("--stop-loss", type=float, default=0.02, help="Stop loss pct (0.02 = 2%%)")
+    parser.add_argument("--max-hold", type=int, default=100, help="Max bars to hold (0 = disabled)")
+    parser.add_argument("--take-profit", type=float, default=0.0, help="Take profit pct (0 = disabled)")
     args = parser.parse_args()
 
     bars = fetch_bars(args.symbol, args.days, args.timeframe)
@@ -154,6 +157,9 @@ def main():
         buy_z_threshold=args.buy_z,
         sell_z_threshold=args.sell_z,
         min_relative_volume=args.min_vol,
+        stop_loss_pct=args.stop_loss,
+        max_hold_bars=args.max_hold,
+        take_profit_pct=args.take_profit,
     )
 
     print_result(result)
