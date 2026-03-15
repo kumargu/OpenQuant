@@ -61,12 +61,19 @@ jobs:
           key: cargo-py-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock') }}
           restore-keys: cargo-py-${{ runner.os }}-
 
-      - name: Install maturin
-        run: pip install maturin
+      - name: Create virtualenv and install maturin
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin
 
       - name: Build extension
         working-directory: engine
-        run: maturin develop --release
+        run: |
+          source ../.venv/bin/activate
+          maturin develop --release
 
       - name: Verify import
-        run: python -c "import openquant; print(f'openquant loaded: {dir(openquant)}')"
+        run: |
+          source .venv/bin/activate
+          python -c "import openquant; print(f'openquant loaded: {dir(openquant)}')"
