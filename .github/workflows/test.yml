@@ -41,7 +41,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Performance gate
-        run: cargo test --test bench_gate --release -p openquant-core
+        run: cargo test --test bench_gate --release -p openquant-core -- --ignored
 
   python-bridge:
     name: Python bridge build
