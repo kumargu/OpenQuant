@@ -1,0 +1,62 @@
+name: PR Benchmark Reminder
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check for benchmark data in PR body
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || '';
+
+            // Check if PR body already has benchmark data
+            const hasBenchmark = body.includes('Backtest Comparison') ||
+                                 body.includes('VERDICT:') ||
+                                 body.includes('Baseline');
+
+            if (!hasBenchmark) {
+              // Post a reminder comment
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+              });
+
+              // Don't post duplicate reminders
+              const alreadyReminded = comments.data.some(c =>
+                c.body.includes('benchmark comparison data')
+              );
+
+              if (!alreadyReminded) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: `## Benchmark Data Missing
+
+            This PR does not appear to include benchmark comparison data.
+
+            Before merging, please run the benchmark suite and update the PR description:
+
+            \`\`\`bash
+            # Build the engine
+            cd engine && maturin develop --release && cd ..
+
+            # Generate PR report with benchmark data
+            python scripts/generate-pr-report.py --hypothesis "describe what this PR changes"
+            \`\`\`
+
+            Then update this PR's description with the output.
+
+            See [coding principles sections 31-35](.claude/skills/rust-quant-engine.md) for the data-driven PR model.`
+                });
+              }
+            }
