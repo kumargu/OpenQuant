@@ -90,16 +90,18 @@ impl HotMetrics {
 
     /// Get or create cached handles for a symbol.
     /// Returns None if metrics are disabled.
+    /// Uses borrowed lookup for existing symbols to avoid heap allocation
+    /// on the hot path; only allocates when inserting a new symbol.
     #[inline]
     pub fn get(&mut self, symbol: &str) -> Option<&SymbolHandles> {
         if !self.enabled {
             return None;
         }
-        Some(
+        if !self.symbols.contains_key(symbol) {
             self.symbols
-                .entry(symbol.to_string())
-                .or_insert_with(|| SymbolHandles::new(symbol)),
-        )
+                .insert(symbol.to_string(), SymbolHandles::new(symbol));
+        }
+        self.symbols.get(symbol)
     }
 }
 
