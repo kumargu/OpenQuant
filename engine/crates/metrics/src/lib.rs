@@ -19,9 +19,11 @@
 //! histogram!("engine.on_bar.duration_ns", "symbol" => "BTCUSD").record(63.0);
 //! ```
 
+pub mod handles;
 mod recorder;
 mod sink;
 
+pub use handles::{MetricsRegistry, SymbolMetrics};
 pub use recorder::install;
 pub use sink::MetricsSink;
 
