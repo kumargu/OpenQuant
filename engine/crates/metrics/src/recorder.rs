@@ -7,9 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use metrics::{
-    Counter, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit,
-};
+use metrics::{Counter, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit};
 use metrics_util::registry::{AtomicStorage, Registry};
 
 use crate::sink::MetricsSink;
@@ -255,11 +253,7 @@ pub async fn shutdown() {
             let _ = tx.send(());
         }
         // Extract JoinHandle before awaiting (no MutexGuard held across await)
-        let jh = state
-            .join_handle
-            .lock()
-            .ok()
-            .and_then(|mut g| g.take());
+        let jh = state.join_handle.lock().ok().and_then(|mut g| g.take());
         if let Some(jh) = jh {
             let _ = jh.await;
         }
@@ -389,10 +383,7 @@ mod tests {
         );
         let key2 = Key::from_parts(
             "signal.fired",
-            vec![
-                Label::new("symbol", "ETHUSD"),
-                Label::new("side", "sell"),
-            ],
+            vec![Label::new("symbol", "ETHUSD"), Label::new("side", "sell")],
         );
 
         rec.register_counter(&key1, &meta()).increment(3);
