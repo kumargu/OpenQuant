@@ -12,7 +12,7 @@ use crate::features::{FeatureState, FeatureValues};
 use crate::market_data::Bar;
 use crate::portfolio::Portfolio;
 use crate::risk::{self, RiskConfig, RiskState};
-use crate::signals::{Side, Strategy, mean_reversion};
+use crate::signals::{Side, SignalReason, Strategy, mean_reversion};
 
 /// An order the engine wants placed.
 #[derive(Debug, Clone)]
@@ -20,8 +20,10 @@ pub struct OrderIntent {
     pub symbol: String,
     pub side: Side,
     pub qty: f64,
-    pub reason: String,
+    pub reason: SignalReason,
     pub signal_score: f64,
+    pub z_score: f64,
+    pub relative_volume: f64,
 }
 
 /// Engine configuration.
@@ -113,6 +115,8 @@ impl Engine {
             qty,
             reason: signal.reason,
             signal_score: signal.score,
+            z_score: signal.z_score,
+            relative_volume: signal.relative_volume,
         }]
     }
 

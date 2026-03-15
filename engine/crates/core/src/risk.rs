@@ -138,13 +138,15 @@ pub fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signals::{Side, SignalOutput};
+    use crate::signals::{Side, SignalOutput, SignalReason};
 
     fn buy_signal(score: f64) -> SignalOutput {
         SignalOutput {
             side: Side::Buy,
             score,
-            reason: "test".into(),
+            reason: SignalReason::MeanReversionBuy,
+            z_score: -3.0,
+            relative_volume: 1.5,
         }
     }
 
@@ -152,7 +154,9 @@ mod tests {
         SignalOutput {
             side: Side::Sell,
             score,
-            reason: "test".into(),
+            reason: SignalReason::MeanReversionSell,
+            z_score: 3.0,
+            relative_volume: 1.5,
         }
     }
 

@@ -9,7 +9,7 @@
 
 use crate::engine::{Engine, EngineConfig, OrderIntent};
 use crate::market_data::Bar;
-use crate::signals::Side;
+use crate::signals::{Side, SignalReason};
 
 /// Record of a completed (round-trip) trade.
 #[derive(Debug, Clone)]
@@ -22,8 +22,8 @@ pub struct TradeRecord {
     pub exit_time: i64,
     pub pnl: f64,
     pub return_pct: f64,
-    pub entry_reason: String,
-    pub exit_reason: String,
+    pub entry_reason: SignalReason,
+    pub exit_reason: SignalReason,
     pub bars_held: usize,
 }
 
@@ -34,7 +34,7 @@ struct OpenTrade {
     entry_price: f64,
     qty: f64,
     entry_time: i64,
-    entry_reason: String,
+    entry_reason: SignalReason,
     entry_bar_idx: usize,
 }
 
@@ -88,7 +88,7 @@ pub fn run(bars: &[Bar], config: EngineConfig) -> BacktestResult {
                         entry_price: fill_price,
                         qty: intent.qty,
                         entry_time: bar.timestamp,
-                        entry_reason: intent.reason.clone(),
+                        entry_reason: intent.reason,
                         entry_bar_idx: bar_idx,
                     });
                 }
@@ -112,7 +112,7 @@ pub fn run(bars: &[Bar], config: EngineConfig) -> BacktestResult {
                             pnl,
                             return_pct,
                             entry_reason: open.entry_reason,
-                            exit_reason: intent.reason.clone(),
+                            exit_reason: intent.reason,
                             bars_held: bar_idx - open.entry_bar_idx,
                         });
                     }

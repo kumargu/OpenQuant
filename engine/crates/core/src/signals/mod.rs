@@ -1,13 +1,30 @@
 //! Signal generation: features → trade decisions.
 //!
+//! ```text
+//!  ┌──────────────┐
+//!  │ FeatureValues │   (z-score, volume, close_loc, etc.)
+//!  └──────┬───────┘
+//!         │
+//!         ▼
+//!  ┌──────────────┐
+//!  │   Strategy    │   (mean_reversion, momentum, etc.)
+//!  │   .score()    │
+//!  └──────┬───────┘
+//!         │
+//!         ▼
+//!   Some(SignalOutput)  or  None
+//!    │  side: Buy/Sell
+//!    │  score: conviction strength
+//!    │  reason: why it fired
+//! ```
+//!
 //! Each strategy lives in its own module and implements the `Strategy` trait.
-//! The engine picks which strategy to run. Strategies are independent and
-//! testable in isolation.
+//! Strategies are independent, testable in isolation, and swappable.
 //!
 //! Adding a new strategy:
-//! 1. Create a new file in `signals/` (e.g., `momentum.rs`)
+//! 1. Create `signals/my_strategy.rs`
 //! 2. Implement the `Strategy` trait
-//! 3. Re-export it from this module
+//! 3. Add `pub mod my_strategy;` here
 
 pub mod mean_reversion;
 
@@ -20,6 +37,23 @@ pub enum Side {
     Sell,
 }
 
+/// Why a signal fired — enum to avoid String allocation in hot path.
+/// Use `.describe()` to get a human-readable string when needed (logging, display).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SignalReason {
+    MeanReversionBuy,
+    MeanReversionSell,
+}
+
+impl SignalReason {
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Self::MeanReversionBuy => "mean-reversion buy: oversold + volume confirmation",
+            Self::MeanReversionSell => "mean-reversion sell: overbought reversion",
+        }
+    }
+}
+
 /// Output from a strategy's scoring function.
 #[derive(Debug, Clone)]
 pub struct SignalOutput {
@@ -27,8 +61,12 @@ pub struct SignalOutput {
     pub side: Side,
     /// Conviction strength — higher means stronger signal.
     pub score: f64,
-    /// Human-readable explanation of why this signal fired.
-    pub reason: String,
+    /// Why this signal fired (enum, zero-alloc).
+    pub reason: SignalReason,
+    /// Feature snapshot for logging (z-score, relative volume).
+    /// Cheap to copy (two f64s), useful for trade journals.
+    pub z_score: f64,
+    pub relative_volume: f64,
 }
 
 /// Trait that all strategies implement.

@@ -1,18 +1,34 @@
 //! Mean-reversion strategy.
 //!
-//! Idea: unusually large price drops (measured by z-score) tend to revert.
-//! Buy when the return z-score is extremely negative with volume confirmation,
-//! sell when z-score swings extremely positive.
+//! Idea: unusually large price drops (measured by z-score of returns)
+//! tend to revert toward the mean. Buy the dip, sell the rip.
 //!
-//! Entry: z-score < buy_threshold AND relative_volume > min_volume AND no position
-//! Exit:  z-score > sell_threshold AND holding a position
+//! ```text
+//!  Price
+//!   │          ╱╲
+//!   │    ╱╲  ╱    ╲  ← SELL: z > +2.0 (overbought)
+//!   │  ╱    ╲       ╲
+//!   │╱        ╲       ── mean
+//!   │          ╲╱
+//!   │              ← BUY: z < -2.0 (oversold) + volume > 1.2x
+//!   └──────────────── Time
+//! ```
 //!
-//! Score formula:
-//!   buy_score  = 0.6 * |z - threshold| + 0.4 * (relative_volume - 1.0)
-//!   sell_score = |z - threshold|
+//! Entry conditions (all must be true):
+//!   1. z-score < buy_threshold  (price dropped unusually far)
+//!   2. relative_volume > min_volume  (drop has participation)
+//!   3. not already holding a position
+//!
+//! Exit conditions:
+//!   1. z-score > sell_threshold  (price reverted past the mean)
+//!   2. currently holding a position
+//!
+//! Score formula (higher = more conviction):
+//!   buy:  0.6 × |z - threshold| + 0.4 × (relative_volume - 1.0)
+//!   sell: |z - threshold|
 
 use crate::features::FeatureValues;
-use super::{Side, SignalOutput, Strategy};
+use super::{Side, SignalOutput, SignalReason, Strategy};
 
 /// Configuration for mean-reversion strategy.
 #[derive(Debug, Clone)]
@@ -68,10 +84,9 @@ impl Strategy for MeanReversion {
                 return Some(SignalOutput {
                     side: Side::Buy,
                     score,
-                    reason: format!(
-                        "mean-reversion buy: z={:.2}, rel_vol={:.2}, close_loc={:.2}",
-                        features.return_z_score, features.relative_volume, features.close_location
-                    ),
+                    reason: SignalReason::MeanReversionBuy,
+                    z_score: features.return_z_score,
+                    relative_volume: features.relative_volume,
                 });
             }
         }
@@ -84,10 +99,9 @@ impl Strategy for MeanReversion {
                 return Some(SignalOutput {
                     side: Side::Sell,
                     score: z_strength,
-                    reason: format!(
-                        "mean-reversion sell: z={:.2}, rel_vol={:.2}",
-                        features.return_z_score, features.relative_volume
-                    ),
+                    reason: SignalReason::MeanReversionSell,
+                    z_score: features.return_z_score,
+                    relative_volume: features.relative_volume,
                 });
             }
         }
@@ -122,66 +136,60 @@ mod tests {
         let sig = sig.unwrap();
         assert_eq!(sig.side, Side::Buy);
         assert!(sig.score >= 0.5);
-        assert!(sig.reason.contains("mean-reversion buy"));
+        assert_eq!(sig.reason, SignalReason::MeanReversionBuy);
     }
 
     #[test]
     fn buy_blocked_when_already_holding() {
-        let sig = strategy().score(&features(-3.0, 1.5), true);
-        assert!(sig.is_none(), "should not buy when already holding");
+        assert!(strategy().score(&features(-3.0, 1.5), true).is_none());
     }
 
     #[test]
     fn buy_blocked_when_z_above_threshold() {
-        let sig = strategy().score(&features(-1.0, 1.5), false);
-        assert!(sig.is_none(), "z=-1.0 is above -2.0 threshold");
+        assert!(strategy().score(&features(-1.0, 1.5), false).is_none());
     }
 
     #[test]
     fn buy_blocked_when_volume_too_low() {
-        let sig = strategy().score(&features(-3.0, 0.8), false);
-        assert!(sig.is_none(), "volume 0.8x is below 1.2x minimum");
+        assert!(strategy().score(&features(-3.0, 0.8), false).is_none());
     }
 
     #[test]
     fn buy_score_increases_with_stronger_z() {
         let weak = strategy().score(&features(-2.5, 1.5), false).unwrap();
         let strong = strategy().score(&features(-4.0, 1.5), false).unwrap();
-        assert!(strong.score > weak.score, "stronger z should give higher score");
+        assert!(strong.score > weak.score);
     }
 
     #[test]
     fn buy_score_increases_with_higher_volume() {
-        let low_vol = strategy().score(&features(-3.0, 1.3), false).unwrap();
-        let high_vol = strategy().score(&features(-3.0, 3.0), false).unwrap();
-        assert!(high_vol.score > low_vol.score, "higher volume should give higher score");
+        let low = strategy().score(&features(-3.0, 1.3), false).unwrap();
+        let high = strategy().score(&features(-3.0, 3.0), false).unwrap();
+        assert!(high.score > low.score);
     }
 
     #[test]
     fn buy_at_exact_threshold_does_not_fire() {
-        let sig = strategy().score(&features(-2.0, 1.5), false);
-        assert!(sig.is_none(), "z exactly at threshold should not fire (need strictly below)");
+        assert!(strategy().score(&features(-2.0, 1.5), false).is_none());
     }
 
     // --- Sell signal tests ---
 
     #[test]
     fn sell_fires_on_overbought_when_holding() {
-        let sig = strategy().score(&features(3.0, 1.5), true);
-        assert!(sig.is_some());
-        assert_eq!(sig.unwrap().side, Side::Sell);
+        let sig = strategy().score(&features(3.0, 1.5), true).unwrap();
+        assert_eq!(sig.side, Side::Sell);
+        assert_eq!(sig.reason, SignalReason::MeanReversionSell);
     }
 
     #[test]
     fn sell_blocked_when_not_holding() {
-        let sig = strategy().score(&features(3.0, 1.5), false);
-        assert!(sig.is_none(), "should not sell when not holding");
+        assert!(strategy().score(&features(3.0, 1.5), false).is_none());
     }
 
     #[test]
     fn sell_blocked_when_z_below_threshold() {
-        let sig = strategy().score(&features(1.5, 1.5), true);
-        assert!(sig.is_none(), "z=1.5 is below 2.0 sell threshold");
+        assert!(strategy().score(&features(1.5, 1.5), true).is_none());
     }
 
     #[test]
@@ -191,7 +199,7 @@ mod tests {
         assert!(strong.score > weak.score);
     }
 
-    // --- Warmup tests ---
+    // --- Edge cases ---
 
     #[test]
     fn no_signal_when_not_warmed_up() {
@@ -199,8 +207,6 @@ mod tests {
         f.warmed_up = false;
         assert!(strategy().score(&f, false).is_none());
     }
-
-    // --- Custom config tests ---
 
     #[test]
     fn custom_thresholds_respected() {
@@ -210,27 +216,27 @@ mod tests {
             min_relative_volume: 0.0,
             min_score: 0.0,
         });
-        // z=-1.5 should fire with relaxed threshold of -1.0
         assert!(s.score(&features(-1.5, 0.5), false).is_some());
-        // z=1.5 should fire sell with relaxed threshold of 1.0
         assert!(s.score(&features(1.5, 0.5), true).is_some());
     }
 
     #[test]
-    fn zero_volume_filter_allows_all() {
+    fn zero_volume_blocks_even_with_zero_filter() {
         let s = MeanReversion::new(Config {
             min_relative_volume: 0.0,
             min_score: 0.0,
             ..Config::default()
         });
-        // Even zero volume should pass when filter is disabled
-        // (relative_volume=0.0 > min=0.0 is false, so this still blocks)
-        // This documents the behavior: 0.0 > 0.0 is false
-        let sig = s.score(&features(-3.0, 0.0), false);
-        assert!(sig.is_none(), "0.0 > 0.0 is false, so zero volume is always blocked");
+        // 0.0 > 0.0 is false — documented behavior
+        assert!(s.score(&features(-3.0, 0.0), false).is_none());
+        // any positive volume passes
+        assert!(s.score(&features(-3.0, 0.01), false).is_some());
+    }
 
-        // But any positive volume passes
-        let sig = s.score(&features(-3.0, 0.01), false);
-        assert!(sig.is_some(), "tiny volume should pass when filter is 0.0");
+    #[test]
+    fn signal_carries_feature_snapshot() {
+        let sig = strategy().score(&features(-3.5, 1.8), false).unwrap();
+        assert!((sig.z_score - (-3.5)).abs() < 1e-10);
+        assert!((sig.relative_volume - 1.8).abs() < 1e-10);
     }
 }

@@ -78,7 +78,10 @@ impl Engine {
                 Side::Sell => "sell",
             })?;
             dict.set_item("qty", intent.qty)?;
-            dict.set_item("reason", &intent.reason)?;
+            dict.set_item("reason", format!(
+                "{}: z={:.2}, vol={:.2}",
+                intent.reason.describe(), intent.z_score, intent.relative_volume
+            ))?;
             dict.set_item("score", intent.signal_score)?;
             results.push(dict);
         }
@@ -212,8 +215,8 @@ fn backtest<'py>(
             td.set_item("exit_time", t.exit_time).unwrap();
             td.set_item("pnl", t.pnl).unwrap();
             td.set_item("return_pct", t.return_pct).unwrap();
-            td.set_item("entry_reason", &t.entry_reason).unwrap();
-            td.set_item("exit_reason", &t.exit_reason).unwrap();
+            td.set_item("entry_reason", t.entry_reason.describe()).unwrap();
+            td.set_item("exit_reason", t.exit_reason.describe()).unwrap();
             td.set_item("bars_held", t.bars_held).unwrap();
             td
         })
