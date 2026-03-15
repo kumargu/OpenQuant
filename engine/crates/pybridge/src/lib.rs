@@ -2,9 +2,10 @@
 //! All logic lives in openquant-core. Python never does math.
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyAnyMethods};
 
-use openquant_core::engine::{Engine as CoreEngine, EngineConfig};
+use openquant_core::engine::{Engine as CoreEngine, EngineConfig, SymbolOverrides};
+use std::collections::HashMap;
 use openquant_core::market_data::Bar;
 use openquant_core::signals::Side;
 use openquant_core::signals::mean_reversion;
@@ -31,8 +32,12 @@ impl Engine {
         stop_loss_pct = 0.02,
         max_hold_bars = 100,
         take_profit_pct = 0.0,
+        trend_filter = true,
+        stop_loss_atr_mult = 0.0,
+        symbol_overrides = None,
         journal_path = None,
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         max_position_notional: f64,
         max_daily_loss: f64,
@@ -42,13 +47,41 @@ impl Engine {
         stop_loss_pct: f64,
         max_hold_bars: usize,
         take_profit_pct: f64,
+        trend_filter: bool,
+        stop_loss_atr_mult: f64,
+        symbol_overrides: Option<&Bound<'_, PyDict>>,
         journal_path: Option<String>,
-    ) -> Self {
+    ) -> PyResult<Self> {
+        // Parse per-symbol overrides from Python dict
+        let overrides = match symbol_overrides {
+            Some(py_dict) => {
+                let mut map = HashMap::new();
+                for (key, val) in py_dict.iter() {
+                    let symbol: String = key.extract()?;
+                    let params: &Bound<'_, PyDict> = val.downcast()?;
+                    let ovr = SymbolOverrides {
+                        buy_z_threshold: params.get_item("buy_z_threshold")?.map(|v| v.extract()).transpose()?,
+                        sell_z_threshold: params.get_item("sell_z_threshold")?.map(|v| v.extract()).transpose()?,
+                        min_relative_volume: params.get_item("min_relative_volume")?.map(|v| v.extract()).transpose()?,
+                        trend_filter: params.get_item("trend_filter")?.map(|v| v.extract()).transpose()?,
+                        stop_loss_pct: params.get_item("stop_loss_pct")?.map(|v| v.extract()).transpose()?,
+                        stop_loss_atr_mult: params.get_item("stop_loss_atr_mult")?.map(|v| v.extract()).transpose()?,
+                        max_hold_bars: params.get_item("max_hold_bars")?.map(|v| v.extract()).transpose()?,
+                        take_profit_pct: params.get_item("take_profit_pct")?.map(|v| v.extract()).transpose()?,
+                    };
+                    map.insert(symbol, ovr);
+                }
+                map
+            }
+            None => HashMap::new(),
+        };
+
         let config = EngineConfig {
             signal: mean_reversion::Config {
                 buy_z_threshold,
                 sell_z_threshold,
                 min_relative_volume,
+                trend_filter,
                 ..Default::default()
             },
             risk: openquant_core::risk::RiskConfig {
@@ -60,7 +93,9 @@ impl Engine {
                 stop_loss_pct,
                 max_hold_bars,
                 take_profit_pct,
+                stop_loss_atr_mult,
             },
+            symbol_overrides: overrides,
         };
 
         // Get engine version from git
@@ -68,20 +103,28 @@ impl Engine {
             .unwrap_or("dev")
             .to_string();
 
-        // Start journal if path provided
-        let journal = journal_path.map(|path| {
-            let p = std::path::PathBuf::from(path);
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent).ok();
+        // Start journal if path provided — fail fast on bad path
+        let journal = match journal_path {
+            Some(path) => {
+                let p = std::path::PathBuf::from(&path);
+                if let Some(parent) = p.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        pyo3::exceptions::PyIOError::new_err(format!(
+                            "cannot create journal directory '{}': {e}",
+                            parent.display()
+                        ))
+                    })?;
+                }
+                Some(DataRuntime::new(&p, 4096))
             }
-            DataRuntime::new(&p, 4096)
-        });
+            None => None,
+        };
 
-        Self {
+        Ok(Self {
             inner: CoreEngine::new(config),
             journal,
             engine_version,
-        }
+        })
     }
 
     /// Feed a bar, get back list of order intent dicts.
@@ -199,8 +242,11 @@ impl Engine {
                 dict.set_item("return_std_20", f.return_std_20)?;
                 dict.set_item("return_z_score", f.return_z_score)?;
                 dict.set_item("relative_volume", f.relative_volume)?;
+                dict.set_item("sma_50", f.sma_50)?;
+                dict.set_item("atr", f.atr)?;
                 dict.set_item("bar_range", f.bar_range)?;
                 dict.set_item("close_location", f.close_location)?;
+                dict.set_item("trend_up", f.trend_up)?;
                 dict.set_item("warmed_up", f.warmed_up)?;
                 Ok(Some(dict))
             }
@@ -238,6 +284,14 @@ impl Engine {
     }
 }
 
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Some(rt) = self.journal.take() {
+            rt.shutdown();
+        }
+    }
+}
+
 /// Run a backtest over historical bars. All computation in Rust.
 #[pyfunction]
 #[pyo3(signature = (
@@ -250,6 +304,8 @@ impl Engine {
     stop_loss_pct = 0.02,
     max_hold_bars = 100,
     take_profit_pct = 0.0,
+    trend_filter = true,
+    stop_loss_atr_mult = 0.0,
 ))]
 fn backtest<'py>(
     py: Python<'py>,
@@ -262,6 +318,8 @@ fn backtest<'py>(
     stop_loss_pct: f64,
     max_hold_bars: usize,
     take_profit_pct: f64,
+    trend_filter: bool,
+    stop_loss_atr_mult: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
     let core_bars: Vec<Bar> = bars
         .into_iter()
@@ -275,6 +333,7 @@ fn backtest<'py>(
             buy_z_threshold,
             sell_z_threshold,
             min_relative_volume,
+            trend_filter,
             ..Default::default()
         },
         risk: openquant_core::risk::RiskConfig {
@@ -286,7 +345,9 @@ fn backtest<'py>(
             stop_loss_pct,
             max_hold_bars,
             take_profit_pct,
+            stop_loss_atr_mult,
         },
+        symbol_overrides: HashMap::new(),
     };
 
     let result = openquant_core::backtest::run(&core_bars, config);

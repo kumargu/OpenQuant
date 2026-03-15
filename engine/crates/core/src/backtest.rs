@@ -242,16 +242,16 @@ mod tests {
 
     #[test]
     fn test_no_trades_during_warmup() {
-        let bars = make_bars(&vec![100.0; 15], 1000.0);
+        let bars = make_bars(&vec![100.0; 45], 1000.0);
         let result = run(&bars, EngineConfig::default());
         assert_eq!(result.total_trades, 0);
-        assert_eq!(result.total_bars, 15);
+        assert_eq!(result.total_bars, 45);
     }
 
     #[test]
     fn test_deterministic_backtest() {
         // Same data, same config → same result
-        let mut prices: Vec<f64> = vec![100.0; 25];
+        let mut prices: Vec<f64> = vec![100.0; 55];
         prices.push(94.0); // crash
         prices.push(106.0); // spike
         let bars = make_bars(&prices, 1000.0);
@@ -267,8 +267,8 @@ mod tests {
 
     #[test]
     fn test_crash_and_recovery_trade() {
-        // 25 steady bars, then crash, then recovery
-        let mut prices: Vec<f64> = vec![100.0; 25];
+        // 55 steady bars, then crash, then recovery
+        let mut prices: Vec<f64> = vec![100.0; 55];
         prices.push(93.0); // crash — should trigger buy signal
         // Next bar opens at 93, engine should have pending buy
         prices.push(95.0); // recovery bar — buy fills at open=95
@@ -283,9 +283,13 @@ mod tests {
 
         let mut bars = make_bars(&prices, 1000.0);
         // Give crash bar high volume
-        bars[25].volume = 2000.0;
+        bars[55].volume = 2000.0;
 
         let config = EngineConfig {
+            signal: crate::signals::mean_reversion::Config {
+                trend_filter: false,
+                ..Default::default()
+            },
             risk: crate::risk::RiskConfig {
                 min_reward_cost_ratio: 0.0,
                 ..Default::default()
@@ -300,8 +304,8 @@ mod tests {
 
     #[test]
     fn test_equity_curve_length_matches_bars() {
-        let bars = make_bars(&vec![100.0; 50], 1000.0);
+        let bars = make_bars(&vec![100.0; 60], 1000.0);
         let result = run(&bars, EngineConfig::default());
-        assert_eq!(result.equity_curve.len(), 50);
+        assert_eq!(result.equity_curve.len(), 60);
     }
 }

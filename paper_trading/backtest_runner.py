@@ -139,9 +139,11 @@ def main():
     parser.add_argument("--buy-z", type=float, default=-2.2)
     parser.add_argument("--sell-z", type=float, default=2.0)
     parser.add_argument("--min-vol", type=float, default=1.2)
-    parser.add_argument("--stop-loss", type=float, default=0.02, help="Stop loss pct (0.02 = 2%%)")
+    parser.add_argument("--stop-loss", type=float, default=0.0, help="Fixed stop loss pct (0 = disabled, use ATR)")
+    parser.add_argument("--stop-loss-atr", type=float, default=2.5, help="ATR multiplier for dynamic stop (0 = disabled)")
     parser.add_argument("--max-hold", type=int, default=100, help="Max bars to hold (0 = disabled)")
     parser.add_argument("--take-profit", type=float, default=0.0, help="Take profit pct (0 = disabled)")
+    parser.add_argument("--no-trend-filter", action="store_true", help="Disable SMA-50 trend filter")
     args = parser.parse_args()
 
     bars = fetch_bars(args.symbol, args.days, args.timeframe)
@@ -160,6 +162,8 @@ def main():
         stop_loss_pct=args.stop_loss,
         max_hold_bars=args.max_hold,
         take_profit_pct=args.take_profit,
+        trend_filter=not args.no_trend_filter,
+        stop_loss_atr_mult=args.stop_loss_atr,
     )
 
     print_result(result)

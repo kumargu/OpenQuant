@@ -50,12 +50,26 @@ pub struct BarOutcome {
     pub qty_approved: Option<f64>,
 }
 
+/// Per-symbol parameter overrides. None = use default from EngineConfig.
+#[derive(Debug, Clone, Default)]
+pub struct SymbolOverrides {
+    pub buy_z_threshold: Option<f64>,
+    pub sell_z_threshold: Option<f64>,
+    pub min_relative_volume: Option<f64>,
+    pub trend_filter: Option<bool>,
+    pub stop_loss_pct: Option<f64>,
+    pub stop_loss_atr_mult: Option<f64>,
+    pub max_hold_bars: Option<usize>,
+    pub take_profit_pct: Option<f64>,
+}
+
 /// Engine configuration.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub signal: mean_reversion::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
+    pub symbol_overrides: HashMap<String, SymbolOverrides>,
 }
 
 impl Default for EngineConfig {
@@ -64,19 +78,22 @@ impl Default for EngineConfig {
             signal: mean_reversion::Config::default(),
             risk: RiskConfig::default(),
             exit: ExitConfig::default(),
+            symbol_overrides: HashMap::new(),
         }
     }
 }
 
 /// The core engine. Maintains all state, processes bars, emits order intents.
 pub struct Engine {
-    strategy: Box<dyn Strategy>,
+    default_strategy: Box<dyn Strategy>,
+    symbol_strategies: HashMap<String, Box<dyn Strategy>>,
+    default_exit_config: ExitConfig,
+    symbol_exit_configs: HashMap<String, ExitConfig>,
     features: HashMap<String, FeatureState>,
     last_features: HashMap<String, FeatureValues>,
     portfolio: Portfolio,
     risk_state: RiskState,
     risk_config: RiskConfig,
-    exit_config: ExitConfig,
     open_positions: HashMap<String, OpenPosition>,
     bar_counter: usize,
 }
@@ -84,37 +101,59 @@ pub struct Engine {
 impl Engine {
     /// Create engine with default mean-reversion strategy.
     pub fn new(config: EngineConfig) -> Self {
-        let strategy = mean_reversion::MeanReversion::new(config.signal);
+        let default_strategy = mean_reversion::MeanReversion::new(config.signal.clone());
+
+        // Build per-symbol strategies and exit configs from overrides
+        let mut symbol_strategies: HashMap<String, Box<dyn Strategy>> = HashMap::new();
+        let mut symbol_exit_configs: HashMap<String, ExitConfig> = HashMap::new();
+
+        for (symbol, ovr) in &config.symbol_overrides {
+            let sig = mean_reversion::Config {
+                buy_z_threshold: ovr.buy_z_threshold.unwrap_or(config.signal.buy_z_threshold),
+                sell_z_threshold: ovr.sell_z_threshold.unwrap_or(config.signal.sell_z_threshold),
+                min_relative_volume: ovr.min_relative_volume.unwrap_or(config.signal.min_relative_volume),
+                trend_filter: ovr.trend_filter.unwrap_or(config.signal.trend_filter),
+                ..config.signal.clone()
+            };
+            symbol_strategies.insert(symbol.clone(), Box::new(mean_reversion::MeanReversion::new(sig)));
+
+            let exit = ExitConfig {
+                stop_loss_pct: ovr.stop_loss_pct.unwrap_or(config.exit.stop_loss_pct),
+                stop_loss_atr_mult: ovr.stop_loss_atr_mult.unwrap_or(config.exit.stop_loss_atr_mult),
+                max_hold_bars: ovr.max_hold_bars.unwrap_or(config.exit.max_hold_bars),
+                take_profit_pct: ovr.take_profit_pct.unwrap_or(config.exit.take_profit_pct),
+            };
+            symbol_exit_configs.insert(symbol.clone(), exit);
+        }
+
         Self {
-            strategy: Box::new(strategy),
+            default_strategy: Box::new(default_strategy),
+            symbol_strategies,
+            default_exit_config: config.exit,
+            symbol_exit_configs,
             features: HashMap::new(),
             last_features: HashMap::new(),
             portfolio: Portfolio::new(),
             risk_state: RiskState::new(),
             risk_config: config.risk,
-            exit_config: config.exit,
             open_positions: HashMap::new(),
             bar_counter: 0,
         }
     }
 
-    /// Create engine with a custom strategy.
-    pub fn with_strategy(
-        strategy: Box<dyn Strategy>,
-        risk_config: RiskConfig,
-        exit_config: ExitConfig,
-    ) -> Self {
-        Self {
-            strategy,
-            features: HashMap::new(),
-            last_features: HashMap::new(),
-            portfolio: Portfolio::new(),
-            risk_state: RiskState::new(),
-            risk_config,
-            exit_config,
-            open_positions: HashMap::new(),
-            bar_counter: 0,
-        }
+    /// Get the strategy for a symbol (per-symbol override or default).
+    fn strategy_for(&self, symbol: &str) -> &dyn Strategy {
+        self.symbol_strategies
+            .get(symbol)
+            .map(|s| s.as_ref())
+            .unwrap_or(self.default_strategy.as_ref())
+    }
+
+    /// Get the exit config for a symbol (per-symbol override or default).
+    fn exit_config_for(&self, symbol: &str) -> &ExitConfig {
+        self.symbol_exit_configs
+            .get(symbol)
+            .unwrap_or(&self.default_exit_config)
     }
 
     /// Process a new bar. Returns order intents (may be empty).
@@ -130,16 +169,18 @@ impl Engine {
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
         self.last_features.insert(bar.symbol.clone(), features.clone());
 
-        // 2. Check exit rules on open positions
+        // 2. Check exit rules on open positions (per-symbol exit config)
+        let exit_config = self.exit_config_for(&bar.symbol);
         if let Some(pos) = self.open_positions.get(&bar.symbol) {
-            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, &self.exit_config) {
+            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config) {
                 return vec![exit_intent];
             }
         }
 
-        // 3. Score via strategy (only if no exit and no position)
+        // 3. Score via strategy (per-symbol strategy, only if no exit and no position)
         let has_position = self.open_positions.contains_key(&bar.symbol);
-        let signal = match self.strategy.score(&features, has_position) {
+        let strategy = self.strategy_for(&bar.symbol);
+        let signal = match strategy.score(&features, has_position) {
             Some(s) => s,
             None => return vec![],
         };
@@ -182,9 +223,10 @@ impl Engine {
         let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
         self.last_features.insert(bar.symbol.clone(), features.clone());
 
-        // 2. Check exit rules on open positions
+        // 2. Check exit rules on open positions (per-symbol exit config)
+        let exit_config = self.exit_config_for(&bar.symbol);
         if let Some(pos) = self.open_positions.get(&bar.symbol) {
-            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, &self.exit_config) {
+            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config) {
                 return BarOutcome {
                     features,
                     signal_fired: true,
@@ -199,9 +241,10 @@ impl Engine {
             }
         }
 
-        // 3. Score via strategy
+        // 3. Score via strategy (per-symbol)
         let has_position = self.open_positions.contains_key(&bar.symbol);
-        let signal = match self.strategy.score(&features, has_position) {
+        let strategy = self.strategy_for(&bar.symbol);
+        let signal = match strategy.score(&features, has_position) {
             Some(s) => s,
             None => {
                 return BarOutcome {
@@ -328,6 +371,7 @@ mod tests {
     fn no_exit_config() -> ExitConfig {
         ExitConfig {
             stop_loss_pct: 0.0,
+            stop_loss_atr_mult: 0.0,
             max_hold_bars: 0,
             take_profit_pct: 0.0,
         }
@@ -336,7 +380,7 @@ mod tests {
     #[test]
     fn warmup_produces_no_signals() {
         let mut engine = Engine::new(EngineConfig::default());
-        for i in 0..19 {
+        for i in 0..49 {
             let bar = steady_bar("AAPL", 100.0 + (i as f64 * 0.01), 1000.0);
             assert!(engine.on_bar(&bar).is_empty(), "no signal during warmup, bar {i}");
         }
@@ -347,11 +391,12 @@ mod tests {
         let config = EngineConfig {
             risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
             exit: no_exit_config(),
+            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
             ..Default::default()
         };
         let mut engine = Engine::new(config);
 
-        for _ in 0..25 {
+        for _ in 0..55 {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
         }
 
@@ -377,7 +422,7 @@ mod tests {
         engine.on_fill("AAPL", Side::Sell, 10.0, 85.0);
         assert!(engine.risk_state().killed);
 
-        for _ in 0..25 {
+        for _ in 0..55 {
             engine.on_bar(&steady_bar("TSLA", 100.0, 1000.0));
         }
         let crash = Bar {
@@ -393,15 +438,17 @@ mod tests {
             risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
             exit: ExitConfig {
                 stop_loss_pct: 0.02, // 2% stop
+                stop_loss_atr_mult: 0.0,
                 max_hold_bars: 0,
                 take_profit_pct: 0.0,
             },
+            signal: mean_reversion::Config { trend_filter: false, ..Default::default() },
             ..Default::default()
         };
         let mut engine = Engine::new(config);
 
         // Warm up and trigger buy
-        for _ in 0..25 {
+        for _ in 0..55 {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
         }
         let crash = Bar {
@@ -429,6 +476,7 @@ mod tests {
             risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
             exit: ExitConfig {
                 stop_loss_pct: 0.0,
+                stop_loss_atr_mult: 0.0,
                 max_hold_bars: 5,
                 take_profit_pct: 0.0,
             },
@@ -454,6 +502,7 @@ mod tests {
             risk: RiskConfig { min_reward_cost_ratio: 0.0, ..Default::default() },
             exit: ExitConfig {
                 stop_loss_pct: 0.0,
+                stop_loss_atr_mult: 0.0,
                 max_hold_bars: 0,
                 take_profit_pct: 0.03, // 3%
             },
@@ -475,7 +524,7 @@ mod tests {
 
     #[test]
     fn deterministic_replay() {
-        let bars: Vec<Bar> = (0..30)
+        let bars: Vec<Bar> = (0..60)
             .map(|i| Bar {
                 symbol: "TEST".into(),
                 timestamp: i * 60000,
