@@ -6,3 +6,11 @@ engine/target/
 *.so
 *.dylib
 *.whl
+
+# Benchmark data cache
+data/bar_cache/*.json
+
+# SQLite databases
+data/journal/*.db
+data/journal/*.db-wal
+data/journal/*.db-shm
