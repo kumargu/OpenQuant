@@ -48,6 +48,11 @@ impl DataRuntime {
         }
     }
 
+    /// Access the underlying Tokio runtime (for installing metrics, etc.).
+    pub fn runtime(&self) -> &tokio::runtime::Runtime {
+        &self.runtime
+    }
+
     /// Get a clone of the journal handle for sending records.
     pub fn journal(&self) -> JournalHandle {
         self.handle.as_ref().expect("runtime not started").clone()

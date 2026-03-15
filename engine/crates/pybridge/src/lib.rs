@@ -13,6 +13,12 @@ use std::collections::HashMap;
 use openquant_journal::DataRuntime;
 use openquant_journal::writer::{BarRecord, FillRecord};
 
+/// Install the JSONL metrics recorder if not already installed.
+/// Requires a Tokio runtime (provided by the journal's DataRuntime).
+fn try_install_metrics(metrics_dir: &str) {
+    let _ = openquant_metrics::install(metrics_dir, std::time::Duration::from_secs(10));
+}
+
 #[pyclass]
 struct Engine {
     inner: CoreEngine,
@@ -37,6 +43,8 @@ impl Engine {
         max_bar_age_seconds = 0,
         symbol_overrides = None,
         journal_path = None,
+        metrics_enabled = false,
+        metrics_dir = "data/metrics",
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -53,6 +61,8 @@ impl Engine {
         max_bar_age_seconds: i64,
         symbol_overrides: Option<&Bound<'_, PyDict>>,
         journal_path: Option<String>,
+        metrics_enabled: bool,
+        metrics_dir: &str,
     ) -> PyResult<Self> {
         // Parse per-symbol overrides from Python dict
         let overrides = match symbol_overrides {
@@ -123,7 +133,7 @@ impl Engine {
             },
             symbol_overrides: overrides,
             max_bar_age_ms: max_bar_age_seconds * 1000,
-            metrics_enabled: false,
+            metrics_enabled,
         };
 
         // Get engine version from git
@@ -147,6 +157,15 @@ impl Engine {
             }
             None => None,
         };
+
+        // Install metrics recorder if enabled.
+        // The recorder's flush task needs a Tokio runtime — the journal's
+        // DataRuntime provides one. Without a journal, metrics still work
+        // (handles are noop without a recorder), but won't persist to disk.
+        if metrics_enabled && let Some(ref rt) = journal {
+            let _guard = rt.runtime().enter();
+            try_install_metrics(metrics_dir);
+        }
 
         Ok(Self {
             inner: CoreEngine::new(config),
@@ -332,9 +351,10 @@ impl Engine {
         Ok(dict)
     }
 
-    /// Gracefully shut down the journal (flushes all pending writes).
+    /// Gracefully shut down the journal and metrics (flushes all pending writes).
     fn shutdown_journal(&mut self) {
         if let Some(rt) = self.journal.take() {
+            rt.runtime().block_on(openquant_metrics::shutdown());
             rt.shutdown();
         }
     }
@@ -344,8 +364,12 @@ impl Engine {
     /// Reads the file, parses all sections, and builds the engine.
     /// Optional `journal_path` enables journaling (not in TOML — runtime concern).
     #[staticmethod]
-    #[pyo3(signature = (config_path, journal_path = None))]
-    fn from_toml(config_path: &str, journal_path: Option<String>) -> PyResult<Self> {
+    #[pyo3(signature = (config_path, journal_path = None, metrics_dir = "data/metrics"))]
+    fn from_toml(
+        config_path: &str,
+        journal_path: Option<String>,
+        metrics_dir: &str,
+    ) -> PyResult<Self> {
         let cfg_file = openquant_core::config::ConfigFile::load(std::path::Path::new(config_path))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
@@ -353,6 +377,7 @@ impl Engine {
             .unwrap_or("dev")
             .to_string();
 
+        let wants_metrics = cfg_file.metrics_enabled();
         let config = cfg_file.into_engine_config();
 
         let journal = match journal_path {
@@ -371,6 +396,11 @@ impl Engine {
             None => None,
         };
 
+        if wants_metrics && let Some(ref rt) = journal {
+            let _guard = rt.runtime().enter();
+            try_install_metrics(metrics_dir);
+        }
+
         Ok(Self {
             inner: CoreEngine::new(config),
             journal,
@@ -382,6 +412,7 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         if let Some(rt) = self.journal.take() {
+            rt.runtime().block_on(openquant_metrics::shutdown());
             rt.shutdown();
         }
     }

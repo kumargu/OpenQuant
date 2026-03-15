@@ -210,6 +210,10 @@ def main():
     parser.add_argument("--max-retries", type=int, default=10, help="Max consecutive errors before exit")
     parser.add_argument("--max-bar-age", type=int, default=300,
                         help="Max bar age in seconds before skipping signals (0=disabled, default=300)")
+    parser.add_argument("--no-metrics", action="store_true",
+                        help="Disable JSONL metrics recording")
+    parser.add_argument("--metrics-dir", default="data/metrics",
+                        help="Directory for metrics JSONL files")
     args = parser.parse_args()
 
     engine = Engine(
@@ -218,6 +222,8 @@ def main():
         trend_filter=not args.no_trend_filter,
         journal_path=args.journal,
         max_bar_age_seconds=args.max_bar_age,
+        metrics_enabled=not args.no_metrics,
+        metrics_dir=args.metrics_dir,
     )
 
     run(args.symbol, args.interval, engine, max_retries=args.max_retries)
