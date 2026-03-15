@@ -88,15 +88,16 @@ def _get_git_sha() -> str:
 # Bar Data Fetching + Caching
 # ---------------------------------------------------------------------------
 
-def _cache_path(symbol: str, days: int, timeframe: str) -> Path:
-    """Path for cached bar data."""
+def _cache_path(symbol: str, days: int, timeframe: str, feed: str = "auto") -> Path:
+    """Path for cached bar data. Includes feed to avoid mixing IEX/SIP data."""
     safe_symbol = symbol.replace("/", "_")
-    return CACHE_DIR / f"{safe_symbol}_{days}d_{timeframe}.json"
+    feed_suffix = f"_{feed}" if feed != "auto" else ""
+    return CACHE_DIR / f"{safe_symbol}_{days}d_{timeframe}{feed_suffix}.json"
 
 
-def fetch_bars(symbol: str, days: int, timeframe: str = "1Min") -> list:
+def fetch_bars(symbol: str, days: int, timeframe: str = "1Min", feed: str = "auto") -> list:
     """Fetch bars, using cache if available and fresh (< 24h old)."""
-    cache_file = _cache_path(symbol, days, timeframe)
+    cache_file = _cache_path(symbol, days, timeframe, feed)
 
     # Use cache if exists and < 24 hours old
     if cache_file.exists():
@@ -109,7 +110,7 @@ def fetch_bars(symbol: str, days: int, timeframe: str = "1Min") -> list:
 
     # Fetch from Alpaca
     from paper_trading.backtest_runner import fetch_bars as alpaca_fetch
-    bars = alpaca_fetch(symbol, days, timeframe)
+    bars = alpaca_fetch(symbol, days, timeframe, feed=feed)
 
     if bars:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)

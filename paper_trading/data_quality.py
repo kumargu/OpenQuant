@@ -22,7 +22,12 @@ from paper_trading.backtest_runner import fetch_bars
 
 
 def expected_bar_count(days: int, timeframe: str, is_crypto: bool) -> int:
-    """Estimate expected bar count for a symbol over N days."""
+    """Estimate expected bar count for a symbol over N days.
+
+    For stocks, IEX feed includes extended-hours bars (~10h/day: pre-market
+    4:00-9:30 + regular 9:30-16:00 + post-market 16:00-18:00 ET), so we
+    estimate ~10 hours of bars per trading day.
+    """
     minutes_per_bar = {
         "1Min": 1,
         "5Min": 5,
@@ -36,10 +41,11 @@ def expected_bar_count(days: int, timeframe: str, is_crypto: bool) -> int:
         # Crypto trades 24/7
         total_minutes = days * 24 * 60
     else:
-        # US stocks: ~6.5 hours/day, ~252 trading days/year
-        # Use max(1, ...) to avoid zero for days=1
+        # US stocks: ~252 trading days/year, ~8h/day with extended hours (IEX)
+        # IEX extended hours: ~8:00 ET pre-market to ~18:00 ET post-market, but
+        # actual bar coverage is typically ~8h depending on liquidity.
         trading_days = max(1, int(days * 252 / 365))
-        total_minutes = trading_days * 390  # 6.5 hours
+        total_minutes = trading_days * 480  # 8 hours typical IEX coverage
 
     return max(1, total_minutes // mpb)
 
@@ -50,11 +56,11 @@ def _timeframe_minutes(timeframe: str) -> int:
     return tf_map.get(timeframe, 1)
 
 
-def audit_bars(symbol: str, days: int, timeframe: str = "1Min") -> dict:
+def audit_bars(symbol: str, days: int, timeframe: str = "1Min", feed: str = "auto") -> dict:
     """Fetch bars and run full quality audit."""
     from openquant import validate_bars
 
-    bars = fetch_bars(symbol, days, timeframe)
+    bars = fetch_bars(symbol, days, timeframe, feed=feed)
     if not bars:
         return {"symbol": symbol, "error": "No data returned"}
 
@@ -130,10 +136,28 @@ def print_audit(result: dict):
     print(f"| Volume coverage | {status} |")
 
     gaps = result["gap_count"]
-    if gaps > 0:
-        print(f"| Gaps (>5min) | {gaps} gaps detected |")
+    is_crypto = "/" in result.get("symbol", "")
+    gap_list = result.get("gaps", [])
+
+    if not is_crypto and gap_list:
+        # For stocks, separate overnight gaps (~14h = 840min) from intraday gaps
+        intraday_gaps = [(i, g) for i, g in gap_list if g < 780 * 60000]  # < 13h
+        overnight_gaps = [(i, g) for i, g in gap_list if g >= 780 * 60000]
+
+        if intraday_gaps:
+            print(f"| Intraday gaps | {len(intraday_gaps)} gaps |")
+            largest = sorted(intraday_gaps, key=lambda g: g[1], reverse=True)[:5]
+            for idx, gap_ms in largest:
+                gap_min = gap_ms // 60000
+                print(f"|   gap at bar {idx} | {gap_min} minutes |")
+        else:
+            print(f"| Intraday gaps | PASS (none) |")
+
+        if overnight_gaps:
+            print(f"| Overnight closures | {len(overnight_gaps)} (expected) |")
+    elif gaps > 0:
+        print(f"| Gaps (>{_timeframe_minutes(result.get('timeframe', '1Min')) * 3}min) | {gaps} gaps detected |")
         # Show top 5 largest
-        gap_list = result.get("gaps", [])
         if gap_list:
             largest = sorted(gap_list, key=lambda g: g[1], reverse=True)[:5]
             for idx, gap_ms in largest:
@@ -147,6 +171,16 @@ def print_audit(result: dict):
         print(f"| Completeness | WARNING ({comp:.0%}) |")
     else:
         print(f"| Completeness | PASS ({comp:.0%}) |")
+
+    # Granularity recommendation
+    tf = result.get("timeframe", "1Min")
+    if zvp > 0.5 and tf == "1Min":
+        print(f"\n**Granularity note:** At 1Min, {zvp:.0%} of bars have zero volume. "
+              f"Recommend 5Min+ for volume-dependent signals (relative_volume, VWAP). "
+              f"1Min is fine for price-only signals (z-score, SMA trend).")
+    elif zvp > 0.3 and tf == "1Min":
+        print(f"\n**Granularity note:** {zvp:.0%} zero-volume at 1Min. "
+              f"Consider 5Min for more reliable volume data.")
 
     # Overall verdict
     critical = result["has_critical_issues"]
@@ -169,6 +203,8 @@ def main():
     parser.add_argument("--days", "-d", type=int, default=7)
     parser.add_argument("--timeframe", "-t", default="1Min")
     parser.add_argument("--all", action="store_true", help="Audit all benchmark symbols")
+    parser.add_argument("--feed", "-f", default="auto", choices=["auto", "iex", "sip"],
+                        help="Stock data feed: iex (free), sip (paid), auto (SIP+IEX fallback)")
     args = parser.parse_args()
 
     if args.all:
@@ -179,7 +215,7 @@ def main():
             print(f"Category: {cat.upper()}")
             print(f"{'='*50}")
             for sym in symbols:
-                result = audit_bars(sym, args.days, args.timeframe)
+                result = audit_bars(sym, args.days, args.timeframe, feed=args.feed)
                 print_audit(result)
                 results.append(result)
 
@@ -199,7 +235,7 @@ def main():
                   f"{r['gap_count']} | "
                   f"{'YES' if r['has_critical_issues'] else 'no'} |")
     else:
-        result = audit_bars(args.symbol, args.days, args.timeframe)
+        result = audit_bars(args.symbol, args.days, args.timeframe, feed=args.feed)
         print_audit(result)
 
 
