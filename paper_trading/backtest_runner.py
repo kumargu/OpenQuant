@@ -144,9 +144,6 @@ def print_result(result: dict):
 def main():
     from paper_trading.config import engine_kwargs, merge_cli_overrides
 
-    # Load TOML defaults first
-    toml_kw = engine_kwargs()
-
     parser = argparse.ArgumentParser(description="OpenQuant Backtester")
     parser.add_argument("--symbol", "-s", default="BTC/USD")
     parser.add_argument("--days", "-d", type=int, default=7)
@@ -164,9 +161,8 @@ def main():
     parser.add_argument("--no-trend-filter", action="store_true", help="Disable SMA-50 trend filter")
     args = parser.parse_args()
 
-    # Reload TOML if custom path specified
-    if args.config:
-        toml_kw = engine_kwargs(args.config)
+    # Load TOML after parsing so --config can rescue a broken default file
+    toml_kw = engine_kwargs(args.config)
 
     # CLI flags override TOML values
     kw = merge_cli_overrides(toml_kw, args)

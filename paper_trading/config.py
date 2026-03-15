@@ -8,7 +8,6 @@ CLI flags take precedence over TOML values.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -48,19 +47,20 @@ def engine_kwargs(path: str | Path | None = None) -> dict[str, Any]:
 
     kw: dict[str, Any] = {}
 
-    # [signal]
+    # [signal] — only keys accepted by the Rust Engine / backtest() PyO3 API
     sig = raw.get("signal", {})
     for key in ("buy_z_threshold", "sell_z_threshold", "min_relative_volume",
-                "min_score", "trend_filter"):
+                "trend_filter"):
         if key in sig:
             kw[key] = sig[key]
+    # min_score is Rust-internal (not exposed via PyO3 yet)
 
-    # [risk]
+    # [risk] — only keys accepted by the Rust Engine / backtest() PyO3 API
     risk = raw.get("risk", {})
-    for key in ("max_position_notional", "max_daily_loss",
-                "min_reward_cost_ratio", "estimated_cost_bps"):
+    for key in ("max_position_notional", "max_daily_loss"):
         if key in risk:
             kw[key] = risk[key]
+    # min_reward_cost_ratio and estimated_cost_bps are Rust-internal
 
     # [exit]
     ex = raw.get("exit", {})

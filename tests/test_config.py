@@ -24,6 +24,10 @@ def test_load_default_toml():
     assert kw["max_hold_bars"] == 100
     assert kw["trend_filter"] is True
     assert kw["metrics_enabled"] is True
+    # Rust-internal fields should NOT appear (not exposed via PyO3)
+    assert "min_score" not in kw
+    assert "min_reward_cost_ratio" not in kw
+    assert "estimated_cost_bps" not in kw
 
 
 def test_load_custom_toml():
