@@ -23,7 +23,8 @@ use crate::engine::OrderIntent;
 use crate::signals::{Side, SignalReason};
 
 /// Exit rule configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ExitConfig {
     /// Close position if price drops this % below entry. 0.0 = disabled.
     /// Example: 0.02 = 2% stop loss.
