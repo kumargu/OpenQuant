@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use metrics::{counter, gauge, histogram};
+use openquant_metrics::SymbolMetrics;
 
 // We can only install a global recorder once per process, so we use
 // criterion's benchmark groups carefully.
@@ -141,6 +142,58 @@ fn bench_simulated_on_bar_metrics(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Cached-handle benchmarks: pre-register and reuse handles
+// ---------------------------------------------------------------------------
+
+fn bench_cached_counter(c: &mut Criterion) {
+    ensure_recorder();
+
+    // Cache the handle once — subsequent calls skip registry lookup
+    let ctr = counter!("bench.cached.counter", "symbol" => "BTCUSD");
+
+    c.bench_function("cached_counter_increment", |b| {
+        b.iter(|| {
+            ctr.increment(1);
+        })
+    });
+}
+
+fn bench_cached_histogram(c: &mut Criterion) {
+    ensure_recorder();
+
+    let hist = histogram!("bench.cached.histogram", "symbol" => "BTCUSD");
+
+    c.bench_function("cached_histogram_record", |b| {
+        b.iter(|| {
+            hist.record(black_box(63.0));
+        })
+    });
+}
+
+fn bench_cached_on_bar_metrics(c: &mut Criterion) {
+    ensure_recorder();
+
+    // Pre-register all handles — what on_bar() should do
+    let bars_processed = counter!("engine.bars_processed", "symbol" => "BTCUSD");
+    let duration_hist = histogram!("engine.on_bar.duration_ns", "symbol" => "BTCUSD");
+    let z_score_hist = histogram!("features.z_score", "symbol" => "BTCUSD");
+    let rel_vol_hist = histogram!("features.relative_volume", "symbol" => "BTCUSD");
+    let signal_ctr = counter!("signal.fired", "symbol" => "BTCUSD", "side" => "buy");
+    let risk_ctr = counter!("risk.passed", "symbol" => "BTCUSD");
+
+    c.bench_function("cached_on_bar_all_metrics", |b| {
+        b.iter(|| {
+            bars_processed.increment(1);
+            duration_hist.record(black_box(63.0));
+            z_score_hist.record(black_box(-1.2));
+            rel_vol_hist.record(black_box(1.4));
+            signal_ctr.increment(1);
+            risk_ctr.increment(1);
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
 // High-throughput stress test: 10k metric operations
 // ---------------------------------------------------------------------------
 
@@ -156,6 +209,37 @@ fn bench_burst_10k_metrics(c: &mut Criterion) {
     });
 }
 
+fn bench_symbol_metrics_on_bar(c: &mut Criterion) {
+    ensure_recorder();
+
+    let sm = SymbolMetrics::new("BTCUSD");
+
+    c.bench_function("symbol_metrics_on_bar", |b| {
+        b.iter(|| {
+            sm.bars_processed.increment(1);
+            sm.on_bar_duration_ns.record(black_box(63.0));
+            sm.z_score.record(black_box(-1.2));
+            sm.relative_volume.record(black_box(1.4));
+            sm.signal_buy.increment(1);
+            sm.risk_passed.increment(1);
+        })
+    });
+}
+
+fn bench_burst_10k_cached(c: &mut Criterion) {
+    ensure_recorder();
+
+    let ctr = counter!("bench.burst.cached", "symbol" => "BTCUSD");
+
+    c.bench_function("burst_10k_cached_increments", |b| {
+        b.iter(|| {
+            for _ in 0..10_000 {
+                ctr.increment(1);
+            }
+        })
+    });
+}
+
 // Run noop group first (before recorder is installed), then active group
 criterion_group!(noop, bench_noop_counter, bench_noop_histogram,);
 criterion_group!(
@@ -164,6 +248,11 @@ criterion_group!(
     bench_active_gauge,
     bench_active_histogram,
     bench_simulated_on_bar_metrics,
+    bench_cached_counter,
+    bench_cached_histogram,
+    bench_cached_on_bar_metrics,
+    bench_symbol_metrics_on_bar,
     bench_burst_10k_metrics,
+    bench_burst_10k_cached,
 );
 criterion_main!(noop, active);
