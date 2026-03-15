@@ -849,6 +849,69 @@ This structure is only a suggestion, but the separation of concerns should remai
 
 ---
 
+## Data-driven development (PR model)
+
+### 31. Every change proves itself with data
+
+No strategy, signal, or risk change merges without a backtest comparison against baseline. PRs must include a before/after metrics table showing impact.
+
+The baseline is the backtest result from `main` branch across the diversified symbol universe (tech, oil/gas, energy, metals, pharma, crypto).
+
+The development cycle:
+1. Cache historical bars locally (don't re-fetch every run)
+2. Run backtest with `main` branch config → baseline
+3. Make your change on a feature branch
+4. Run backtest with new code → candidate
+5. Compare: did metrics improve or stay neutral?
+6. PR includes the comparison table, per-category and aggregated
+
+---
+
+### 32. One hypothesis per PR
+
+Each PR is a testable hypothesis:
+- "raising min_relative_volume to 1.3 should reduce false entries"
+- "adding RSI confirmation should improve win rate in low-vol regimes"
+- "tighter stop loss at 1.5% should reduce avg loss without cutting winners"
+
+The PR description states the hypothesis. The backtest data confirms or rejects it. No bundling of multiple signal changes in one PR.
+
+---
+
+### 33. Metrics hierarchy
+
+What must improve (or not regress):
+- **Primary**: expectancy, profit factor, Sharpe
+- **Secondary**: win rate, max drawdown
+- **Neutral**: trade count (more trades isn't inherently better or worse)
+
+A PR that improves win rate but tanks profit factor is a regression. Evaluate holistically.
+
+---
+
+### 34. SQLite journal is the audit trail
+
+Every bar processed gets logged with full feature state and decision outcome:
+- Features snapshot (z-score, volatility, volume, etc.)
+- Signal output (fired or not, score, reason)
+- Risk gate result (passed or blocked, rejection reason)
+- Fill result (price, slippage)
+- Engine version (git SHA) tagged on every record
+
+The journal enables post-hoc analysis: "why did we lose on this trade?", "what signals did we miss?", "which regime are we weakest in?"
+
+---
+
+### 35. Dual-runtime architecture
+
+Two async runtimes, separated by concern:
+- **Trading runtime** (hot path): bar processing, feature computation, signal evaluation, risk gates — synchronous, zero-alloc, deterministic
+- **Data runtime** (Tokio): journal writes, benchmark runs, analytics queries, dashboard serving — async, non-blocking, can tolerate latency
+
+The trading hot path must never block on I/O. Journal writes happen on the data runtime via channel.
+
+---
+
 ## Operating instructions
 
 When applying this skill:
