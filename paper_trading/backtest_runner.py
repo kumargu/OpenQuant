@@ -15,8 +15,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def fetch_bars(symbol: str, days: int, timeframe: str = "1Min"):
-    """Fetch historical bars from Alpaca."""
+def fetch_bars(symbol: str, days: int, timeframe: str = "1Min", feed: str = "auto"):
+    """Fetch historical bars from Alpaca.
+
+    Args:
+        symbol: Ticker symbol (e.g. "BTC/USD", "AAPL")
+        days: Number of days of history to fetch
+        timeframe: Bar timeframe ("1Min", "5Min", "15Min", "1Hour", "1Day")
+        feed: Data feed for stocks — "iex" (free), "sip" (paid), or "auto" (try SIP, fall back to IEX)
+    """
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
     tf_map = {
@@ -48,18 +55,40 @@ def fetch_bars(symbol: str, days: int, timeframe: str = "1Min"):
     else:
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.enums import DataFeed
 
         client = StockHistoricalDataClient(
             os.environ["ALPACA_API_KEY"],
             os.environ["ALPACA_SECRET_KEY"],
         )
-        req = StockBarsRequest(
+
+        # Resolve feed: "auto" tries SIP first, falls back to IEX
+        feed_enum = None
+        if feed == "iex":
+            feed_enum = DataFeed.IEX
+        elif feed == "sip":
+            feed_enum = DataFeed.SIP
+
+        req_kwargs = dict(
             symbol_or_symbols=symbol,
             timeframe=tf,
             start=start,
             end=end,
         )
-        barset = client.get_stock_bars(req)
+        if feed_enum is not None:
+            req_kwargs["feed"] = feed_enum
+
+        try:
+            req = StockBarsRequest(**req_kwargs)
+            barset = client.get_stock_bars(req)
+        except Exception as e:
+            if feed == "auto" and "subscription" in str(e).lower():
+                print(f"  SIP feed unavailable, falling back to IEX for {symbol}")
+                req_kwargs["feed"] = DataFeed.IEX
+                req = StockBarsRequest(**req_kwargs)
+                barset = client.get_stock_bars(req)
+            else:
+                raise
 
     # Find the right key
     bar_key = symbol if symbol in barset.data else symbol.replace("/", "")
@@ -159,6 +188,8 @@ def main():
     parser.add_argument("--max-hold", type=int, default=None, help="Max bars to hold (0 = disabled)")
     parser.add_argument("--take-profit", type=float, default=None, help="Take profit pct (0 = disabled)")
     parser.add_argument("--no-trend-filter", action="store_true", help="Disable SMA-50 trend filter")
+    parser.add_argument("--feed", default="auto", choices=["auto", "iex", "sip"],
+                        help="Stock data feed: iex (free), sip (paid), auto (SIP with IEX fallback)")
     args = parser.parse_args()
 
     # Load TOML after parsing so --config can rescue a broken default file
@@ -167,7 +198,7 @@ def main():
     # CLI flags override TOML values
     kw = merge_cli_overrides(toml_kw, args)
 
-    bars = fetch_bars(args.symbol, args.days, args.timeframe)
+    bars = fetch_bars(args.symbol, args.days, args.timeframe, feed=args.feed)
     if not bars:
         return
 

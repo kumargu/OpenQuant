@@ -94,7 +94,7 @@ def _cache_path(symbol: str, days: int, timeframe: str) -> Path:
     return CACHE_DIR / f"{safe_symbol}_{days}d_{timeframe}.json"
 
 
-def fetch_bars(symbol: str, days: int, timeframe: str = "1Min") -> list:
+def fetch_bars(symbol: str, days: int, timeframe: str = "1Min", feed: str = "auto") -> list:
     """Fetch bars, using cache if available and fresh (< 24h old)."""
     cache_file = _cache_path(symbol, days, timeframe)
 
@@ -109,7 +109,7 @@ def fetch_bars(symbol: str, days: int, timeframe: str = "1Min") -> list:
 
     # Fetch from Alpaca
     from paper_trading.backtest_runner import fetch_bars as alpaca_fetch
-    bars = alpaca_fetch(symbol, days, timeframe)
+    bars = alpaca_fetch(symbol, days, timeframe, feed=feed)
 
     if bars:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
