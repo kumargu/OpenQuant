@@ -100,8 +100,7 @@ fn bench_active_histogram(c: &mut Criterion) {
 
     c.bench_function("active_histogram_record", |b| {
         b.iter(|| {
-            histogram!("bench.active.histogram", "symbol" => "BTCUSD")
-                .record(black_box(63.0));
+            histogram!("bench.active.histogram", "symbol" => "BTCUSD").record(black_box(63.0));
         })
     });
 }
@@ -122,15 +121,13 @@ fn bench_simulated_on_bar_metrics(c: &mut Criterion) {
             counter!("engine.bars_processed", "symbol" => "BTCUSD").increment(1);
 
             // Timer: on_bar duration (recorded as histogram)
-            histogram!("engine.on_bar.duration_ns", "symbol" => "BTCUSD")
-                .record(black_box(63.0));
+            histogram!("engine.on_bar.duration_ns", "symbol" => "BTCUSD").record(black_box(63.0));
 
             // Feature distribution: z-score
             histogram!("features.z_score", "symbol" => "BTCUSD").record(black_box(-1.2));
 
             // Feature distribution: relative volume
-            histogram!("features.relative_volume", "symbol" => "BTCUSD")
-                .record(black_box(1.4));
+            histogram!("features.relative_volume", "symbol" => "BTCUSD").record(black_box(1.4));
 
             // Signal counter (fires ~1% of bars, but we measure the cost)
             counter!("signal.fired", "symbol" => "BTCUSD", "side" => "buy").increment(1);
