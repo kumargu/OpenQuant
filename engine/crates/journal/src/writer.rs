@@ -5,6 +5,8 @@
 //! and flushes them to SQLite.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use rusqlite::Connection;
 use tokio::sync::mpsc;
@@ -59,22 +61,38 @@ pub enum JournalMessage {
 #[derive(Clone)]
 pub struct JournalHandle {
     tx: mpsc::Sender<JournalMessage>,
+    dropped: Arc<AtomicU64>,
 }
 
 impl JournalHandle {
     /// Send a bar record to the journal (non-blocking).
+    /// Increments drop counter and warns if channel is full.
     pub fn log_bar(&self, record: BarRecord) {
-        let _ = self.tx.try_send(JournalMessage::Bar(record));
+        if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(JournalMessage::Bar(record)) {
+            let count = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if count % 100 == 1 {
+                eprintln!("[journal] WARNING: channel full, dropped {count} records total");
+            }
+        }
     }
 
     /// Send a fill record to the journal (non-blocking).
+    /// Fills are critical — warns on every drop.
     pub fn log_fill(&self, record: FillRecord) {
-        let _ = self.tx.try_send(JournalMessage::Fill(record));
+        if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(JournalMessage::Fill(record)) {
+            let count = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            eprintln!("[journal] WARNING: fill record dropped! {count} total drops");
+        }
     }
 
     /// Request a flush of pending writes.
     pub fn flush(&self) {
         let _ = self.tx.try_send(JournalMessage::Flush);
+    }
+
+    /// Number of records dropped due to channel backpressure.
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     /// Shut down the journal writer.
@@ -83,19 +101,25 @@ impl JournalHandle {
     }
 }
 
-/// Start the journal writer task. Returns a handle for sending records.
+/// Start the journal writer task. Returns a handle for sending records
+/// and a `JoinHandle` to await writer completion during shutdown.
 ///
 /// The writer batches incoming records and writes them in transactions
 /// for efficiency. It runs on the Tokio data runtime.
-pub fn start(db_path: &Path, buffer_size: usize) -> JournalHandle {
+pub fn start(db_path: &Path, buffer_size: usize) -> (JournalHandle, tokio::task::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel(buffer_size);
     let db_path = db_path.to_path_buf();
 
-    tokio::spawn(async move {
+    let join_handle = tokio::spawn(async move {
         writer_loop(rx, &db_path).await;
     });
 
-    JournalHandle { tx }
+    let handle = JournalHandle {
+        tx,
+        dropped: Arc::new(AtomicU64::new(0)),
+    };
+
+    (handle, join_handle)
 }
 
 async fn writer_loop(mut rx: mpsc::Receiver<JournalMessage>, db_path: &Path) {
@@ -204,9 +228,9 @@ fn write_bar_record(conn: &Connection, rec: &BarRecord) {
 
 fn write_fill_record(conn: &Connection, rec: &FillRecord) {
     conn.execute(
-        "INSERT INTO fills (symbol, side, qty, fill_price, slippage)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![rec.symbol, rec.side, rec.qty, rec.fill_price, rec.slippage],
+        "INSERT INTO fills (symbol, side, qty, fill_price, slippage, engine_version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![rec.symbol, rec.side, rec.qty, rec.fill_price, rec.slippage, rec.engine_version],
     )
     .expect("failed to insert fill");
 }
@@ -346,7 +370,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("test_journal.db");
         let _ = std::fs::remove_file(&tmp);
 
-        let handle = start(&tmp, 64);
+        let (handle, writer_task) = start(&tmp, 64);
 
         handle.log_bar(test_bar_record());
         handle.log_fill(FillRecord {
@@ -359,9 +383,8 @@ mod tests {
         });
 
         handle.shutdown().await;
-
-        // Give writer time to flush
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Wait for writer to finish flushing all queued records
+        let _ = writer_task.await;
 
         // Verify data was written
         let conn = Connection::open(&tmp).unwrap();

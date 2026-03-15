@@ -49,14 +49,15 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 
 CREATE TABLE IF NOT EXISTS fills (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    bar_id        INTEGER REFERENCES bars(id),
-    symbol        TEXT NOT NULL,
-    side          TEXT NOT NULL,
-    qty           REAL NOT NULL,
-    fill_price    REAL NOT NULL,
-    slippage      REAL NOT NULL DEFAULT 0.0,
-    entry_bar_id  INTEGER
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    bar_id          INTEGER REFERENCES bars(id),
+    symbol          TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    qty             REAL NOT NULL,
+    fill_price      REAL NOT NULL,
+    slippage        REAL NOT NULL DEFAULT 0.0,
+    entry_bar_id    INTEGER,
+    engine_version  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS trades (

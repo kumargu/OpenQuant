@@ -25,6 +25,7 @@ use crate::writer::{self, JournalHandle};
 pub struct DataRuntime {
     runtime: tokio::runtime::Runtime,
     handle: Option<JournalHandle>,
+    writer_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl DataRuntime {
@@ -37,11 +38,14 @@ impl DataRuntime {
             .build()
             .expect("failed to create data runtime");
 
-        let handle = runtime.block_on(async { writer::start(journal_path, channel_buffer) });
+        let (handle, writer_task) = runtime.block_on(async {
+            writer::start(journal_path, channel_buffer)
+        });
 
         Self {
             runtime,
             handle: Some(handle),
+            writer_task: Some(writer_task),
         }
     }
 
@@ -50,11 +54,16 @@ impl DataRuntime {
         self.handle.as_ref().expect("runtime not started").clone()
     }
 
-    /// Shut down the data runtime gracefully.
+    /// Shut down the data runtime gracefully, waiting for all writes to flush.
     pub fn shutdown(mut self) {
         if let Some(handle) = self.handle.take() {
+            let writer_task = self.writer_task.take();
             self.runtime.block_on(async {
                 handle.shutdown().await;
+                // Wait for writer to finish flushing all queued records
+                if let Some(task) = writer_task {
+                    let _ = task.await;
+                }
             });
         }
     }
