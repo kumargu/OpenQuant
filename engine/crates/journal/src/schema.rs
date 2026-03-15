@@ -151,7 +151,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
 
         // Simulate the old schema without sma_50, atr, trend_up
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE features (
                 bar_id          INTEGER NOT NULL,
                 return_1        REAL NOT NULL,
@@ -165,7 +166,9 @@ mod tests {
                 close_location  REAL NOT NULL,
                 warmed_up       INTEGER NOT NULL
             );
-        ").unwrap();
+        ",
+        )
+        .unwrap();
 
         // Migration should add the 3 missing columns
         migrate(&conn).unwrap();
@@ -177,6 +180,7 @@ mod tests {
              warmed_up, sma_50, atr, trend_up)
              VALUES (1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 99.5, 1.5, 1)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
     }
 }

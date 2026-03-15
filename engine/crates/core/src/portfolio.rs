@@ -28,6 +28,12 @@ pub struct Portfolio {
     positions: Vec<Position>,
 }
 
+impl Default for Portfolio {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Portfolio {
     pub fn new() -> Self {
         Self {
@@ -59,8 +65,7 @@ impl Portfolio {
                 match pos {
                     Some(p) => {
                         // Add to existing position
-                        let total_cost =
-                            p.avg_entry_price * p.qty + fill_price * qty;
+                        let total_cost = p.avg_entry_price * p.qty + fill_price * qty;
                         p.qty += qty;
                         p.avg_entry_price = total_cost / p.qty;
                         0.0 // no realized P&L on adding
@@ -80,8 +85,7 @@ impl Portfolio {
                 match pos {
                     Some(p) => {
                         let sell_qty = qty.min(p.qty);
-                        let realized_pnl =
-                            sell_qty * (fill_price - p.avg_entry_price);
+                        let realized_pnl = sell_qty * (fill_price - p.avg_entry_price);
                         p.qty -= sell_qty;
 
                         // Remove position if fully closed
@@ -148,7 +152,11 @@ mod tests {
     fn test_mark_to_market() {
         let mut pf = Portfolio::new();
         pf.on_fill("AAPL", Side::Buy, 10.0, 100.0);
-        let pos = pf.positions.iter_mut().find(|p| p.symbol == "AAPL").unwrap();
+        let pos = pf
+            .positions
+            .iter_mut()
+            .find(|p| p.symbol == "AAPL")
+            .unwrap();
         pos.mark_to_market(115.0);
         assert!((pos.unrealized_pnl - 150.0).abs() < 1e-10);
     }
