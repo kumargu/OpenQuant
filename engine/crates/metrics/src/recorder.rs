@@ -190,8 +190,20 @@ pub struct MetricsSnapshot {
 /// Starts a Tokio task that flushes metrics to `{dir}/metrics-YYYY-MM-DD.jsonl`
 /// every `flush_interval`.
 ///
-/// Returns `Err` if a recorder is already installed.
+/// Returns `Err` if:
+/// - A recorder is already installed
+/// - No Tokio runtime is available (must be called from an async context or with an active runtime)
+/// - `flush_interval` is zero
 pub fn install(dir: &str, flush_interval: Duration) -> Result<(), String> {
+    if flush_interval.is_zero() {
+        return Err("flush_interval must be non-zero".into());
+    }
+
+    // Verify a Tokio runtime is available before installing the global recorder.
+    // tokio::spawn panics without a runtime, which would leave the recorder half-initialized.
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|_| "no Tokio runtime available — install metrics from within a Tokio context")?;
+
     let recorder = Arc::new(JsonlRecorder::new());
     let recorder_for_flush = Arc::clone(&recorder);
 
@@ -199,11 +211,11 @@ pub fn install(dir: &str, flush_interval: Duration) -> Result<(), String> {
     metrics::set_global_recorder(RecorderWrapper(Arc::clone(&recorder)))
         .map_err(|e| format!("failed to install metrics recorder: {e}"))?;
 
-    // Start flush task
+    // Start flush task on the current runtime
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let metrics_dir = PathBuf::from(dir);
 
-    let join_handle = tokio::spawn(async move {
+    let join_handle = handle.spawn(async move {
         let mut sink = MetricsSink::new(metrics_dir);
         let mut interval = tokio::time::interval(flush_interval);
         let mut shutdown_rx = shutdown_rx;
