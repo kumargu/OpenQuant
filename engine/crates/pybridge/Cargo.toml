@@ -9,4 +9,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 openquant-core = { path = "../core" }
+openquant-journal = { path = "../journal" }
 pyo3 = { version = "0.24", features = ["extension-module"] }
