@@ -50,7 +50,7 @@ CACHE_DIR = Path(__file__).parent.parent / "data" / "bar_cache"
 DEFAULT_PARAMS = {
     "max_position_notional": 10_000.0,
     "max_daily_loss": 500.0,
-    "buy_z_threshold": -2.0,
+    "buy_z_threshold": -2.2,
     "sell_z_threshold": 2.0,
     "min_relative_volume": 1.2,
     "stop_loss_pct": 0.02,

@@ -33,7 +33,8 @@ use super::{Side, SignalOutput, SignalReason, Strategy};
 /// Configuration for mean-reversion strategy.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Z-score below this triggers a buy (negative value). Default: -2.0
+    /// Z-score below this triggers a buy (negative value). Default: -2.2
+    /// Tightened from -2.0 to reduce false entries in low-conviction dips.
     pub buy_z_threshold: f64,
     /// Z-score above this triggers a sell (positive value). Default: 2.0
     pub sell_z_threshold: f64,
@@ -46,7 +47,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            buy_z_threshold: -2.0,
+            buy_z_threshold: -2.2,
             sell_z_threshold: 2.0,
             min_relative_volume: 1.2,
             min_score: 0.5,
@@ -156,7 +157,7 @@ mod tests {
 
     #[test]
     fn buy_score_increases_with_stronger_z() {
-        let weak = strategy().score(&features(-2.5, 1.5), false).unwrap();
+        let weak = strategy().score(&features(-3.0, 1.5), false).unwrap();
         let strong = strategy().score(&features(-4.0, 1.5), false).unwrap();
         assert!(strong.score > weak.score);
     }
@@ -170,7 +171,7 @@ mod tests {
 
     #[test]
     fn buy_at_exact_threshold_does_not_fire() {
-        assert!(strategy().score(&features(-2.0, 1.5), false).is_none());
+        assert!(strategy().score(&features(-2.2, 1.5), false).is_none());
     }
 
     // --- Sell signal tests ---
