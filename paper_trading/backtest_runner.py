@@ -136,7 +136,7 @@ def main():
     parser.add_argument("--timeframe", "-t", default="1Min")
     parser.add_argument("--max-position", type=float, default=10_000.0)
     parser.add_argument("--max-daily-loss", type=float, default=500.0)
-    parser.add_argument("--buy-z", type=float, default=-2.0)
+    parser.add_argument("--buy-z", type=float, default=-2.2)
     parser.add_argument("--sell-z", type=float, default=2.0)
     parser.add_argument("--min-vol", type=float, default=1.2)
     parser.add_argument("--stop-loss", type=float, default=0.02, help="Stop loss pct (0.02 = 2%%)")
