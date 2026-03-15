@@ -37,10 +37,11 @@ def expected_bar_count(days: int, timeframe: str, is_crypto: bool) -> int:
         total_minutes = days * 24 * 60
     else:
         # US stocks: ~6.5 hours/day, ~252 trading days/year
-        trading_days = int(days * 252 / 365)
+        # Use max(1, ...) to avoid zero for days=1
+        trading_days = max(1, int(days * 252 / 365))
         total_minutes = trading_days * 390  # 6.5 hours
 
-    return total_minutes // mpb
+    return max(1, total_minutes // mpb)
 
 
 def _timeframe_minutes(timeframe: str) -> int:

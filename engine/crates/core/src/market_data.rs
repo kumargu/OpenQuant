@@ -79,8 +79,12 @@ pub fn validate_bars(bars: &[Bar], gap_threshold_ms: i64) -> DataQualityReport {
             report.ohlc_violations += 1;
         }
 
-        // Price positivity
-        if bar.open <= 0.0 || bar.high <= 0.0 || bar.low <= 0.0 || bar.close <= 0.0 {
+        // Price positivity and finiteness (NaN comparisons are always false,
+        // so we must explicitly check with is_finite)
+        if !bar.open.is_finite() || !bar.high.is_finite()
+            || !bar.low.is_finite() || !bar.close.is_finite()
+            || bar.open <= 0.0 || bar.high <= 0.0 || bar.low <= 0.0 || bar.close <= 0.0
+        {
             report.non_positive_prices += 1;
         }
 
@@ -214,6 +218,37 @@ mod tests {
         assert_eq!(report.duplicate_timestamps, 1);
         assert_eq!(report.timestamp_backwards, 1);
         assert!(report.has_critical_issues());
+    }
+
+    #[test]
+    fn validate_detects_nan_prices() {
+        let bars = vec![Bar {
+            symbol: "TEST".into(),
+            timestamp: 1000,
+            open: f64::NAN,
+            high: 105.0,
+            low: 95.0,
+            close: 100.0,
+            volume: 10.0,
+        }];
+        let report = validate_bars(&bars, 5000);
+        assert_eq!(report.non_positive_prices, 1);
+        assert!(report.has_critical_issues());
+    }
+
+    #[test]
+    fn validate_detects_infinity_prices() {
+        let bars = vec![Bar {
+            symbol: "TEST".into(),
+            timestamp: 1000,
+            open: 100.0,
+            high: f64::INFINITY,
+            low: 95.0,
+            close: 100.0,
+            volume: 10.0,
+        }];
+        let report = validate_bars(&bars, 5000);
+        assert_eq!(report.non_positive_prices, 1);
     }
 
     #[test]
