@@ -35,6 +35,21 @@ pub struct OrderIntent {
     pub relative_volume: f64,
 }
 
+/// Full outcome of processing a bar — for journaling.
+/// Captures features, signal decision, and risk gate result.
+#[derive(Debug, Clone)]
+pub struct BarOutcome {
+    pub features: FeatureValues,
+    pub intents: Vec<OrderIntent>,
+    pub signal_fired: bool,
+    pub signal_side: Option<Side>,
+    pub signal_score: Option<f64>,
+    pub signal_reason: Option<SignalReason>,
+    pub risk_passed: Option<bool>,
+    pub risk_rejection: Option<String>,
+    pub qty_approved: Option<f64>,
+}
+
 /// Engine configuration.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -151,6 +166,101 @@ impl Engine {
             z_score: signal.z_score,
             relative_volume: signal.relative_volume,
         }]
+    }
+
+    /// Process a bar and return full decision details for journaling.
+    /// Same logic as `on_bar()` but captures feature state, signal, and risk gate results.
+    pub fn on_bar_journaled(&mut self, bar: &Bar) -> BarOutcome {
+        self.bar_counter += 1;
+
+        // 1. Update features
+        let feature_state = self
+            .features
+            .entry(bar.symbol.clone())
+            .or_insert_with(FeatureState::new);
+
+        let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
+        self.last_features.insert(bar.symbol.clone(), features.clone());
+
+        // 2. Check exit rules on open positions
+        if let Some(pos) = self.open_positions.get(&bar.symbol) {
+            if let Some(exit_intent) = exit::check(pos, bar.close, self.bar_counter, &self.exit_config) {
+                return BarOutcome {
+                    features,
+                    signal_fired: true,
+                    signal_side: Some(exit_intent.side),
+                    signal_score: Some(exit_intent.signal_score),
+                    signal_reason: Some(exit_intent.reason),
+                    risk_passed: Some(true),
+                    risk_rejection: None,
+                    qty_approved: Some(exit_intent.qty),
+                    intents: vec![exit_intent],
+                };
+            }
+        }
+
+        // 3. Score via strategy
+        let has_position = self.open_positions.contains_key(&bar.symbol);
+        let signal = match self.strategy.score(&features, has_position) {
+            Some(s) => s,
+            None => {
+                return BarOutcome {
+                    features,
+                    intents: vec![],
+                    signal_fired: false,
+                    signal_side: None,
+                    signal_score: None,
+                    signal_reason: None,
+                    risk_passed: None,
+                    risk_rejection: None,
+                    qty_approved: None,
+                };
+            }
+        };
+
+        // 4. Risk gates
+        let position_qty = self.portfolio.position_qty(&bar.symbol);
+        match risk::check(
+            &signal,
+            bar.close,
+            position_qty,
+            &self.risk_state,
+            &self.risk_config,
+        ) {
+            Ok(qty) => {
+                let intent = OrderIntent {
+                    symbol: bar.symbol.clone(),
+                    side: signal.side,
+                    qty,
+                    reason: signal.reason,
+                    signal_score: signal.score,
+                    z_score: signal.z_score,
+                    relative_volume: signal.relative_volume,
+                };
+                BarOutcome {
+                    features,
+                    signal_fired: true,
+                    signal_side: Some(signal.side),
+                    signal_score: Some(signal.score),
+                    signal_reason: Some(signal.reason),
+                    risk_passed: Some(true),
+                    risk_rejection: None,
+                    qty_approved: Some(qty),
+                    intents: vec![intent],
+                }
+            }
+            Err(rejection) => BarOutcome {
+                features,
+                intents: vec![],
+                signal_fired: true,
+                signal_side: Some(signal.side),
+                signal_score: Some(signal.score),
+                signal_reason: Some(signal.reason),
+                risk_passed: Some(false),
+                risk_rejection: Some(rejection.reason),
+                qty_approved: None,
+            },
+        }
     }
 
     /// Notify engine that an order was filled (updates portfolio, risk, position tracking).

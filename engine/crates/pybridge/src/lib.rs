@@ -9,9 +9,14 @@ use openquant_core::market_data::Bar;
 use openquant_core::signals::Side;
 use openquant_core::signals::mean_reversion;
 
+use openquant_journal::writer::{BarRecord, FillRecord};
+use openquant_journal::DataRuntime;
+
 #[pyclass]
 struct Engine {
     inner: CoreEngine,
+    journal: Option<DataRuntime>,
+    engine_version: String,
 }
 
 #[pymethods]
@@ -26,6 +31,7 @@ impl Engine {
         stop_loss_pct = 0.02,
         max_hold_bars = 100,
         take_profit_pct = 0.0,
+        journal_path = None,
     ))]
     fn new(
         max_position_notional: f64,
@@ -36,6 +42,7 @@ impl Engine {
         stop_loss_pct: f64,
         max_hold_bars: usize,
         take_profit_pct: f64,
+        journal_path: Option<String>,
     ) -> Self {
         let config = EngineConfig {
             signal: mean_reversion::Config {
@@ -55,12 +62,30 @@ impl Engine {
                 take_profit_pct,
             },
         };
+
+        // Get engine version from git
+        let engine_version = option_env!("CARGO_PKG_VERSION")
+            .unwrap_or("dev")
+            .to_string();
+
+        // Start journal if path provided
+        let journal = journal_path.map(|path| {
+            let p = std::path::PathBuf::from(path);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            DataRuntime::new(&p, 4096)
+        });
+
         Self {
             inner: CoreEngine::new(config),
+            journal,
+            engine_version,
         }
     }
 
     /// Feed a bar, get back list of order intent dicts.
+    /// If journal is enabled, logs the full bar record (features + decision).
     #[pyo3(signature = (symbol, timestamp, open, high, low, close, volume))]
     fn on_bar<'py>(
         &mut self,
@@ -78,9 +103,41 @@ impl Engine {
             timestamp, open, high, low, close, volume,
         };
 
-        let intents = self.inner.on_bar(&bar);
-        let mut results = Vec::with_capacity(intents.len());
+        // Use journaled path if journal is active, otherwise fast path
+        let (intents, journal_record) = if self.journal.is_some() {
+            let outcome = self.inner.on_bar_journaled(&bar);
+            let record = BarRecord {
+                symbol: bar.symbol.clone(),
+                timestamp: bar.timestamp,
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: bar.volume,
+                features: outcome.features,
+                signal_fired: outcome.signal_fired,
+                signal_side: outcome.signal_side.map(|s| match s {
+                    Side::Buy => "buy".to_string(),
+                    Side::Sell => "sell".to_string(),
+                }),
+                signal_score: outcome.signal_score,
+                signal_reason: outcome.signal_reason,
+                risk_passed: outcome.risk_passed,
+                risk_rejection: outcome.risk_rejection,
+                qty_approved: outcome.qty_approved,
+                engine_version: self.engine_version.clone(),
+            };
+            (outcome.intents, Some(record))
+        } else {
+            (self.inner.on_bar(&bar), None)
+        };
 
+        // Send to journal (non-blocking)
+        if let (Some(rt), Some(record)) = (&self.journal, journal_record) {
+            rt.journal().log_bar(record);
+        }
+
+        let mut results = Vec::with_capacity(intents.len());
         for intent in &intents {
             let dict = PyDict::new(py);
             dict.set_item("symbol", &intent.symbol)?;
@@ -103,12 +160,25 @@ impl Engine {
     /// Notify engine of a fill (updates portfolio and risk state).
     #[pyo3(signature = (symbol, side, qty, fill_price))]
     fn on_fill(&mut self, symbol: &str, side: &str, qty: f64, fill_price: f64) -> PyResult<()> {
-        let side = match side {
+        let side_enum = match side {
             "buy" => Side::Buy,
             "sell" => Side::Sell,
             _ => return Err(pyo3::exceptions::PyValueError::new_err("side must be 'buy' or 'sell'")),
         };
-        self.inner.on_fill(symbol, side, qty, fill_price);
+        self.inner.on_fill(symbol, side_enum, qty, fill_price);
+
+        // Journal the fill
+        if let Some(rt) = &self.journal {
+            rt.journal().log_fill(FillRecord {
+                symbol: symbol.to_string(),
+                side: side.to_string(),
+                qty,
+                fill_price,
+                slippage: 0.0,
+                engine_version: self.engine_version.clone(),
+            });
+        }
+
         Ok(())
     }
 
@@ -151,6 +221,20 @@ impl Engine {
             results.push(dict);
         }
         Ok(results)
+    }
+
+    /// Number of journal records dropped due to backpressure.
+    fn journal_dropped(&self) -> u64 {
+        self.journal.as_ref()
+            .map(|rt| rt.journal().dropped_count())
+            .unwrap_or(0)
+    }
+
+    /// Gracefully shut down the journal (flushes all pending writes).
+    fn shutdown_journal(&mut self) {
+        if let Some(rt) = self.journal.take() {
+            rt.shutdown();
+        }
     }
 }
 
