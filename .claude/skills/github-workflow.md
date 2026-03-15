@@ -288,10 +288,10 @@ When a CI failure is detected:
 
 1. **Fetch the failure logs**: `gh run view <ID> --log-failed`
 2. **Identify the failure type**:
-   - `cargo fmt` failure → run `cargo fmt --all`, commit, push
+   - `cargo fmt` failure → run `cd engine && cargo fmt --all`, commit, push
    - `cargo clippy` failure → fix the warning, commit, push
-   - Test failure → investigate, fix the code or test, commit, push
-   - Performance gate failure → run `cargo bench` locally, investigate
+   - Test failure → `cd engine && cargo test`, investigate, fix, commit, push
+   - Performance gate failure → `cd engine && cargo bench` locally, investigate
 3. **Push the fix** and monitor the new CI run
 4. **Repeat** until CI is green
 
