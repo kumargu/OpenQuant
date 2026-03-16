@@ -27,6 +27,7 @@
 //! 3. Add `pub mod my_strategy;` here
 
 pub mod mean_reversion;
+pub mod momentum;
 
 use crate::features::FeatureValues;
 
@@ -43,6 +44,8 @@ pub enum Side {
 pub enum SignalReason {
     MeanReversionBuy,
     MeanReversionSell,
+    MomentumBuy,
+    MomentumSell,
     StopLoss,
     TakeProfit,
     MaxHoldTime,
@@ -53,6 +56,8 @@ impl SignalReason {
         match self {
             Self::MeanReversionBuy => "mean-reversion buy: oversold + volume confirmation",
             Self::MeanReversionSell => "mean-reversion sell: overbought reversion",
+            Self::MomentumBuy => "momentum buy: EMA crossover + ADX trend confirmation",
+            Self::MomentumSell => "momentum sell: trend reversal (fast EMA below slow)",
             Self::StopLoss => "stop loss: price dropped below threshold",
             Self::TakeProfit => "take profit: price rose above threshold",
             Self::MaxHoldTime => "max hold time: position held too long",

@@ -38,6 +38,12 @@ pub struct SymbolHandles {
     pub signal_rejected_trend_filter: Counter,
     pub signal_rejected_volume_filter: Counter,
 
+    // Momentum strategy
+    pub momentum_buy: Counter,
+    pub momentum_sell: Counter,
+    pub momentum_score: Histogram,
+    pub momentum_rejected_adx: Counter,
+
     // Risk
     pub risk_passed: Counter,
     pub risk_rejected_kill_switch: Counter,
@@ -77,6 +83,11 @@ impl SymbolHandles {
             signal_rejected_no_warmup: metrics::counter!("signal.rejected", "symbol" => s.clone(), "reason" => "no_warmup"),
             signal_rejected_trend_filter: metrics::counter!("signal.rejected", "symbol" => s.clone(), "reason" => "trend_filter"),
             signal_rejected_volume_filter: metrics::counter!("signal.rejected", "symbol" => s.clone(), "reason" => "volume_filter"),
+
+            momentum_buy: metrics::counter!("momentum.fired", "symbol" => s.clone(), "side" => "buy"),
+            momentum_sell: metrics::counter!("momentum.fired", "symbol" => s.clone(), "side" => "sell"),
+            momentum_score: metrics::histogram!("momentum.score", "symbol" => s.clone()),
+            momentum_rejected_adx: metrics::counter!("momentum.rejected", "symbol" => s.clone(), "reason" => "adx_too_low"),
 
             risk_passed: metrics::counter!("risk.passed", "symbol" => s.clone()),
             risk_rejected_kill_switch: metrics::counter!("risk.rejected", "symbol" => s.clone(), "reason" => "kill_switch"),

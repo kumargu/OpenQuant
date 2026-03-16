@@ -23,7 +23,7 @@ use crate::hot_metrics::HotMetrics;
 use crate::market_data::Bar;
 use crate::portfolio::Portfolio;
 use crate::risk::{self, RiskConfig, RiskState};
-use crate::signals::{Side, SignalReason, Strategy, mean_reversion};
+use crate::signals::{Side, SignalReason, Strategy, mean_reversion, momentum};
 
 /// An order the engine wants placed.
 #[derive(Debug, Clone)]
@@ -70,6 +70,7 @@ pub struct SymbolOverrides {
 #[derive(Debug, Clone, Default)]
 pub struct EngineConfig {
     pub signal: mean_reversion::Config,
+    pub momentum: momentum::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,

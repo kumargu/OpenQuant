@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::engine::{EngineConfig, SymbolOverrides};
 use crate::exit::ExitConfig;
 use crate::risk::RiskConfig;
-use crate::signals::mean_reversion;
+use crate::signals::{mean_reversion, momentum};
 
 /// Top-level TOML file layout.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -17,6 +17,7 @@ use crate::signals::mean_reversion;
 pub struct ConfigFile {
     pub metrics: MetricsConfig,
     pub signal: mean_reversion::Config,
+    pub momentum: momentum::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
     pub data: DataConfig,
@@ -56,6 +57,7 @@ impl ConfigFile {
     pub fn into_engine_config(self) -> EngineConfig {
         EngineConfig {
             signal: self.signal,
+            momentum: self.momentum,
             risk: self.risk,
             exit: self.exit,
             symbol_overrides: self.symbol_overrides,
@@ -88,6 +90,12 @@ min_relative_volume = 1.5
 min_score = 0.3
 trend_filter = false
 
+[momentum]
+min_adx = 25.0
+min_score = 0.4
+directional_filter = false
+min_relative_volume = 1.0
+
 [risk]
 max_position_notional = 5000.0
 max_daily_loss = 250.0
@@ -114,6 +122,10 @@ stop_loss_atr_mult = 4.0
         assert_eq!(cfg.signal.sell_z_threshold, 2.5);
         assert_eq!(cfg.signal.min_relative_volume, 1.5);
         assert!(!cfg.signal.trend_filter);
+        assert_eq!(cfg.momentum.min_adx, 25.0);
+        assert_eq!(cfg.momentum.min_score, 0.4);
+        assert!(!cfg.momentum.directional_filter);
+        assert_eq!(cfg.momentum.min_relative_volume, 1.0);
         assert_eq!(cfg.risk.max_position_notional, 5000.0);
         assert_eq!(cfg.risk.max_daily_loss, 250.0);
         assert_eq!(cfg.exit.stop_loss_atr_mult, 3.0);
