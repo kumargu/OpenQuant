@@ -23,7 +23,7 @@ use crate::hot_metrics::HotMetrics;
 use crate::market_data::Bar;
 use crate::portfolio::Portfolio;
 use crate::risk::{self, RiskConfig, RiskState};
-use crate::signals::{Side, SignalReason, Strategy, mean_reversion, momentum};
+use crate::signals::{Side, SignalReason, Strategy, combiner, mean_reversion, momentum};
 
 /// An order the engine wants placed.
 #[derive(Debug, Clone)]
@@ -71,6 +71,7 @@ pub struct SymbolOverrides {
 pub struct EngineConfig {
     pub signal: mean_reversion::Config,
     pub momentum: momentum::Config,
+    pub combiner: combiner::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
@@ -101,9 +102,34 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Create engine with default mean-reversion strategy.
+    /// Build the default strategy combiner from config.
+    fn build_combiner(
+        signal: &mean_reversion::Config,
+        momentum_cfg: &momentum::Config,
+        combiner_cfg: &combiner::Config,
+    ) -> Box<dyn Strategy> {
+        let strategies = vec![
+            combiner::StrategyEntry {
+                strategy: Box::new(mean_reversion::MeanReversion::new(signal.clone())),
+                weight: combiner_cfg.weight_mean_reversion,
+                name: "mean_reversion",
+            },
+            combiner::StrategyEntry {
+                strategy: Box::new(momentum::Momentum::new(momentum_cfg.clone())),
+                weight: combiner_cfg.weight_momentum,
+                name: "momentum",
+            },
+        ];
+        Box::new(combiner::StrategyCombiner::new(
+            strategies,
+            combiner_cfg.min_net_score,
+        ))
+    }
+
+    /// Create engine with strategy combiner (mean-reversion + momentum).
     pub fn new(config: EngineConfig) -> Self {
-        let default_strategy = mean_reversion::MeanReversion::new(config.signal.clone());
+        let default_strategy =
+            Self::build_combiner(&config.signal, &config.momentum, &config.combiner);
 
         // Build per-symbol strategies and exit configs from overrides
         let mut symbol_strategies: HashMap<String, Box<dyn Strategy>> = HashMap::new();
@@ -121,9 +147,10 @@ impl Engine {
                 trend_filter: ovr.trend_filter.unwrap_or(config.signal.trend_filter),
                 ..config.signal.clone()
             };
+            // Per-symbol combiners with overridden mean-reversion config
             symbol_strategies.insert(
                 symbol.clone(),
-                Box::new(mean_reversion::MeanReversion::new(sig)),
+                Self::build_combiner(&sig, &config.momentum, &config.combiner),
             );
 
             let exit = ExitConfig {
@@ -138,7 +165,7 @@ impl Engine {
         }
 
         Self {
-            default_strategy: Box::new(default_strategy),
+            default_strategy,
             symbol_strategies,
             default_exit_config: config.exit,
             symbol_exit_configs,

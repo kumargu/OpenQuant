@@ -26,6 +26,7 @@
 //! 2. Implement the `Strategy` trait
 //! 3. Add `pub mod my_strategy;` here
 
+pub mod combiner;
 pub mod mean_reversion;
 pub mod momentum;
 
