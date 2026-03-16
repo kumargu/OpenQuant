@@ -102,14 +102,22 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // V2 migrations: momentum features
         ("features", "ema_fast", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "ema_slow", "REAL NOT NULL DEFAULT 0.0"),
-        ("features", "ema_fast_above_slow", "INTEGER NOT NULL DEFAULT 0"),
+        (
+            "features",
+            "ema_fast_above_slow",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
         ("features", "adx", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "plus_di", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "minus_di", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "bollinger_upper", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "bollinger_lower", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "bollinger_pct_b", "REAL NOT NULL DEFAULT 0.0"),
-        ("features", "bollinger_bandwidth", "REAL NOT NULL DEFAULT 0.0"),
+        (
+            "features",
+            "bollinger_bandwidth",
+            "REAL NOT NULL DEFAULT 0.0",
+        ),
     ];
 
     for (table, column, col_type) in &new_columns {

@@ -143,7 +143,10 @@ mod tests {
         for _ in 0..4 {
             rs.push(5.0);
         }
-        assert!(rs.std_dev() < 1e-10, "constant values should have zero std dev");
+        assert!(
+            rs.std_dev() < 1e-10,
+            "constant values should have zero std dev"
+        );
     }
 
     #[test]

@@ -272,9 +272,16 @@ mod tests {
         wilder.push(200.0);
 
         // Both should move toward 200, but Wilder less so
-        assert!(wilder.value() < ema.value(),
-            "Wilder ({}) should react less than EMA ({})", wilder.value(), ema.value());
-        assert!(wilder.value() > 100.0, "Wilder should still move toward spike");
+        assert!(
+            wilder.value() < ema.value(),
+            "Wilder ({}) should react less than EMA ({})",
+            wilder.value(),
+            ema.value()
+        );
+        assert!(
+            wilder.value() > 100.0,
+            "Wilder should still move toward spike"
+        );
     }
 
     #[test]

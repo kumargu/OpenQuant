@@ -54,24 +54,24 @@ pub struct FeatureValues {
     pub return_1: f64,        // 1-bar return
     pub return_5: f64,        // 5-bar return
     pub return_20: f64,       // 20-bar return
-    pub sma_20: f64,          // simple moving average of close (32-bar window, power-of-2 constraint)
-    pub sma_50: f64,          // 64-bar simple moving average of close (trend)
-    pub atr: f64,             // average true range (16-bar window)
-    pub return_std_20: f64,   // 32-bar rolling std dev of 1-bar returns
-    pub return_z_score: f64,  // return_1 / return_std_20
+    pub sma_20: f64, // simple moving average of close (32-bar window, power-of-2 constraint)
+    pub sma_50: f64, // 64-bar simple moving average of close (trend)
+    pub atr: f64,    // average true range (16-bar window)
+    pub return_std_20: f64, // 32-bar rolling std dev of 1-bar returns
+    pub return_z_score: f64, // return_1 / return_std_20
     pub relative_volume: f64, // current volume / 32-bar avg volume
-    pub bar_range: f64,       // high - low
-    pub close_location: f64,  // (close - low) / (high - low)
-    pub trend_up: bool,       // true when close > sma_50 (bullish trend)
-    pub warmed_up: bool,      // true once all features have enough data
+    pub bar_range: f64, // high - low
+    pub close_location: f64, // (close - low) / (high - low)
+    pub trend_up: bool, // true when close > sma_50 (bullish trend)
+    pub warmed_up: bool, // true once all features have enough data
 
     // --- V2: momentum features ---
-    pub ema_fast: f64,              // EMA(10) — fast exponential moving average
-    pub ema_slow: f64,              // EMA(30) — slow exponential moving average
-    pub ema_fast_above_slow: bool,  // true when EMA(10) > EMA(30) (level, not event)
-    pub adx: f64,                   // trend strength 0-100
-    pub plus_di: f64,               // +DI: bullish directional indicator
-    pub minus_di: f64,              // -DI: bearish directional indicator
+    pub ema_fast: f64,             // EMA(10) — fast exponential moving average
+    pub ema_slow: f64,             // EMA(30) — slow exponential moving average
+    pub ema_fast_above_slow: bool, // true when EMA(10) > EMA(30) (level, not event)
+    pub adx: f64,                  // trend strength 0-100
+    pub plus_di: f64,              // +DI: bullish directional indicator
+    pub minus_di: f64,             // -DI: bearish directional indicator
 
     // --- V2: Bollinger Band features ---
     pub bollinger_upper: f64,     // SMA(32) + 2 × std_dev(close, 32)
@@ -102,12 +102,12 @@ pub struct FeatureState {
     warmup_period: usize,
 
     // V2 state: momentum indicators
-    ema_fast: Ema,                  // EMA(10) for momentum crossover
-    ema_slow: Ema,                  // EMA(30) for momentum crossover
-    adx: Adx,                       // ADX(14) for trend strength
+    ema_fast: Ema, // EMA(10) for momentum crossover
+    ema_slow: Ema, // EMA(30) for momentum crossover
+    adx: Adx,      // ADX(14) for trend strength
 
     // V2 state: Bollinger Bands
-    close_stats: RollingStats<32>,  // rolling std of close prices
+    close_stats: RollingStats<32>, // rolling std of close prices
 }
 
 impl Default for FeatureState {
@@ -165,12 +165,16 @@ impl FeatureState {
         self.return_stats.push(return_1);
 
         // N-bar returns via lookback
-        let return_5 = self.closes.ago(5)
+        let return_5 = self
+            .closes
+            .ago(5)
             .filter(|&pc| pc != 0.0)
             .map(|pc| (close - pc) / pc)
             .unwrap_or(0.0);
 
-        let return_20 = self.closes.ago(19)
+        let return_20 = self
+            .closes
+            .ago(19)
             .filter(|&pc| pc != 0.0)
             .map(|pc| (close - pc) / pc)
             .unwrap_or(0.0);
@@ -196,15 +200,27 @@ impl FeatureState {
         // Volume
         self.volume_stats.push(volume);
         let avg_volume = self.volume_stats.mean();
-        let relative_volume = if avg_volume > 0.0 { volume / avg_volume } else { 1.0 };
+        let relative_volume = if avg_volume > 0.0 {
+            volume / avg_volume
+        } else {
+            1.0
+        };
 
         // Z-score
         let std_dev = self.return_stats.std_dev();
-        let return_z_score = if std_dev > 1e-10 { return_1 / std_dev } else { 0.0 };
+        let return_z_score = if std_dev > 1e-10 {
+            return_1 / std_dev
+        } else {
+            0.0
+        };
 
         // Bar shape
         let range = high - low;
-        let close_location = if range > 0.0 { (close - low) / range } else { 0.5 };
+        let close_location = if range > 0.0 {
+            (close - low) / range
+        } else {
+            0.5
+        };
 
         // Trend: close above SMA-64 = bullish
         let trend_up = close > sma_50;
@@ -227,18 +243,36 @@ impl FeatureState {
         } else {
             0.5
         };
-        let bollinger_bandwidth = if sma_20 > 1e-10 { bb_width / sma_20 } else { 0.0 };
+        let bollinger_bandwidth = if sma_20 > 1e-10 {
+            bb_width / sma_20
+        } else {
+            0.0
+        };
 
         FeatureValues {
-            return_1, return_5, return_20,
-            sma_20, sma_50, atr,
-            return_std_20: std_dev, return_z_score,
-            relative_volume, bar_range: range, close_location,
+            return_1,
+            return_5,
+            return_20,
+            sma_20,
+            sma_50,
+            atr,
+            return_std_20: std_dev,
+            return_z_score,
+            relative_volume,
+            bar_range: range,
+            close_location,
             trend_up,
             warmed_up: self.bar_count >= self.warmup_period,
-            ema_fast, ema_slow, ema_fast_above_slow,
-            adx: adx_val, plus_di, minus_di,
-            bollinger_upper, bollinger_lower, bollinger_pct_b, bollinger_bandwidth,
+            ema_fast,
+            ema_slow,
+            ema_fast_above_slow,
+            adx: adx_val,
+            plus_di,
+            minus_di,
+            bollinger_upper,
+            bollinger_lower,
+            bollinger_pct_b,
+            bollinger_bandwidth,
         }
     }
 }
@@ -284,7 +318,11 @@ mod tests {
             state.update(100.0, 101.0, 99.0, 1000.0);
         }
         let f = state.update(100.0, 101.0, 99.0, 2000.0);
-        assert!(f.relative_volume > 1.5, "expected high relative volume, got {}", f.relative_volume);
+        assert!(
+            f.relative_volume > 1.5,
+            "expected high relative volume, got {}",
+            f.relative_volume
+        );
     }
 
     #[test]
@@ -294,7 +332,11 @@ mod tests {
             state.update(100.0, 100.5, 99.5, 1000.0);
         }
         let f = state.update(95.0, 100.0, 94.0, 1500.0);
-        assert!(f.return_z_score < -2.0, "expected z < -2, got {}", f.return_z_score);
+        assert!(
+            f.return_z_score < -2.0,
+            "expected z < -2, got {}",
+            f.return_z_score
+        );
     }
 
     #[test]
@@ -302,7 +344,10 @@ mod tests {
         let mut state = FeatureState::new();
         for _ in 0..25 {
             let f = state.update(100.0, 100.0, 100.0, 1000.0);
-            assert!(f.return_z_score.abs() < 1e-10, "constant prices should give z=0");
+            assert!(
+                f.return_z_score.abs() < 1e-10,
+                "constant prices should give z=0"
+            );
         }
     }
 
@@ -346,7 +391,10 @@ mod tests {
             state.update(price, price + 0.5, price - 0.5, 1000.0);
         }
         let f = state.update(130.0, 130.5, 129.5, 1000.0);
-        assert!(f.ema_fast > f.ema_slow, "fast EMA should be above slow in uptrend");
+        assert!(
+            f.ema_fast > f.ema_slow,
+            "fast EMA should be above slow in uptrend"
+        );
         assert!(f.ema_fast_above_slow);
     }
 
@@ -358,7 +406,11 @@ mod tests {
             state.update(base, base + 1.0, base - 1.0, 1000.0);
         }
         let f = state.update(220.0, 221.0, 219.0, 1000.0);
-        assert!(f.adx > 0.0, "ADX should be positive after warmup, got {}", f.adx);
+        assert!(
+            f.adx > 0.0,
+            "ADX should be positive after warmup, got {}",
+            f.adx
+        );
     }
 
     #[test]
@@ -370,8 +422,11 @@ mod tests {
         let f = state.update(100.0, 101.0, 99.0, 1000.0);
         assert!(f.bollinger_upper >= f.sma_20);
         assert!(f.bollinger_lower <= f.sma_20);
-        assert!((f.bollinger_pct_b - 0.5).abs() < 0.2,
-            "expected %B near 0.5 for constant price, got {}", f.bollinger_pct_b);
+        assert!(
+            (f.bollinger_pct_b - 0.5).abs() < 0.2,
+            "expected %B near 0.5 for constant price, got {}",
+            f.bollinger_pct_b
+        );
     }
 
     #[test]
@@ -381,7 +436,10 @@ mod tests {
             state.update(100.0, 100.5, 99.5, 1000.0);
         }
         let f = state.update(115.0, 116.0, 114.0, 2000.0);
-        assert!(f.bollinger_pct_b > 1.0,
-            "expected %B > 1.0 for breakout, got {}", f.bollinger_pct_b);
+        assert!(
+            f.bollinger_pct_b > 1.0,
+            "expected %B > 1.0 for breakout, got {}",
+            f.bollinger_pct_b
+        );
     }
 }
