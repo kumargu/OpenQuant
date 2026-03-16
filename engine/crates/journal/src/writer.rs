@@ -52,7 +52,7 @@ pub struct FillRecord {
 /// Messages sent to the journal writer task.
 #[derive(Debug, Clone)]
 pub enum JournalMessage {
-    Bar(BarRecord),
+    Bar(Box<BarRecord>),
     Fill(FillRecord),
     Flush,
     Shutdown,
@@ -131,7 +131,7 @@ impl JournalHandle {
         let symbol = record.symbol.clone();
         self.metrics.record_pending(self.tx.capacity());
         if let Err(mpsc::error::TrySendError::Full(_)) =
-            self.tx.try_send(JournalMessage::Bar(record))
+            self.tx.try_send(JournalMessage::Bar(Box::new(record)))
         {
             self.drops.record_drop(&symbol);
             self.metrics.drops_bar.increment(1);
@@ -255,7 +255,7 @@ fn flush_batch(conn: &Connection, batch: &[JournalMessage]) {
 
     for msg in batch {
         match msg {
-            JournalMessage::Bar(rec) => write_bar_record(conn, rec),
+            JournalMessage::Bar(rec) => write_bar_record(conn, rec.as_ref()),
             JournalMessage::Fill(rec) => write_fill_record(conn, rec),
             JournalMessage::Flush => {} // just triggers the batch write
             JournalMessage::Shutdown => {} // handled above
