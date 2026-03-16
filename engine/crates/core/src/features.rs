@@ -325,6 +325,66 @@ impl Ema {
 }
 
 // ---------------------------------------------------------------------------
+// Wilder EMA — Welles Wilder's smoothing (α = 1/N), used by ADX/RSI
+// ---------------------------------------------------------------------------
+
+/// Wilder's smoothing method — a variant of EMA with α = 1/N.
+///
+/// ```text
+///  Wilder(t) = Wilder(t-1) + (value - Wilder(t-1)) / N
+///            = (1 - 1/N) × Wilder(t-1) + (1/N) × value
+///
+///  Standard EMA: α = 2/(N+1)  →  for N=14: α = 0.1333 (faster)
+///  Wilder's:     α = 1/N      →  for N=14: α = 0.0714 (slower)
+/// ```
+///
+/// Wilder's smoothing is the canonical method for ADX, ATR, and RSI.
+/// Using standard EMA would produce values that diverge from Bloomberg,
+/// TradingView, and TA-Lib reference implementations.
+#[derive(Clone)]
+pub struct WilderEma {
+    alpha: f64,
+    one_minus_alpha: f64,
+    value: f64,
+    count: usize,
+    period: usize,
+}
+
+impl WilderEma {
+    pub fn new(period: usize) -> Self {
+        let alpha = 1.0 / period as f64;
+        Self {
+            alpha,
+            one_minus_alpha: 1.0 - alpha,
+            value: 0.0,
+            count: 0,
+            period,
+        }
+    }
+
+    #[inline]
+    pub fn push(&mut self, value: f64) -> f64 {
+        self.count += 1;
+        if self.count == 1 {
+            self.value = value;
+        } else {
+            self.value = self.alpha * value + self.one_minus_alpha * self.value;
+        }
+        self.value
+    }
+
+    #[inline]
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    #[inline]
+    pub fn is_ready(&self) -> bool {
+        self.count >= self.period
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ADX — average directional index, trend strength 0-100
 // ---------------------------------------------------------------------------
 
@@ -345,13 +405,14 @@ impl Ema {
 ///  ADX > 40  → strong trend (momentum's sweet spot)
 /// ```
 ///
-/// Implementation uses 4 internal EMAs — all O(1) per bar, ~200 bytes total.
+/// Implementation uses 4 Wilder EMAs (α=1/N) — all O(1) per bar, ~200 bytes total.
+/// Uses Wilder's smoothing to match Bloomberg/TradingView/TA-Lib reference values.
 #[derive(Clone)]
 pub struct Adx {
-    plus_dm_ema: Ema,
-    minus_dm_ema: Ema,
-    tr_ema: Ema,
-    adx_ema: Ema,
+    plus_dm_ema: WilderEma,
+    minus_dm_ema: WilderEma,
+    tr_ema: WilderEma,
+    adx_ema: WilderEma,
     prev_high: f64,
     prev_low: f64,
     prev_close: f64,
@@ -362,10 +423,10 @@ pub struct Adx {
 impl Adx {
     pub fn new(period: usize) -> Self {
         Self {
-            plus_dm_ema: Ema::new(period),
-            minus_dm_ema: Ema::new(period),
-            tr_ema: Ema::new(period),
-            adx_ema: Ema::new(period),
+            plus_dm_ema: WilderEma::new(period),
+            minus_dm_ema: WilderEma::new(period),
+            tr_ema: WilderEma::new(period),
+            adx_ema: WilderEma::new(period),
             prev_high: 0.0,
             prev_low: 0.0,
             prev_close: 0.0,
@@ -454,7 +515,7 @@ pub struct FeatureValues {
     pub return_1: f64,        // 1-bar return
     pub return_5: f64,        // 5-bar return
     pub return_20: f64,       // 20-bar return
-    pub sma_20: f64,          // 20-bar simple moving average of close
+    pub sma_20: f64,          // simple moving average of close (32-bar window, power-of-2 constraint)
     pub sma_50: f64,          // 50-bar simple moving average of close (trend)
     pub atr: f64,             // average true range (14-bar)
     pub return_std_20: f64,   // 20-bar rolling std dev of 1-bar returns
@@ -468,16 +529,16 @@ pub struct FeatureValues {
     // --- V2: momentum features ---
     pub ema_fast: f64,        // EMA(10) — fast exponential moving average
     pub ema_slow: f64,        // EMA(30) — slow exponential moving average
-    pub ema_crossover: bool,  // true when EMA(10) > EMA(30) (bullish)
+    pub ema_fast_above_slow: bool,  // true when EMA(10) > EMA(30) (level, not event)
     pub adx: f64,             // trend strength 0-100
     pub plus_di: f64,         // +DI: bullish directional indicator
     pub minus_di: f64,        // -DI: bearish directional indicator
 
-    // --- V2: Bollinger Band features (derived from existing SMA/std) ---
-    pub bollinger_upper: f64,    // SMA(20) + 2σ
-    pub bollinger_lower: f64,    // SMA(20) - 2σ
+    // --- V2: Bollinger Band features (uses rolling std of close prices) ---
+    pub bollinger_upper: f64,    // SMA(32) + 2 × std_dev(close, 32)
+    pub bollinger_lower: f64,    // SMA(32) - 2 × std_dev(close, 32)
     pub bollinger_pct_b: f64,    // (close - lower) / (upper - lower), 0-1 normally
-    pub bollinger_bandwidth: f64, // (upper - lower) / SMA(20), normalized width
+    pub bollinger_bandwidth: f64, // (upper - lower) / SMA(32), normalized width
 }
 
 /// Per-symbol feature state. All buffers are stack-allocated, fixed-size.
@@ -499,6 +560,9 @@ pub struct FeatureState {
     ema_fast: Ema,    // EMA(10) for momentum crossover
     ema_slow: Ema,    // EMA(30) for momentum crossover
     adx: Adx,         // ADX(14) for trend strength
+
+    // V2 state: Bollinger Bands
+    close_stats: RollingStats<32>,  // rolling std of close prices (for Bollinger)
 }
 
 impl Default for FeatureState {
@@ -523,6 +587,8 @@ impl FeatureState {
             ema_fast: Ema::new(10),  // 10-bar EMA for momentum
             ema_slow: Ema::new(30),  // 30-bar EMA for momentum
             adx: Adx::new(14),       // 14-bar ADX for trend strength
+
+            close_stats: RollingStats::new(), // rolling std of prices for Bollinger
         }
     }
 
@@ -607,14 +673,16 @@ impl FeatureState {
         // --- V2: Momentum indicators ---
         let ema_fast = self.ema_fast.push(close);
         let ema_slow = self.ema_slow.push(close);
-        let ema_crossover = ema_fast > ema_slow;
+        let ema_fast_above_slow = ema_fast > ema_slow;
         let (adx_val, plus_di, minus_di) = self.adx.update(high, low, close);
 
-        // --- V2: Bollinger Bands (derived from existing SMA-20 and return std) ---
-        // Band width uses price-space std: return_std × close ≈ absolute price std
-        let price_std = std_dev * close;
-        let bollinger_upper = sma_20 + 2.0 * price_std;
-        let bollinger_lower = sma_20 - 2.0 * price_std;
+        // --- V2: Bollinger Bands ---
+        // Standard Bollinger: SMA(N) ± 2 × std_dev(close_prices, N)
+        // Uses rolling std of close prices (not returns) — matches canonical definition.
+        self.close_stats.push(close);
+        let close_std = self.close_stats.std_dev();
+        let bollinger_upper = sma_20 + 2.0 * close_std;
+        let bollinger_lower = sma_20 - 2.0 * close_std;
         let bb_width = bollinger_upper - bollinger_lower;
         let bollinger_pct_b = if bb_width > 1e-10 {
             (close - bollinger_lower) / bb_width
@@ -644,7 +712,7 @@ impl FeatureState {
 
             ema_fast,
             ema_slow,
-            ema_crossover,
+            ema_fast_above_slow,
             adx: adx_val,
             plus_di,
             minus_di,
@@ -1047,7 +1115,7 @@ mod tests {
     // --- EMA crossover in FeatureState ---
 
     #[test]
-    fn ema_crossover_detected_in_uptrend() {
+    fn ema_fast_above_slow_detected_in_uptrend() {
         let mut state = FeatureState::new();
         // Start low, then trend up strongly
         for i in 0..60 {
@@ -1056,7 +1124,7 @@ mod tests {
         }
         let f = state.update(130.0, 130.5, 129.5, 1000.0);
         assert!(f.ema_fast > f.ema_slow, "fast EMA should be above slow in uptrend");
-        assert!(f.ema_crossover, "crossover should be true in uptrend");
+        assert!(f.ema_fast_above_slow, "crossover should be true in uptrend");
     }
 
     #[test]

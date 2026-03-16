@@ -102,7 +102,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // V2 migrations: momentum features
         ("features", "ema_fast", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "ema_slow", "REAL NOT NULL DEFAULT 0.0"),
-        ("features", "ema_crossover", "INTEGER NOT NULL DEFAULT 0"),
+        ("features", "ema_fast_above_slow", "INTEGER NOT NULL DEFAULT 0"),
         ("features", "adx", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "plus_di", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "minus_di", "REAL NOT NULL DEFAULT 0.0"),
@@ -156,6 +156,49 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init(&conn).unwrap();
         init(&conn).unwrap(); // second call should not fail
+    }
+
+    #[test]
+    fn migrate_v2_adds_momentum_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Simulate V1 schema (has sma_50, atr, trend_up but not V2 columns)
+        conn.execute_batch(
+            "
+            CREATE TABLE features (
+                bar_id          INTEGER NOT NULL,
+                return_1        REAL NOT NULL,
+                return_5        REAL NOT NULL,
+                return_20       REAL NOT NULL,
+                sma_20          REAL NOT NULL,
+                sma_50          REAL NOT NULL,
+                atr             REAL NOT NULL,
+                return_std_20   REAL NOT NULL,
+                return_z_score  REAL NOT NULL,
+                relative_volume REAL NOT NULL,
+                bar_range       REAL NOT NULL,
+                close_location  REAL NOT NULL,
+                trend_up        INTEGER NOT NULL,
+                warmed_up       INTEGER NOT NULL
+            );
+        ",
+        )
+        .unwrap();
+
+        // Migration should add V2 columns
+        migrate(&conn).unwrap();
+
+        // Verify we can insert with the new V2 columns
+        conn.execute(
+            "INSERT INTO features (bar_id, return_1, return_5, return_20, sma_20, sma_50, atr,
+             return_std_20, return_z_score, relative_volume, bar_range, close_location,
+             trend_up, warmed_up, ema_fast, ema_slow, ema_fast_above_slow, adx, plus_di, minus_di,
+             bollinger_upper, bollinger_lower, bollinger_pct_b, bollinger_bandwidth)
+             VALUES (1, 0.0, 0.0, 0.0, 100.0, 99.5, 1.5, 0.01, 0.5, 1.2, 2.0, 0.75,
+                     1, 1, 100.5, 99.8, 1, 25.0, 30.0, 15.0, 102.0, 98.0, 0.6, 0.04)",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

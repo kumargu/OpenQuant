@@ -297,7 +297,7 @@ impl Engine {
                 // V2: momentum features
                 dict.set_item("ema_fast", f.ema_fast)?;
                 dict.set_item("ema_slow", f.ema_slow)?;
-                dict.set_item("ema_crossover", f.ema_crossover)?;
+                dict.set_item("ema_fast_above_slow", f.ema_fast_above_slow)?;
                 dict.set_item("adx", f.adx)?;
                 dict.set_item("plus_di", f.plus_di)?;
                 dict.set_item("minus_di", f.minus_di)?;
