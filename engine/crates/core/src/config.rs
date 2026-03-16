@@ -99,6 +99,7 @@ directional_filter = false
 min_relative_volume = 1.0
 
 [combiner]
+enabled = false
 min_net_score = 0.3
 weight_mean_reversion = 0.6
 weight_momentum = 0.4
@@ -133,6 +134,7 @@ stop_loss_atr_mult = 4.0
         assert_eq!(cfg.momentum.min_score, 0.4);
         assert!(!cfg.momentum.directional_filter);
         assert_eq!(cfg.momentum.min_relative_volume, 1.0);
+        assert!(!cfg.combiner.enabled);
         assert_eq!(cfg.combiner.min_net_score, 0.3);
         assert_eq!(cfg.combiner.weight_mean_reversion, 0.6);
         assert_eq!(cfg.combiner.weight_momentum, 0.4);

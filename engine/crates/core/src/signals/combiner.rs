@@ -54,6 +54,13 @@ pub struct StrategyEntry {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Enable multi-strategy combiner. Default: true.
+    ///
+    /// When false, the engine uses only the mean-reversion strategy
+    /// (single-strategy mode). Useful for A/B testing or isolating
+    /// strategy performance.
+    pub enabled: bool,
+
     /// Minimum |net_vote| to produce a signal. Default: 0.2
     ///
     /// Higher values require stronger consensus — fewer trades, higher quality.
@@ -71,6 +78,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            enabled: true,
             min_net_score: 0.2,
             weight_mean_reversion: 0.5,
             weight_momentum: 0.5,
@@ -81,7 +89,8 @@ impl Default for Config {
 /// Combines multiple strategies via score-weighted voting.
 ///
 /// Implements `Strategy` so the engine treats it as a single strategy
-/// (Composite pattern). Zero heap allocation per `score()` call.
+/// (Composite pattern). Zero heap allocation per `score()` call —
+/// votes and best-signal tracking happen in a single pass.
 pub struct StrategyCombiner {
     strategies: Vec<StrategyEntry>,
     min_net_score: f64,
@@ -100,33 +109,26 @@ impl Strategy for StrategyCombiner {
     fn score(&self, features: &FeatureValues, has_position: bool) -> Option<SignalOutput> {
         let mut vote_buy = 0.0_f64;
         let mut vote_sell = 0.0_f64;
-        // Track the highest-conviction signal for reason/snapshot reporting
-        let mut best_buy: Option<(&SignalOutput, f64)> = None; // (signal, weighted_score)
-        let mut best_sell: Option<(&SignalOutput, f64)> = None;
+        // Track the highest-conviction signal per side (owned, no Vec needed).
+        let mut best_buy: Option<(SignalOutput, f64)> = None; // (signal, weighted_score)
+        let mut best_sell: Option<(SignalOutput, f64)> = None;
 
-        // Collect signals from all strategies. We need to own them to pick the best.
-        let mut signals: Vec<(SignalOutput, f64)> = Vec::new();
-
+        // Single pass: score each strategy, tally votes, track best signals.
         for entry in &self.strategies {
             if let Some(signal) = entry.strategy.score(features, has_position) {
                 let weighted = entry.weight * signal.score;
-                signals.push((signal, weighted));
-            }
-        }
-
-        // Tally votes
-        for (signal, weighted) in &signals {
-            match signal.side {
-                Side::Buy => {
-                    vote_buy += weighted;
-                    if best_buy.is_none_or(|(_, w)| *weighted > w) {
-                        best_buy = Some((signal, *weighted));
+                match signal.side {
+                    Side::Buy => {
+                        vote_buy += weighted;
+                        if best_buy.as_ref().is_none_or(|(_, w)| weighted > *w) {
+                            best_buy = Some((signal, weighted));
+                        }
                     }
-                }
-                Side::Sell => {
-                    vote_sell += weighted;
-                    if best_sell.is_none_or(|(_, w)| *weighted > w) {
-                        best_sell = Some((signal, *weighted));
+                    Side::Sell => {
+                        vote_sell += weighted;
+                        if best_sell.as_ref().is_none_or(|(_, w)| weighted > *w) {
+                            best_sell = Some((signal, weighted));
+                        }
                     }
                 }
             }
