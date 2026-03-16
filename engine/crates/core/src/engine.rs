@@ -586,7 +586,7 @@ mod tests {
     #[test]
     fn warmup_produces_no_signals() {
         let mut engine = Engine::new(EngineConfig::default());
-        for i in 0..49 {
+        for i in 0..63 {
             let bar = steady_bar("AAPL", 100.0 + (i as f64 * 0.01), 1000.0);
             assert!(
                 engine.on_bar(&bar).is_empty(),
@@ -611,7 +611,7 @@ mod tests {
         };
         let mut engine = Engine::new(config);
 
-        for _ in 0..55 {
+        for _ in 0..65 {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
         }
 
@@ -645,7 +645,7 @@ mod tests {
         engine.on_fill("AAPL", Side::Sell, 10.0, 85.0);
         assert!(engine.risk_state().killed);
 
-        for _ in 0..55 {
+        for _ in 0..65 {
             engine.on_bar(&steady_bar("TSLA", 100.0, 1000.0));
         }
         let crash = Bar {
@@ -682,7 +682,7 @@ mod tests {
         let mut engine = Engine::new(config);
 
         // Warm up and trigger buy
-        for _ in 0..55 {
+        for _ in 0..65 {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
         }
         let crash = Bar {
@@ -831,7 +831,7 @@ mod tests {
         let old_ts = 1_000_000_000_000_i64; // year 2001
 
         // Warm up with stale bars — features should still update
-        for i in 0..55 {
+        for i in 0..65 {
             let bar = Bar {
                 symbol: "AAPL".into(),
                 timestamp: old_ts + i * 60_000,
@@ -847,7 +847,7 @@ mod tests {
         // A crash bar that would normally trigger a buy — but it's stale
         let crash = Bar {
             symbol: "AAPL".into(),
-            timestamp: old_ts + 55 * 60_000,
+            timestamp: old_ts + 65 * 60_000,
             open: 100.0,
             high: 100.0,
             low: 93.0,
@@ -858,7 +858,7 @@ mod tests {
         assert!(intents.is_empty(), "stale data should not generate signals");
 
         // Verify the skip was tracked
-        assert_eq!(*engine.stale_bars_skipped().get("AAPL").unwrap(), 56);
+        assert_eq!(*engine.stale_bars_skipped().get("AAPL").unwrap(), 66);
 
         // Features should still have been updated despite staleness
         let features = engine.current_features("AAPL").unwrap();
@@ -887,7 +887,7 @@ mod tests {
         let mut engine = Engine::new(config);
 
         let old_ts = 1_000_000_000_000_i64;
-        for i in 0..55 {
+        for i in 0..65 {
             engine.on_bar(&Bar {
                 symbol: "AAPL".into(),
                 timestamp: old_ts + i * 60_000,
@@ -901,7 +901,7 @@ mod tests {
 
         let crash = Bar {
             symbol: "AAPL".into(),
-            timestamp: old_ts + 55 * 60_000,
+            timestamp: old_ts + 65 * 60_000,
             open: 100.0,
             high: 100.0,
             low: 93.0,

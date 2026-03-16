@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn test_crash_and_recovery_trade() {
         // 55 steady bars, then crash, then recovery
-        let mut prices: Vec<f64> = vec![100.0; 55];
+        let mut prices: Vec<f64> = vec![100.0; 65];
         prices.push(93.0); // crash — should trigger buy signal
         // Next bar opens at 93, engine should have pending buy
         prices.push(95.0); // recovery bar — buy fills at open=95
@@ -302,7 +302,7 @@ mod tests {
 
         let mut bars = make_bars(&prices, 1000.0);
         // Give crash bar high volume
-        bars[55].volume = 2000.0;
+        bars[65].volume = 2000.0;
 
         let config = EngineConfig {
             signal: crate::signals::mean_reversion::Config {
