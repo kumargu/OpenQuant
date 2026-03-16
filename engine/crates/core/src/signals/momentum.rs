@@ -138,7 +138,9 @@ impl Strategy for Momentum {
         }
 
         // Gate 2: ADX — trend must be strong enough
-        if features.adx < self.config.min_adx {
+        // Uses `is_nan()` guard because NaN < threshold is false in IEEE 754,
+        // which would incorrectly pass a simple `<` check.
+        if features.adx.is_nan() || features.adx < self.config.min_adx {
             return None;
         }
 
@@ -147,13 +149,16 @@ impl Strategy for Momentum {
             return None;
         }
 
-        // Gate 4: Volume — at least min_relative_volume
-        if features.relative_volume <= self.config.min_relative_volume {
+        // Gate 4: Volume — at least min_relative_volume (< to match ADX gate)
+        if features.relative_volume < self.config.min_relative_volume {
             return None;
         }
 
         // Score: composite of ADX strength, MA separation, and volume
-        let adx_strength = ((features.adx - self.config.min_adx) / 40.0).clamp(0.0, 1.0);
+        // ADX normalization: maps [min_adx, min_adx+ADX_RANGE] → [0, 1]
+        // At default min_adx=20: ADX 60 saturates. Rare for ADX to exceed 60.
+        const ADX_RANGE: f64 = 40.0;
+        let adx_strength = ((features.adx - self.config.min_adx) / ADX_RANGE).clamp(0.0, 1.0);
 
         let ma_separation = if features.atr > 1e-10 {
             ((features.ema_fast - features.ema_slow) / features.atr).clamp(0.0, 2.0) / 2.0
@@ -446,5 +451,53 @@ mod tests {
         let sig = strategy().score(&f, false).unwrap();
         assert!((sig.z_score - 0.5).abs() < 1e-10);
         assert!((sig.relative_volume - 1.8).abs() < 1e-10);
+    }
+
+    #[test]
+    fn score_bounded_0_to_1() {
+        // Extreme inputs: ADX=100, huge MA separation, huge volume
+        let s = Momentum::new(Config {
+            min_score: 0.0,
+            ..Config::default()
+        });
+        let mut f = features(100.0, 80.0, 5.0, 10.0);
+        f.ema_fast = 200.0;
+        f.ema_slow = 100.0;
+        f.atr = 0.1; // tiny ATR → huge normalized separation
+        let sig = s.score(&f, false).unwrap();
+        assert!(
+            sig.score <= 1.0,
+            "score should be bounded at 1.0, got {}",
+            sig.score
+        );
+        assert!(sig.score > 0.0);
+    }
+
+    #[test]
+    fn exit_with_zero_atr_defaults_to_moderate_score() {
+        let mut f = features(25.0, 15.0, 35.0, 1.0);
+        f.ema_fast_above_slow = false;
+        f.ema_fast = 99.0;
+        f.ema_slow = 100.0;
+        f.atr = 0.0;
+        let sig = strategy().score(&f, true).unwrap();
+        assert_eq!(sig.side, Side::Sell);
+        // With zero ATR, separation defaults to 1.0, score = 1.0/2 = 0.5
+        assert!((sig.score - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn nan_adx_produces_no_signal() {
+        // NaN comparisons return false in IEEE 754, so ADX gate passes (NaN < 20 = false).
+        // We guard against this explicitly in the strategy.
+        let f = features(f64::NAN, 35.0, 15.0, 1.5);
+        assert!(strategy().score(&f, false).is_none());
+    }
+
+    #[test]
+    fn volume_at_exact_threshold_passes() {
+        // Volume gate uses `<` (not `<=`), so exact threshold passes
+        let sig = strategy().score(&features(30.0, 35.0, 15.0, 0.8), false);
+        assert!(sig.is_some(), "volume at exact threshold should pass");
     }
 }
