@@ -84,6 +84,29 @@ min_relative_volume = 0.8
 
 
 # ---------------------------------------------------------------------------
+# Combiner — multi-strategy voting parameters
+# ---------------------------------------------------------------------------
+[combiner]
+
+# Enable multi-strategy combiner. Default: true.
+# When false, the engine uses only mean-reversion (single-strategy mode).
+# Useful for A/B testing or isolating individual strategy performance.
+enabled = true
+
+# Minimum |net_vote| to produce a trade signal (0.0-1.0+).
+# Higher = require stronger consensus, fewer trades, higher quality.
+# Lower = allow single-strategy signals through more easily.
+# At 0.0, any signal fires. At 0.5, strategies must agree strongly.
+min_net_score = 0.2
+
+# Strategy weights for score-weighted voting.
+# Higher weight = more influence on the combined signal.
+# Weights don't need to sum to 1.0, but it's easier to reason about.
+weight_mean_reversion = 0.5
+weight_momentum = 0.5
+
+
+# ---------------------------------------------------------------------------
 # Risk — position sizing and loss limits
 # ---------------------------------------------------------------------------
 [risk]
