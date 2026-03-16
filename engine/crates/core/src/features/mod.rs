@@ -31,19 +31,23 @@
 //! ```
 
 pub mod adx;
+pub mod donchian;
 pub mod ema;
 #[cfg(test)]
 mod reftest;
 pub mod ring_buf;
 pub mod rolling_stats;
 pub mod sma;
+pub mod vwap;
 
 // Re-export all types so existing code (`use crate::features::*`) still works.
 pub use adx::Adx;
+pub use donchian::{BandwidthPercentile, Donchian};
 pub use ema::{Ema, WilderEma};
 pub use ring_buf::RingBuf;
 pub use rolling_stats::RollingStats;
 pub use sma::Sma;
+pub use vwap::VwapState;
 
 // ---------------------------------------------------------------------------
 // Feature output — all computed features for a single bar
@@ -80,6 +84,20 @@ pub struct FeatureValues {
     pub bollinger_lower: f64,     // SMA(32) - 2 × std_dev(close, 32)
     pub bollinger_pct_b: f64,     // (close - lower) / (upper - lower), 0-1 normally
     pub bollinger_bandwidth: f64, // (upper - lower) / SMA(32), normalized width
+
+    // --- V3: VWAP features ---
+    pub vwap: f64,                // volume-weighted average price (session cumulative)
+    pub vwap_deviation: f64,      // close - vwap
+    pub vwap_z_score: f64,        // vwap_deviation / rolling_std(vwap_deviation)
+    pub vwap_session_bars: usize, // bars since session start
+    pub vwap_ready: bool,         // true when VWAP has enough session data
+
+    // --- V3: Donchian channel / breakout features ---
+    pub donchian_upper: f64,       // highest high over 32 bars
+    pub donchian_lower: f64,       // lowest low over 32 bars
+    pub donchian_mid: f64,         // (upper + lower) / 2
+    pub squeeze: bool,             // true when bandwidth is in bottom 20th percentile
+    pub bandwidth_percentile: f64, // 0.0-1.0 percentile rank of current bandwidth
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +128,13 @@ pub struct FeatureState {
 
     // V2 state: Bollinger Bands
     close_stats: RollingStats<32>, // rolling std of close prices
+
+    // V3 state: VWAP
+    vwap: VwapState,
+
+    // V3 state: Donchian channels + squeeze detection
+    donchian: Donchian<32>,
+    bandwidth_pct: BandwidthPercentile<64>,
 }
 
 impl Default for FeatureState {
@@ -150,13 +175,28 @@ impl FeatureState {
             adx: Adx::new(14),
 
             close_stats: RollingStats::new(),
+
+            vwap: VwapState::new(),
+
+            donchian: Donchian::new(),
+            bandwidth_pct: BandwidthPercentile::new(),
         }
     }
 
     /// Update features with a new bar. Returns computed values.
     /// This is the hot path — zero heap allocation, O(1) per call.
+    ///
+    /// `timestamp_ms`: unix millis of the bar. Used for VWAP daily reset.
+    /// Pass 0 for backtesting (no VWAP reset).
     #[inline]
-    pub fn update(&mut self, close: f64, high: f64, low: f64, volume: f64) -> FeatureValues {
+    pub fn update(
+        &mut self,
+        close: f64,
+        high: f64,
+        low: f64,
+        volume: f64,
+        timestamp_ms: i64,
+    ) -> FeatureValues {
         let prev_close = self.closes.last();
         self.closes.push(close);
         self.bar_count += 1;
@@ -253,6 +293,17 @@ impl FeatureState {
             0.0
         };
 
+        // --- V3: VWAP ---
+        let vwap_vals = self.vwap.update(high, low, close, volume, timestamp_ms);
+        let vwap_ready = self.vwap.is_ready();
+
+        // --- V3: Donchian channels ---
+        let donchian_vals = self.donchian.update(high, low);
+
+        // --- V3: Squeeze detection (bandwidth percentile) ---
+        let bandwidth_percentile = self.bandwidth_pct.push(bollinger_bandwidth);
+        let squeeze = bandwidth_percentile < 0.20;
+
         FeatureValues {
             return_1,
             return_5,
@@ -277,6 +328,16 @@ impl FeatureState {
             bollinger_lower,
             bollinger_pct_b,
             bollinger_bandwidth,
+            vwap: vwap_vals.vwap,
+            vwap_deviation: vwap_vals.deviation,
+            vwap_z_score: vwap_vals.z_score,
+            vwap_session_bars: vwap_vals.session_bars,
+            vwap_ready,
+            donchian_upper: donchian_vals.upper,
+            donchian_lower: donchian_vals.lower,
+            donchian_mid: donchian_vals.mid,
+            squeeze,
+            bandwidth_percentile,
         }
     }
 }
@@ -293,25 +354,31 @@ mod tests {
     fn feature_warmup() {
         let mut state = FeatureState::new();
         for i in 0..63 {
-            let f = state.update(100.0 + i as f64, 101.0 + i as f64, 99.0 + i as f64, 1000.0);
+            let f = state.update(
+                100.0 + i as f64,
+                101.0 + i as f64,
+                99.0 + i as f64,
+                1000.0,
+                0,
+            );
             assert!(!f.warmed_up, "should not be warmed up at bar {i}");
         }
-        let f = state.update(120.0, 121.0, 119.0, 1000.0);
+        let f = state.update(120.0, 121.0, 119.0, 1000.0, 0);
         assert!(f.warmed_up, "should be warmed up at bar 64");
     }
 
     #[test]
     fn return_1_computation() {
         let mut state = FeatureState::new();
-        state.update(100.0, 101.0, 99.0, 1000.0);
-        let f = state.update(105.0, 106.0, 104.0, 1000.0);
+        state.update(100.0, 101.0, 99.0, 1000.0, 0);
+        let f = state.update(105.0, 106.0, 104.0, 1000.0, 0);
         assert!((f.return_1 - 0.05).abs() < 1e-10, "expected 5% return");
     }
 
     #[test]
     fn return_1_first_bar_is_zero() {
         let mut state = FeatureState::new();
-        let f = state.update(100.0, 101.0, 99.0, 1000.0);
+        let f = state.update(100.0, 101.0, 99.0, 1000.0, 0);
         assert_eq!(f.return_1, 0.0, "first bar has no previous close");
     }
 
@@ -319,9 +386,9 @@ mod tests {
     fn relative_volume_spike() {
         let mut state = FeatureState::new();
         for _ in 0..20 {
-            state.update(100.0, 101.0, 99.0, 1000.0);
+            state.update(100.0, 101.0, 99.0, 1000.0, 0);
         }
-        let f = state.update(100.0, 101.0, 99.0, 2000.0);
+        let f = state.update(100.0, 101.0, 99.0, 2000.0, 0);
         assert!(
             f.relative_volume > 1.5,
             "expected high relative volume, got {}",
@@ -333,9 +400,9 @@ mod tests {
     fn z_score_extreme_drop() {
         let mut state = FeatureState::new();
         for _ in 0..20 {
-            state.update(100.0, 100.5, 99.5, 1000.0);
+            state.update(100.0, 100.5, 99.5, 1000.0, 0);
         }
-        let f = state.update(95.0, 100.0, 94.0, 1500.0);
+        let f = state.update(95.0, 100.0, 94.0, 1500.0, 0);
         assert!(
             f.return_z_score < -2.0,
             "expected z < -2, got {}",
@@ -347,7 +414,7 @@ mod tests {
     fn z_score_zero_for_constant_prices() {
         let mut state = FeatureState::new();
         for _ in 0..25 {
-            let f = state.update(100.0, 100.0, 100.0, 1000.0);
+            let f = state.update(100.0, 100.0, 100.0, 1000.0, 0);
             assert!(
                 f.return_z_score.abs() < 1e-10,
                 "constant prices should give z=0"
@@ -358,21 +425,21 @@ mod tests {
     #[test]
     fn bar_range_and_close_location() {
         let mut state = FeatureState::new();
-        let f = state.update(110.0, 110.0, 90.0, 1000.0);
+        let f = state.update(110.0, 110.0, 90.0, 1000.0, 0);
         assert!((f.bar_range - 20.0).abs() < 1e-10);
         assert!((f.close_location - 1.0).abs() < 1e-10);
 
-        let f = state.update(90.0, 110.0, 90.0, 1000.0);
+        let f = state.update(90.0, 110.0, 90.0, 1000.0, 0);
         assert!((f.close_location - 0.0).abs() < 1e-10);
 
-        let f = state.update(100.0, 110.0, 90.0, 1000.0);
+        let f = state.update(100.0, 110.0, 90.0, 1000.0, 0);
         assert!((f.close_location - 0.5).abs() < 1e-10);
     }
 
     #[test]
     fn zero_range_bar_close_location() {
         let mut state = FeatureState::new();
-        let f = state.update(100.0, 100.0, 100.0, 1000.0);
+        let f = state.update(100.0, 100.0, 100.0, 1000.0, 0);
         assert!((f.close_location - 0.5).abs() < 1e-10);
     }
 
@@ -382,7 +449,7 @@ mod tests {
         let prices = [100.0, 102.0, 104.0, 103.0, 101.0];
         let mut f = FeatureValues::default();
         for &p in &prices {
-            f = state.update(p, p + 1.0, p - 1.0, 1000.0);
+            f = state.update(p, p + 1.0, p - 1.0, 1000.0, 0);
         }
         assert!((f.sma_20 - 102.0).abs() < 1e-10);
     }
@@ -392,9 +459,9 @@ mod tests {
         let mut state = FeatureState::new();
         for i in 0..60 {
             let price = 100.0 + i as f64 * 0.5;
-            state.update(price, price + 0.5, price - 0.5, 1000.0);
+            state.update(price, price + 0.5, price - 0.5, 1000.0, 0);
         }
-        let f = state.update(130.0, 130.5, 129.5, 1000.0);
+        let f = state.update(130.0, 130.5, 129.5, 1000.0, 0);
         assert!(
             f.ema_fast > f.ema_slow,
             "fast EMA should be above slow in uptrend"
@@ -407,9 +474,9 @@ mod tests {
         let mut state = FeatureState::new();
         for i in 0..60 {
             let base = 100.0 + i as f64 * 2.0;
-            state.update(base, base + 1.0, base - 1.0, 1000.0);
+            state.update(base, base + 1.0, base - 1.0, 1000.0, 0);
         }
-        let f = state.update(220.0, 221.0, 219.0, 1000.0);
+        let f = state.update(220.0, 221.0, 219.0, 1000.0, 0);
         assert!(
             f.adx > 0.0,
             "ADX should be positive after warmup, got {}",
@@ -421,9 +488,9 @@ mod tests {
     fn bollinger_bands_computed() {
         let mut state = FeatureState::new();
         for _ in 0..50 {
-            state.update(100.0, 101.0, 99.0, 1000.0);
+            state.update(100.0, 101.0, 99.0, 1000.0, 0);
         }
-        let f = state.update(100.0, 101.0, 99.0, 1000.0);
+        let f = state.update(100.0, 101.0, 99.0, 1000.0, 0);
         assert!(f.bollinger_upper >= f.sma_20);
         assert!(f.bollinger_lower <= f.sma_20);
         assert!(
@@ -437,9 +504,9 @@ mod tests {
     fn bollinger_pct_b_above_one_for_breakout() {
         let mut state = FeatureState::new();
         for _ in 0..50 {
-            state.update(100.0, 100.5, 99.5, 1000.0);
+            state.update(100.0, 100.5, 99.5, 1000.0, 0);
         }
-        let f = state.update(115.0, 116.0, 114.0, 2000.0);
+        let f = state.update(115.0, 116.0, 114.0, 2000.0, 0);
         assert!(
             f.bollinger_pct_b > 1.0,
             "expected %B > 1.0 for breakout, got {}",

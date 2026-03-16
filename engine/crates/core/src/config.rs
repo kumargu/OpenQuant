@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::engine::{EngineConfig, SymbolOverrides};
 use crate::exit::ExitConfig;
 use crate::risk::RiskConfig;
-use crate::signals::{combiner, mean_reversion, momentum};
+use crate::signals::{breakout, combiner, mean_reversion, momentum, vwap_reversion};
 
 /// Top-level TOML file layout.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -19,6 +19,8 @@ pub struct ConfigFile {
     pub signal: mean_reversion::Config,
     pub momentum: momentum::Config,
     pub combiner: combiner::Config,
+    pub vwap_reversion: vwap_reversion::Config,
+    pub breakout: breakout::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
     pub data: DataConfig,
@@ -59,6 +61,8 @@ impl ConfigFile {
         EngineConfig {
             signal: self.signal,
             momentum: self.momentum,
+            vwap_reversion: self.vwap_reversion,
+            breakout: self.breakout,
             combiner: self.combiner,
             risk: self.risk,
             exit: self.exit,
@@ -103,6 +107,18 @@ enabled = false
 min_net_score = 0.3
 weight_mean_reversion = 0.6
 weight_momentum = 0.4
+weight_vwap_reversion = 0.15
+weight_breakout = 0.15
+
+[vwap_reversion]
+enabled = true
+buy_z_threshold = -2.0
+sell_z_threshold = 1.5
+
+[breakout]
+enabled = true
+squeeze_required = true
+min_volume_surge = 1.5
 
 [risk]
 max_position_notional = 5000.0
@@ -138,6 +154,14 @@ stop_loss_atr_mult = 4.0
         assert_eq!(cfg.combiner.min_net_score, 0.3);
         assert_eq!(cfg.combiner.weight_mean_reversion, 0.6);
         assert_eq!(cfg.combiner.weight_momentum, 0.4);
+        assert_eq!(cfg.combiner.weight_vwap_reversion, 0.15);
+        assert_eq!(cfg.combiner.weight_breakout, 0.15);
+        assert!(cfg.vwap_reversion.enabled);
+        assert_eq!(cfg.vwap_reversion.buy_z_threshold, -2.0);
+        assert_eq!(cfg.vwap_reversion.sell_z_threshold, 1.5);
+        assert!(cfg.breakout.enabled);
+        assert!(cfg.breakout.squeeze_required);
+        assert_eq!(cfg.breakout.min_volume_surge, 1.5);
         assert_eq!(cfg.risk.max_position_notional, 5000.0);
         assert_eq!(cfg.risk.max_daily_loss, 250.0);
         assert_eq!(cfg.exit.stop_loss_atr_mult, 3.0);

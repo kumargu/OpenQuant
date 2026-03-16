@@ -328,6 +328,7 @@ mod tests {
                     fixture.inputs.highs[i],
                     fixture.inputs.lows[i],
                     fixture.inputs.volumes[i],
+                    0, // no timestamp for reftests
                 );
 
                 if fixture.checkpoints.contains(&i) {

@@ -102,8 +102,60 @@ min_net_score = 0.2
 # Strategy weights for score-weighted voting.
 # Higher weight = more influence on the combined signal.
 # Weights don't need to sum to 1.0, but it's easier to reason about.
-weight_mean_reversion = 0.5
-weight_momentum = 0.5
+weight_mean_reversion = 0.4
+weight_momentum = 0.3
+weight_vwap_reversion = 0.15
+weight_breakout = 0.15
+
+
+# ---------------------------------------------------------------------------
+# VWAP Reversion — volume-weighted average price mean-reversion
+# ---------------------------------------------------------------------------
+[vwap_reversion]
+
+# Enable VWAP reversion strategy. Default: false (enable after backtesting).
+# When enabled and combiner is on, participates in multi-strategy voting.
+enabled = false
+
+# VWAP Z-score below which a buy signal fires. Default: -2.0
+# More negative = stricter, fewer trades, higher conviction.
+buy_z_threshold = -2.0
+
+# VWAP Z-score above which an exit signal fires. Default: 1.5
+sell_z_threshold = 1.5
+
+# Minimum volume relative to rolling average. Default: 1.0
+min_relative_volume = 1.0
+
+# Minimum score to act on. Default: 0.3
+min_score = 0.3
+
+# Bars to skip at session start (VWAP unstable early). Default: 30
+session_start_skip_bars = 30
+
+
+# ---------------------------------------------------------------------------
+# Breakout — volatility expansion from squeeze
+# ---------------------------------------------------------------------------
+[breakout]
+
+# Enable breakout strategy. Default: false (enable after backtesting).
+enabled = false
+
+# Require Bollinger squeeze before breakout. Default: true
+# When true, only trades breakouts from consolidation — higher quality signals.
+squeeze_required = true
+
+# Minimum volume surge for entry. Default: 1.2
+# Breakouts without volume are often false breakouts.
+min_volume_surge = 1.2
+
+# ATR multiplier for Chandelier trailing stop. Default: 3.0
+# Higher = wider stop (more room); lower = tighter stop.
+trailing_stop_atr_mult = 3.0
+
+# Minimum score to act on. Default: 0.3
+min_score = 0.3
 
 
 # ---------------------------------------------------------------------------

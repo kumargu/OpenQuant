@@ -26,9 +26,11 @@
 //! 2. Implement the `Strategy` trait
 //! 3. Add `pub mod my_strategy;` here
 
+pub mod breakout;
 pub mod combiner;
 pub mod mean_reversion;
 pub mod momentum;
+pub mod vwap_reversion;
 
 use crate::features::FeatureValues;
 
@@ -47,6 +49,10 @@ pub enum SignalReason {
     MeanReversionSell,
     MomentumBuy,
     MomentumSell,
+    VwapReversionBuy,
+    VwapReversionSell,
+    BreakoutBuy,
+    BreakoutSell,
     StopLoss,
     TakeProfit,
     MaxHoldTime,
@@ -59,6 +65,10 @@ impl SignalReason {
             Self::MeanReversionSell => "mean-reversion sell: overbought reversion",
             Self::MomentumBuy => "momentum buy: EMA crossover + ADX trend confirmation",
             Self::MomentumSell => "momentum sell: trend reversal (fast EMA below slow)",
+            Self::VwapReversionBuy => "vwap reversion buy: price below VWAP band",
+            Self::VwapReversionSell => "vwap reversion sell: price reverted above VWAP",
+            Self::BreakoutBuy => "breakout buy: Donchian breakout from squeeze",
+            Self::BreakoutSell => "breakout sell: Chandelier trailing stop",
             Self::StopLoss => "stop loss: price dropped below threshold",
             Self::TakeProfit => "take profit: price rose above threshold",
             Self::MaxHoldTime => "max hold time: position held too long",
