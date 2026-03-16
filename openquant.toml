@@ -58,6 +58,32 @@ trend_filter = true
 
 
 # ---------------------------------------------------------------------------
+# Momentum — trend-following strategy parameters
+# ---------------------------------------------------------------------------
+[momentum]
+
+# Minimum ADX to consider a trend tradeable (0-100 scale).
+# ADX < 20 = no trend (ranging), 20-40 = moderate, > 40 = strong.
+# Lower (15-18) catches more trends but more false signals.
+# Higher (25-30) only trades strong trends, fewer but higher quality signals.
+min_adx = 20.0
+
+# Minimum signal score to act on (0.0-1.0).
+# Score = 0.5×adx_strength + 0.3×ma_separation + 0.2×volume_boost.
+# Higher = more selective; lower = more trades.
+min_score = 0.3
+
+# When true, require +DI > -DI for buy signals (bullish confirmation).
+# Disable for experimental bidirectional momentum (not recommended long-only).
+directional_filter = true
+
+# Minimum volume relative to rolling average. Default: 0.8
+# Lower than mean-reversion (1.2) because trends persist on normal volume.
+# Set to 0.0 to disable volume filtering.
+min_relative_volume = 0.8
+
+
+# ---------------------------------------------------------------------------
 # Risk — position sizing and loss limits
 # ---------------------------------------------------------------------------
 [risk]

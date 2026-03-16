@@ -546,6 +546,7 @@ dependencies = [
  "criterion",
  "metrics",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
 ]

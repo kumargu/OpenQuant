@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::engine::{EngineConfig, SymbolOverrides};
 use crate::exit::ExitConfig;
 use crate::risk::RiskConfig;
-use crate::signals::mean_reversion;
+use crate::signals::{mean_reversion, momentum};
 
 /// Top-level TOML file layout.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -17,6 +17,7 @@ use crate::signals::mean_reversion;
 pub struct ConfigFile {
     pub metrics: MetricsConfig,
     pub signal: mean_reversion::Config,
+    pub momentum: momentum::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
     pub data: DataConfig,
@@ -56,6 +57,7 @@ impl ConfigFile {
     pub fn into_engine_config(self) -> EngineConfig {
         EngineConfig {
             signal: self.signal,
+            momentum: self.momentum,
             risk: self.risk,
             exit: self.exit,
             symbol_overrides: self.symbol_overrides,
