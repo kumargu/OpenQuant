@@ -26,6 +26,11 @@
 //! - Z-score: current return / rolling volatility
 //! - Volume: current volume / 20-bar avg volume
 //! - Bar shape: range (high - low), close location within bar
+//!
+//! V2 features (momentum indicators):
+//! - EMA: exponential moving average (fast=10, slow=30), O(1) no buffer
+//! - ADX: average directional index for trend strength (0-100)
+//! - Bollinger: %B and bandwidth from existing SMA/std
 
 // ---------------------------------------------------------------------------
 // Ring buffer — const-generic, stack-allocated, zero-alloc
@@ -256,12 +261,196 @@ impl<const N: usize> Sma<N> {
 }
 
 // ---------------------------------------------------------------------------
+// EMA — exponential moving average, O(1) per update, no buffer
+// ---------------------------------------------------------------------------
+
+/// Exponential Moving Average — weights recent prices exponentially more.
+///
+/// ```text
+///  EMA(t) = α × Price(t) + (1 - α) × EMA(t-1)
+///
+///  where α = 2 / (period + 1)    ← smoothing factor
+///
+///  Weight of bar k steps ago = α × (1-α)^k
+///  → latest bar dominates; old bars decay exponentially.
+/// ```
+///
+/// Unlike SMA which needs a ring buffer, EMA only stores one value.
+/// Memory: 32 bytes total (vs 256+ bytes for an SMA with buffer).
+#[derive(Clone)]
+pub struct Ema {
+    alpha: f64,
+    one_minus_alpha: f64,
+    value: f64,
+    count: usize,
+    period: usize,
+}
+
+impl Ema {
+    pub fn new(period: usize) -> Self {
+        let alpha = 2.0 / (period as f64 + 1.0);
+        Self {
+            alpha,
+            one_minus_alpha: 1.0 - alpha,
+            value: 0.0,
+            count: 0,
+            period,
+        }
+    }
+
+    /// Push a new value and return the updated EMA.
+    /// First value seeds the EMA (no smoothing applied).
+    #[inline]
+    pub fn push(&mut self, value: f64) -> f64 {
+        self.count += 1;
+        if self.count == 1 {
+            self.value = value;
+        } else {
+            self.value = self.alpha * value + self.one_minus_alpha * self.value;
+        }
+        self.value
+    }
+
+    #[inline]
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    /// Ready after `period` bars (EMA is technically valid from bar 1,
+    /// but needs ~period bars for the exponential weights to stabilize).
+    #[inline]
+    pub fn is_ready(&self) -> bool {
+        self.count >= self.period
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADX — average directional index, trend strength 0-100
+// ---------------------------------------------------------------------------
+
+/// Average Directional Index — measures trend strength regardless of direction.
+///
+/// ```text
+///  +DM = max(High(t) - High(t-1), 0)   if > -DM, else 0
+///  -DM = max(Low(t-1) - Low(t), 0)     if > +DM, else 0
+///
+///  +DI = 100 × EMA(+DM) / EMA(TrueRange)
+///  -DI = 100 × EMA(-DM) / EMA(TrueRange)
+///
+///  DX  = 100 × |+DI - -DI| / (+DI + -DI)
+///  ADX = EMA(DX)
+///
+///  ADX < 20  → no trend (mean-reversion territory)
+///  ADX 20-40 → moderate trend (momentum starts working)
+///  ADX > 40  → strong trend (momentum's sweet spot)
+/// ```
+///
+/// Implementation uses 4 internal EMAs — all O(1) per bar, ~200 bytes total.
+#[derive(Clone)]
+pub struct Adx {
+    plus_dm_ema: Ema,
+    minus_dm_ema: Ema,
+    tr_ema: Ema,
+    adx_ema: Ema,
+    prev_high: f64,
+    prev_low: f64,
+    prev_close: f64,
+    count: usize,
+    period: usize,
+}
+
+impl Adx {
+    pub fn new(period: usize) -> Self {
+        Self {
+            plus_dm_ema: Ema::new(period),
+            minus_dm_ema: Ema::new(period),
+            tr_ema: Ema::new(period),
+            adx_ema: Ema::new(period),
+            prev_high: 0.0,
+            prev_low: 0.0,
+            prev_close: 0.0,
+            count: 0,
+            period,
+        }
+    }
+
+    /// Update with a new bar. Returns `(adx, +DI, -DI)`.
+    #[inline]
+    pub fn update(&mut self, high: f64, low: f64, close: f64) -> (f64, f64, f64) {
+        self.count += 1;
+        if self.count == 1 {
+            self.prev_high = high;
+            self.prev_low = low;
+            self.prev_close = close;
+            return (0.0, 0.0, 0.0);
+        }
+
+        // Directional Movement: only the larger direction counts
+        let up_move = high - self.prev_high;
+        let down_move = self.prev_low - low;
+
+        let plus_dm = if up_move > down_move && up_move > 0.0 {
+            up_move
+        } else {
+            0.0
+        };
+        let minus_dm = if down_move > up_move && down_move > 0.0 {
+            down_move
+        } else {
+            0.0
+        };
+
+        // True Range
+        let hl = high - low;
+        let hc = (high - self.prev_close).abs();
+        let lc = (low - self.prev_close).abs();
+        let tr = hl.max(hc).max(lc);
+
+        self.prev_high = high;
+        self.prev_low = low;
+        self.prev_close = close;
+
+        // Smooth with EMAs
+        let smoothed_plus_dm = self.plus_dm_ema.push(plus_dm);
+        let smoothed_minus_dm = self.minus_dm_ema.push(minus_dm);
+        let smoothed_tr = self.tr_ema.push(tr);
+
+        if smoothed_tr < 1e-10 {
+            return (0.0, 0.0, 0.0);
+        }
+
+        // Directional Indicators
+        let plus_di = 100.0 * smoothed_plus_dm / smoothed_tr;
+        let minus_di = 100.0 * smoothed_minus_dm / smoothed_tr;
+
+        // Directional Index → ADX
+        let di_sum = plus_di + minus_di;
+        let dx = if di_sum > 1e-10 {
+            100.0 * (plus_di - minus_di).abs() / di_sum
+        } else {
+            0.0
+        };
+
+        let adx = self.adx_ema.push(dx);
+
+        (adx, plus_di, minus_di)
+    }
+
+    /// Ready after 2×period bars (DM smoothing + ADX smoothing).
+    #[inline]
+    pub fn is_ready(&self) -> bool {
+        self.count >= self.period * 2
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Feature output + per-symbol state
 // ---------------------------------------------------------------------------
 
 /// All computed features for a single symbol at current bar.
 #[derive(Debug, Clone, Default)]
 pub struct FeatureValues {
+    // --- V1: mean-reversion features ---
     pub return_1: f64,        // 1-bar return
     pub return_5: f64,        // 5-bar return
     pub return_20: f64,       // 20-bar return
@@ -275,12 +464,27 @@ pub struct FeatureValues {
     pub close_location: f64,  // (close - low) / (high - low)
     pub trend_up: bool,       // true when close > sma_50 (bullish trend)
     pub warmed_up: bool,      // true once all features have enough data
+
+    // --- V2: momentum features ---
+    pub ema_fast: f64,        // EMA(10) — fast exponential moving average
+    pub ema_slow: f64,        // EMA(30) — slow exponential moving average
+    pub ema_crossover: bool,  // true when EMA(10) > EMA(30) (bullish)
+    pub adx: f64,             // trend strength 0-100
+    pub plus_di: f64,         // +DI: bullish directional indicator
+    pub minus_di: f64,        // -DI: bearish directional indicator
+
+    // --- V2: Bollinger Band features (derived from existing SMA/std) ---
+    pub bollinger_upper: f64,    // SMA(20) + 2σ
+    pub bollinger_lower: f64,    // SMA(20) - 2σ
+    pub bollinger_pct_b: f64,    // (close - lower) / (upper - lower), 0-1 normally
+    pub bollinger_bandwidth: f64, // (upper - lower) / SMA(20), normalized width
 }
 
 /// Per-symbol feature state. All buffers are stack-allocated, fixed-size.
 /// Uses power-of-2 capacity (32) for a 20-bar lookback window.
 #[derive(Clone)]
 pub struct FeatureState {
+    // V1 state
     closes: RingBuf<64>,         // last N closes for lookback returns (64 for SMA-50)
     sma: Sma<32>,                // 20-bar SMA via running sum
     sma_long: Sma<64>,           // 50-bar SMA for trend detection
@@ -290,6 +494,11 @@ pub struct FeatureState {
     prev_close: Option<f64>,     // previous close for true range calculation
     bar_count: usize,
     warmup_period: usize,
+
+    // V2 state: momentum indicators
+    ema_fast: Ema,    // EMA(10) for momentum crossover
+    ema_slow: Ema,    // EMA(30) for momentum crossover
+    adx: Adx,         // ADX(14) for trend strength
 }
 
 impl Default for FeatureState {
@@ -309,7 +518,11 @@ impl FeatureState {
             volume_stats: RollingStats::new(),
             prev_close: None,
             bar_count: 0,
-            warmup_period: 50, // increased from 20 to accommodate SMA-50
+            warmup_period: 50, // SMA-50 needs 50 bars (bottleneck)
+
+            ema_fast: Ema::new(10),  // 10-bar EMA for momentum
+            ema_slow: Ema::new(30),  // 30-bar EMA for momentum
+            adx: Adx::new(14),       // 14-bar ADX for trend strength
         }
     }
 
@@ -391,6 +604,29 @@ impl FeatureState {
         // Trend: close above SMA-50 = bullish
         let trend_up = close > sma_50;
 
+        // --- V2: Momentum indicators ---
+        let ema_fast = self.ema_fast.push(close);
+        let ema_slow = self.ema_slow.push(close);
+        let ema_crossover = ema_fast > ema_slow;
+        let (adx_val, plus_di, minus_di) = self.adx.update(high, low, close);
+
+        // --- V2: Bollinger Bands (derived from existing SMA-20 and return std) ---
+        // Band width uses price-space std: return_std × close ≈ absolute price std
+        let price_std = std_dev * close;
+        let bollinger_upper = sma_20 + 2.0 * price_std;
+        let bollinger_lower = sma_20 - 2.0 * price_std;
+        let bb_width = bollinger_upper - bollinger_lower;
+        let bollinger_pct_b = if bb_width > 1e-10 {
+            (close - bollinger_lower) / bb_width
+        } else {
+            0.5
+        };
+        let bollinger_bandwidth = if sma_20 > 1e-10 {
+            bb_width / sma_20
+        } else {
+            0.0
+        };
+
         FeatureValues {
             return_1,
             return_5,
@@ -405,6 +641,17 @@ impl FeatureState {
             close_location,
             trend_up,
             warmed_up: self.bar_count >= self.warmup_period,
+
+            ema_fast,
+            ema_slow,
+            ema_crossover,
+            adx: adx_val,
+            plus_di,
+            minus_di,
+            bollinger_upper,
+            bollinger_lower,
+            bollinger_pct_b,
+            bollinger_bandwidth,
         }
     }
 }
@@ -671,5 +918,156 @@ mod tests {
         // But our SMA window is 32 (not 5), so it won't be full yet.
         // With 5 values in a 32-window, SMA = sum/5 = 102.0
         assert!((f.sma_20 - 102.0).abs() < 1e-10);
+    }
+
+    // --- EMA tests ---
+
+    #[test]
+    fn ema_first_value_equals_input() {
+        let mut ema = Ema::new(10);
+        let v = ema.push(100.0);
+        assert_eq!(v, 100.0);
+    }
+
+    #[test]
+    fn ema_converges_to_constant() {
+        let mut ema = Ema::new(10);
+        for _ in 0..100 {
+            ema.push(50.0);
+        }
+        assert!((ema.value() - 50.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ema_weights_recent_more() {
+        let mut ema = Ema::new(10);
+        for _ in 0..20 {
+            ema.push(100.0);
+        }
+        ema.push(110.0);
+        assert!(ema.value() > 100.0, "EMA should move toward spike");
+        assert!(ema.value() < 110.0, "EMA should not reach spike in one bar");
+    }
+
+    #[test]
+    fn ema_is_ready_after_period() {
+        let mut ema = Ema::new(10);
+        for i in 0..10 {
+            ema.push(i as f64);
+            if i < 9 {
+                assert!(!ema.is_ready());
+            }
+        }
+        assert!(ema.is_ready());
+    }
+
+    #[test]
+    fn ema_alpha_calculation() {
+        let ema = Ema::new(10);
+        // α = 2 / (10 + 1) ≈ 0.1818
+        assert!((ema.alpha - 2.0 / 11.0).abs() < 1e-10);
+    }
+
+    // --- ADX tests ---
+
+    #[test]
+    fn adx_returns_zero_on_first_bar() {
+        let mut adx = Adx::new(14);
+        let (val, pdi, mdi) = adx.update(100.0, 98.0, 99.0);
+        assert_eq!(val, 0.0);
+        assert_eq!(pdi, 0.0);
+        assert_eq!(mdi, 0.0);
+    }
+
+    #[test]
+    fn adx_rises_in_strong_uptrend() {
+        let mut adx = Adx::new(14);
+        for i in 0..50 {
+            let base = 100.0 + i as f64 * 2.0;
+            adx.update(base + 1.0, base - 1.0, base);
+        }
+        let (val, pdi, mdi) = adx.update(201.0, 199.0, 200.0);
+        assert!(val > 20.0, "ADX should be high in uptrend, got {val}");
+        assert!(pdi > mdi, "+DI should exceed -DI in uptrend");
+    }
+
+    #[test]
+    fn adx_low_in_ranging_market() {
+        let mut adx = Adx::new(14);
+        for i in 0..50 {
+            let offset = if i % 2 == 0 { 1.0 } else { -1.0 };
+            adx.update(100.0 + offset, 99.0 + offset, 99.5 + offset);
+        }
+        let (val, _, _) = adx.update(100.0, 99.0, 99.5);
+        assert!(val < 25.0, "ADX should be low in ranging market, got {val}");
+    }
+
+    #[test]
+    fn adx_is_ready_check() {
+        let mut adx = Adx::new(14);
+        for i in 0..27 {
+            adx.update(100.0 + i as f64, 99.0 + i as f64, 99.5 + i as f64);
+        }
+        assert!(!adx.is_ready(), "should not be ready at 27 bars");
+        adx.update(130.0, 128.0, 129.0);
+        assert!(adx.is_ready(), "should be ready at 28 bars (2×14)");
+    }
+
+    // --- Bollinger Band tests ---
+
+    #[test]
+    fn bollinger_bands_computed() {
+        let mut state = FeatureState::new();
+        // Feed enough bars to warm up
+        for _ in 0..50 {
+            state.update(100.0, 101.0, 99.0, 1000.0);
+        }
+        let f = state.update(100.0, 101.0, 99.0, 1000.0);
+        // With constant prices, std ≈ 0, so bands should be tight around SMA
+        assert!(f.bollinger_upper >= f.sma_20);
+        assert!(f.bollinger_lower <= f.sma_20);
+        // %B should be near 0.5 for a constant price at the center
+        assert!((f.bollinger_pct_b - 0.5).abs() < 0.2,
+            "expected %B near 0.5 for constant price, got {}", f.bollinger_pct_b);
+    }
+
+    #[test]
+    fn bollinger_pct_b_above_one_for_breakout() {
+        let mut state = FeatureState::new();
+        // Build a stable range
+        for _ in 0..50 {
+            state.update(100.0, 100.5, 99.5, 1000.0);
+        }
+        // Spike above the bands
+        let f = state.update(115.0, 116.0, 114.0, 2000.0);
+        assert!(f.bollinger_pct_b > 1.0,
+            "expected %B > 1.0 for breakout, got {}", f.bollinger_pct_b);
+    }
+
+    // --- EMA crossover in FeatureState ---
+
+    #[test]
+    fn ema_crossover_detected_in_uptrend() {
+        let mut state = FeatureState::new();
+        // Start low, then trend up strongly
+        for i in 0..60 {
+            let price = 100.0 + i as f64 * 0.5;
+            state.update(price, price + 0.5, price - 0.5, 1000.0);
+        }
+        let f = state.update(130.0, 130.5, 129.5, 1000.0);
+        assert!(f.ema_fast > f.ema_slow, "fast EMA should be above slow in uptrend");
+        assert!(f.ema_crossover, "crossover should be true in uptrend");
+    }
+
+    #[test]
+    fn adx_available_in_feature_state() {
+        let mut state = FeatureState::new();
+        // Strong uptrend for ADX to register
+        for i in 0..60 {
+            let base = 100.0 + i as f64 * 2.0;
+            state.update(base, base + 1.0, base - 1.0, 1000.0);
+        }
+        let f = state.update(220.0, 221.0, 219.0, 1000.0);
+        assert!(f.adx > 0.0, "ADX should be positive after warmup, got {}", f.adx);
     }
 }

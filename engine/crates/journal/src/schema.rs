@@ -95,9 +95,21 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
 /// column adds, so we catch and ignore "duplicate column name" errors).
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let new_columns = [
+        // V1 migrations
         ("features", "sma_50", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "atr", "REAL NOT NULL DEFAULT 0.0"),
         ("features", "trend_up", "INTEGER NOT NULL DEFAULT 0"),
+        // V2 migrations: momentum features
+        ("features", "ema_fast", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "ema_slow", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "ema_crossover", "INTEGER NOT NULL DEFAULT 0"),
+        ("features", "adx", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "plus_di", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "minus_di", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "bollinger_upper", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "bollinger_lower", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "bollinger_pct_b", "REAL NOT NULL DEFAULT 0.0"),
+        ("features", "bollinger_bandwidth", "REAL NOT NULL DEFAULT 0.0"),
     ];
 
     for (table, column, col_type) in &new_columns {

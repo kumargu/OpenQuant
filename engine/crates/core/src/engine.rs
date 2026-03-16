@@ -221,6 +221,13 @@ impl Engine {
             m.bars_processed.increment(1);
             m.z_score.record(features.return_z_score);
             m.relative_volume.record(features.relative_volume);
+            m.ema_fast.record(features.ema_fast);
+            m.ema_slow.record(features.ema_slow);
+            m.adx.record(features.adx);
+            m.plus_di.record(features.plus_di);
+            m.minus_di.record(features.minus_di);
+            m.bollinger_pct_b.record(features.bollinger_pct_b);
+            m.bollinger_bandwidth.record(features.bollinger_bandwidth);
         }
 
         // 1b. Stale data gate — update features but don't act
@@ -345,6 +352,13 @@ impl Engine {
             m.bars_processed.increment(1);
             m.z_score.record(features.return_z_score);
             m.relative_volume.record(features.relative_volume);
+            m.ema_fast.record(features.ema_fast);
+            m.ema_slow.record(features.ema_slow);
+            m.adx.record(features.adx);
+            m.plus_di.record(features.plus_di);
+            m.minus_di.record(features.minus_di);
+            m.bollinger_pct_b.record(features.bollinger_pct_b);
+            m.bollinger_bandwidth.record(features.bollinger_bandwidth);
         }
 
         // 1b. Stale data gate — record features but don't generate signals
