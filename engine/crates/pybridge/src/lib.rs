@@ -294,6 +294,18 @@ impl Engine {
                 dict.set_item("close_location", f.close_location)?;
                 dict.set_item("trend_up", f.trend_up)?;
                 dict.set_item("warmed_up", f.warmed_up)?;
+                // V2: momentum features
+                dict.set_item("ema_fast", f.ema_fast)?;
+                dict.set_item("ema_slow", f.ema_slow)?;
+                dict.set_item("ema_fast_above_slow", f.ema_fast_above_slow)?;
+                dict.set_item("adx", f.adx)?;
+                dict.set_item("plus_di", f.plus_di)?;
+                dict.set_item("minus_di", f.minus_di)?;
+                // V2: Bollinger features
+                dict.set_item("bollinger_upper", f.bollinger_upper)?;
+                dict.set_item("bollinger_lower", f.bollinger_lower)?;
+                dict.set_item("bollinger_pct_b", f.bollinger_pct_b)?;
+                dict.set_item("bollinger_bandwidth", f.bollinger_bandwidth)?;
                 Ok(Some(dict))
             }
             None => Ok(None),

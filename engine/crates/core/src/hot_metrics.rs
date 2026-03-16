@@ -17,9 +17,18 @@ pub struct SymbolHandles {
     pub on_bar_duration_ns: Histogram,
     pub stale_bars_skipped: Counter,
 
-    // Features
+    // Features — V1
     pub z_score: Histogram,
     pub relative_volume: Histogram,
+
+    // Features — V2 (momentum)
+    pub ema_fast: Histogram,
+    pub ema_slow: Histogram,
+    pub adx: Histogram,
+    pub plus_di: Histogram,
+    pub minus_di: Histogram,
+    pub bollinger_pct_b: Histogram,
+    pub bollinger_bandwidth: Histogram,
 
     // Signal
     pub signal_buy: Counter,
@@ -53,6 +62,14 @@ impl SymbolHandles {
 
             z_score: metrics::histogram!("features.z_score", "symbol" => s.clone()),
             relative_volume: metrics::histogram!("features.relative_volume", "symbol" => s.clone()),
+
+            ema_fast: metrics::histogram!("features.ema_fast", "symbol" => s.clone()),
+            ema_slow: metrics::histogram!("features.ema_slow", "symbol" => s.clone()),
+            adx: metrics::histogram!("features.adx", "symbol" => s.clone()),
+            plus_di: metrics::histogram!("features.plus_di", "symbol" => s.clone()),
+            minus_di: metrics::histogram!("features.minus_di", "symbol" => s.clone()),
+            bollinger_pct_b: metrics::histogram!("features.bollinger_pct_b", "symbol" => s.clone()),
+            bollinger_bandwidth: metrics::histogram!("features.bollinger_bandwidth", "symbol" => s.clone()),
 
             signal_buy: metrics::counter!("signal.fired", "symbol" => s.clone(), "side" => "buy"),
             signal_sell: metrics::counter!("signal.fired", "symbol" => s.clone(), "side" => "sell"),

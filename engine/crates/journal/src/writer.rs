@@ -52,7 +52,7 @@ pub struct FillRecord {
 /// Messages sent to the journal writer task.
 #[derive(Debug, Clone)]
 pub enum JournalMessage {
-    Bar(BarRecord),
+    Bar(Box<BarRecord>),
     Fill(FillRecord),
     Flush,
     Shutdown,
@@ -131,7 +131,7 @@ impl JournalHandle {
         let symbol = record.symbol.clone();
         self.metrics.record_pending(self.tx.capacity());
         if let Err(mpsc::error::TrySendError::Full(_)) =
-            self.tx.try_send(JournalMessage::Bar(record))
+            self.tx.try_send(JournalMessage::Bar(Box::new(record)))
         {
             self.drops.record_drop(&symbol);
             self.metrics.drops_bar.increment(1);
@@ -255,7 +255,7 @@ fn flush_batch(conn: &Connection, batch: &[JournalMessage]) {
 
     for msg in batch {
         match msg {
-            JournalMessage::Bar(rec) => write_bar_record(conn, rec),
+            JournalMessage::Bar(rec) => write_bar_record(conn, rec.as_ref()),
             JournalMessage::Fill(rec) => write_fill_record(conn, rec),
             JournalMessage::Flush => {} // just triggers the batch write
             JournalMessage::Shutdown => {} // handled above
@@ -284,11 +284,14 @@ fn write_bar_record(conn: &Connection, rec: &BarRecord) {
 
     let bar_id = conn.last_insert_rowid();
 
-    // Insert features
+    // Insert features (V1 + V2)
     conn.execute(
         "INSERT INTO features (bar_id, return_1, return_5, return_20, sma_20, sma_50, atr,
-         return_std_20, return_z_score, relative_volume, bar_range, close_location, trend_up, warmed_up)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+         return_std_20, return_z_score, relative_volume, bar_range, close_location, trend_up, warmed_up,
+         ema_fast, ema_slow, ema_fast_above_slow, adx, plus_di, minus_di,
+         bollinger_upper, bollinger_lower, bollinger_pct_b, bollinger_bandwidth)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                 ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
         rusqlite::params![
             bar_id,
             rec.features.return_1,
@@ -304,6 +307,16 @@ fn write_bar_record(conn: &Connection, rec: &BarRecord) {
             rec.features.close_location,
             rec.features.trend_up as i32,
             rec.features.warmed_up as i32,
+            rec.features.ema_fast,
+            rec.features.ema_slow,
+            rec.features.ema_fast_above_slow as i32,
+            rec.features.adx,
+            rec.features.plus_di,
+            rec.features.minus_di,
+            rec.features.bollinger_upper,
+            rec.features.bollinger_lower,
+            rec.features.bollinger_pct_b,
+            rec.features.bollinger_bandwidth,
         ],
     )
     .expect("failed to insert features");
@@ -372,6 +385,7 @@ mod tests {
                 close_location: 0.75,
                 trend_up: true,
                 warmed_up: true,
+                ..Default::default()
             },
             signal_fired: false,
             signal_side: None,
