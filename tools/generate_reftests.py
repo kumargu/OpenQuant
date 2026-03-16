@@ -162,6 +162,87 @@ def compute_adx(highs: list[float], lows: list[float], closes: list[float],
     return adx_vals, plus_di_vals, minus_di_vals
 
 
+def compute_vwap(highs: list[float], lows: list[float], closes: list[float],
+                 volumes: list[float]):
+    """Cumulative VWAP (no daily reset — all bars in one session).
+    Returns (vwap, deviation, z_score) per bar."""
+    cum_tp_vol = 0.0
+    cum_vol = 0.0
+    vwaps = []
+    deviations = []
+    z_scores = []
+    # Rolling std of deviations (window=32, matching Rust RollingStats<32>)
+    dev_buf = []
+
+    for i in range(len(closes)):
+        tp = (highs[i] + lows[i] + closes[i]) / 3.0
+        cum_tp_vol += tp * volumes[i]
+        cum_vol += volumes[i]
+
+        vwap = cum_tp_vol / cum_vol if cum_vol > 1e-10 else closes[i]
+        dev = closes[i] - vwap
+
+        dev_buf.append(dev)
+        w = dev_buf[-32:]  # last 32 values
+        n = len(w)
+        if n < 2:
+            std = 0.0
+        else:
+            m = sum(w) / n
+            var = sum((x - m) ** 2 for x in w) / n
+            std = max(var, 0.0) ** 0.5
+
+        z = dev / std if std > 1e-10 else 0.0
+
+        vwaps.append(vwap)
+        deviations.append(dev)
+        z_scores.append(z)
+
+    return vwaps, deviations, z_scores
+
+
+def compute_donchian(highs: list[float], lows: list[float], window: int):
+    """Donchian channels: highest high / lowest low over N bars.
+    Returns (upper, lower, mid) per bar."""
+    uppers = []
+    lowers = []
+    mids = []
+    high_buf = []
+    low_buf = []
+
+    for i in range(len(highs)):
+        high_buf.append(highs[i])
+        low_buf.append(lows[i])
+        w_h = high_buf[-window:]
+        w_l = low_buf[-window:]
+        upper = max(w_h)
+        lower = min(w_l)
+        uppers.append(upper)
+        lowers.append(lower)
+        mids.append((upper + lower) / 2.0)
+
+    return uppers, lowers, mids
+
+
+def compute_bandwidth_percentile(bandwidths: list[float], window: int):
+    """Bandwidth percentile rank: fraction of recent values <= current.
+    Returns percentile (0-1) per bar."""
+    percentiles = []
+    buf = []
+
+    for bw in bandwidths:
+        buf.append(bw)
+        w = buf[-window:]
+        n = len(w)
+        if n < 2:
+            percentiles.append(0.5)
+        else:
+            count_below = sum(1 for v in w if v <= bw)
+            percentiles.append(count_below / n)
+
+    return percentiles
+
+
 def compute_bollinger(closes: list[float], sma_window: int, std_window: int):
     """Bollinger Bands: SMA ± 2×std, %B, bandwidth."""
     sma_vals = compute_sma(closes, sma_window)
@@ -237,6 +318,9 @@ def make_fixture(seed: int, n_bars: int, label: str) -> dict:
     adx, plus_di, minus_di = compute_adx(highs, lows, closes, 14)
     boll_upper, boll_lower, boll_pct_b, boll_bw = compute_bollinger(
         closes, sma_window=32, std_window=32)
+    vwap_vals, vwap_dev, vwap_z = compute_vwap(highs, lows, closes, volumes)
+    don_upper, don_lower, don_mid = compute_donchian(highs, lows, window=32)
+    bw_percentile = compute_bandwidth_percentile(boll_bw, window=64)
 
     # Sample at specific bars for testing (after warmup)
     # Use multiple checkpoints to catch drift
@@ -265,6 +349,13 @@ def make_fixture(seed: int, n_bars: int, label: str) -> dict:
             "bollinger_lower": {str(c): boll_lower[c] for c in checkpoints},
             "bollinger_pct_b": {str(c): boll_pct_b[c] for c in checkpoints},
             "bollinger_bandwidth": {str(c): boll_bw[c] for c in checkpoints},
+            "vwap": {str(c): vwap_vals[c] for c in checkpoints},
+            "vwap_deviation": {str(c): vwap_dev[c] for c in checkpoints},
+            "vwap_z_score": {str(c): vwap_z[c] for c in checkpoints},
+            "donchian_upper": {str(c): don_upper[c] for c in checkpoints},
+            "donchian_lower": {str(c): don_lower[c] for c in checkpoints},
+            "donchian_mid": {str(c): don_mid[c] for c in checkpoints},
+            "bandwidth_percentile": {str(c): bw_percentile[c] for c in checkpoints},
         },
         "checkpoints": checkpoints,
     }
