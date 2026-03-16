@@ -79,11 +79,7 @@ mod tests {
 
     /// Run a per-bar function over fixture inputs, collecting outputs at checkpoints.
     /// This is the core pattern: feed bars → snapshot at checkpoints → compare.
-    fn run_checkpoints<S, F>(
-        fixture: &Fixture,
-        mut state: S,
-        mut step: F,
-    ) -> Vec<(usize, f64)>
+    fn run_checkpoints<S, F>(fixture: &Fixture, mut state: S, mut step: F) -> Vec<(usize, f64)>
     where
         F: FnMut(&mut S, f64, f64, f64, f64) -> f64,
     {
@@ -133,11 +129,8 @@ mod tests {
     }
 
     /// Convenience: run an indicator over all fixtures and verify.
-    fn verify_all_fixtures<S, F>(
-        indicator_name: &str,
-        make_state: impl Fn() -> S,
-        step: F,
-    ) where
+    fn verify_all_fixtures<S, F>(indicator_name: &str, make_state: impl Fn() -> S, step: F)
+    where
         F: Fn(&mut S, f64, f64, f64, f64) -> f64 + Copy,
     {
         let file = load_fixtures();
@@ -154,16 +147,20 @@ mod tests {
 
     #[test]
     fn reftest_ema_10() {
-        verify_all_fixtures("ema_10", || Ema::new(10), |ema, close, _, _, _| {
-            ema.push(close)
-        });
+        verify_all_fixtures(
+            "ema_10",
+            || Ema::new(10),
+            |ema, close, _, _, _| ema.push(close),
+        );
     }
 
     #[test]
     fn reftest_ema_30() {
-        verify_all_fixtures("ema_30", || Ema::new(30), |ema, close, _, _, _| {
-            ema.push(close)
-        });
+        verify_all_fixtures(
+            "ema_30",
+            || Ema::new(30),
+            |ema, close, _, _, _| ema.push(close),
+        );
     }
 
     #[test]
@@ -306,11 +303,7 @@ mod tests {
                 let upper = sma + 2.0 * std;
                 let lower = sma - 2.0 * std;
                 let width = upper - lower;
-                if sma > 1e-10 {
-                    width / sma
-                } else {
-                    0.0
-                }
+                if sma > 1e-10 { width / sma } else { 0.0 }
             },
         );
     }
