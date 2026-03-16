@@ -23,7 +23,9 @@ use crate::hot_metrics::HotMetrics;
 use crate::market_data::Bar;
 use crate::portfolio::Portfolio;
 use crate::risk::{self, RiskConfig, RiskState};
-use crate::signals::{Side, SignalReason, Strategy, combiner, mean_reversion, momentum};
+use crate::signals::{
+    Side, SignalReason, Strategy, breakout, combiner, mean_reversion, momentum, vwap_reversion,
+};
 
 /// An order the engine wants placed.
 #[derive(Debug, Clone)]
@@ -71,6 +73,8 @@ pub struct SymbolOverrides {
 pub struct EngineConfig {
     pub signal: mean_reversion::Config,
     pub momentum: momentum::Config,
+    pub vwap_reversion: vwap_reversion::Config,
+    pub breakout: breakout::Config,
     pub combiner: combiner::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
@@ -103,46 +107,59 @@ pub struct Engine {
 
 impl Engine {
     /// Build the default strategy combiner from config.
-    fn build_combiner(
-        signal: &mean_reversion::Config,
-        momentum_cfg: &momentum::Config,
-        combiner_cfg: &combiner::Config,
-    ) -> Box<dyn Strategy> {
-        let strategies = vec![
-            combiner::StrategyEntry {
-                strategy: Box::new(mean_reversion::MeanReversion::new(signal.clone())),
-                weight: combiner_cfg.weight_mean_reversion,
+    /// Only includes strategies that are enabled and have weight > 0.
+    fn build_combiner(config: &EngineConfig) -> Box<dyn Strategy> {
+        let mut strategies = Vec::new();
+
+        if config.combiner.weight_mean_reversion > 0.0 {
+            strategies.push(combiner::StrategyEntry {
+                strategy: Box::new(mean_reversion::MeanReversion::new(config.signal.clone())),
+                weight: config.combiner.weight_mean_reversion,
                 name: "mean_reversion",
-            },
-            combiner::StrategyEntry {
-                strategy: Box::new(momentum::Momentum::new(momentum_cfg.clone())),
-                weight: combiner_cfg.weight_momentum,
+            });
+        }
+        if config.combiner.weight_momentum > 0.0 {
+            strategies.push(combiner::StrategyEntry {
+                strategy: Box::new(momentum::Momentum::new(config.momentum.clone())),
+                weight: config.combiner.weight_momentum,
                 name: "momentum",
-            },
-        ];
+            });
+        }
+        if config.vwap_reversion.enabled && config.combiner.weight_vwap_reversion > 0.0 {
+            strategies.push(combiner::StrategyEntry {
+                strategy: Box::new(vwap_reversion::VwapReversion::new(
+                    config.vwap_reversion.clone(),
+                )),
+                weight: config.combiner.weight_vwap_reversion,
+                name: "vwap_reversion",
+            });
+        }
+        if config.breakout.enabled && config.combiner.weight_breakout > 0.0 {
+            strategies.push(combiner::StrategyEntry {
+                strategy: Box::new(breakout::Breakout::new(config.breakout.clone())),
+                weight: config.combiner.weight_breakout,
+                name: "breakout",
+            });
+        }
+
         Box::new(combiner::StrategyCombiner::new(
             strategies,
-            combiner_cfg.min_net_score,
+            config.combiner.min_net_score,
         ))
     }
 
     /// Build the strategy from config — combiner or single mean-reversion.
-    fn build_strategy(
-        signal: &mean_reversion::Config,
-        momentum_cfg: &momentum::Config,
-        combiner_cfg: &combiner::Config,
-    ) -> Box<dyn Strategy> {
-        if combiner_cfg.enabled {
-            Self::build_combiner(signal, momentum_cfg, combiner_cfg)
+    fn build_strategy(config: &EngineConfig) -> Box<dyn Strategy> {
+        if config.combiner.enabled {
+            Self::build_combiner(config)
         } else {
-            Box::new(mean_reversion::MeanReversion::new(signal.clone()))
+            Box::new(mean_reversion::MeanReversion::new(config.signal.clone()))
         }
     }
 
-    /// Create engine with strategy combiner (mean-reversion + momentum).
+    /// Create engine with strategy combiner (mean-reversion + momentum + optional VWAP/breakout).
     pub fn new(config: EngineConfig) -> Self {
-        let default_strategy =
-            Self::build_strategy(&config.signal, &config.momentum, &config.combiner);
+        let default_strategy = Self::build_strategy(&config);
 
         // Build per-symbol strategies and exit configs from overrides
         let mut symbol_strategies: HashMap<String, Box<dyn Strategy>> = HashMap::new();
@@ -160,11 +177,12 @@ impl Engine {
                 trend_filter: ovr.trend_filter.unwrap_or(config.signal.trend_filter),
                 ..config.signal.clone()
             };
-            // Per-symbol strategy with overridden mean-reversion config
-            symbol_strategies.insert(
-                symbol.clone(),
-                Self::build_strategy(&sig, &config.momentum, &config.combiner),
-            );
+            // Per-symbol config with overridden mean-reversion settings
+            let sym_config = EngineConfig {
+                signal: sig,
+                ..config.clone()
+            };
+            symbol_strategies.insert(symbol.clone(), Self::build_strategy(&sym_config));
 
             let exit = ExitConfig {
                 stop_loss_pct: ovr.stop_loss_pct.unwrap_or(config.exit.stop_loss_pct),
@@ -253,7 +271,8 @@ impl Engine {
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
         let feature_state = self.features.entry(bar.symbol.clone()).or_default();
 
-        let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
+        let features =
+            feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
         self.last_features
             .insert(bar.symbol.clone(), features.clone());
 
@@ -384,7 +403,8 @@ impl Engine {
         // 1. Update features (always, even for stale bars)
         let feature_state = self.features.entry(bar.symbol.clone()).or_default();
 
-        let features = feature_state.update(bar.close, bar.high, bar.low, bar.volume);
+        let features =
+            feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
         self.last_features
             .insert(bar.symbol.clone(), features.clone());
 

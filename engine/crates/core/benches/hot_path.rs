@@ -107,7 +107,7 @@ fn bench_feature_update(c: &mut Criterion) {
     c.bench_function("feature_update", |b| {
         b.iter(|| {
             let bar = &bars[idx % bars.len()];
-            black_box(state.update(bar.close, bar.high, bar.low, bar.volume));
+            black_box(state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp));
             idx += 1;
         })
     });

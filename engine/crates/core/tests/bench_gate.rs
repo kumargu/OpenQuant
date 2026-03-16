@@ -106,13 +106,13 @@ fn gate_feature_update() {
     let bars = generate_bars(200, 42);
     let mut state = FeatureState::new();
     for b in &bars[..100] {
-        state.update(b.close, b.high, b.low, b.volume);
+        state.update(b.close, b.high, b.low, b.volume, b.timestamp);
     }
 
     let mut idx = 100;
     let ns = median_ns(10_000, || {
         let bar = &bars[idx % bars.len()];
-        std::hint::black_box(state.update(bar.close, bar.high, bar.low, bar.volume));
+        std::hint::black_box(state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp));
         idx += 1;
     });
 

@@ -309,6 +309,145 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // V3 reference tests: VWAP, Donchian, Bandwidth Percentile
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn reftest_vwap() {
+        let file = load_fixtures();
+        let tol = file.tolerance;
+        for fixture in &file.fixtures {
+            let mut state = vwap::VwapState::new();
+            let mut results = Vec::new();
+            for i in 0..fixture.inputs.closes.len() {
+                // timestamp=0 means no daily reset (single session)
+                let vals = state.update(
+                    fixture.inputs.highs[i],
+                    fixture.inputs.lows[i],
+                    fixture.inputs.closes[i],
+                    fixture.inputs.volumes[i],
+                    0,
+                );
+                if fixture.checkpoints.contains(&i) {
+                    results.push((i, vals.vwap));
+                }
+            }
+            verify_indicator(fixture, "vwap", &results, tol);
+        }
+    }
+
+    #[test]
+    fn reftest_vwap_deviation() {
+        let file = load_fixtures();
+        let tol = file.tolerance;
+        for fixture in &file.fixtures {
+            let mut state = vwap::VwapState::new();
+            let mut results = Vec::new();
+            for i in 0..fixture.inputs.closes.len() {
+                let vals = state.update(
+                    fixture.inputs.highs[i],
+                    fixture.inputs.lows[i],
+                    fixture.inputs.closes[i],
+                    fixture.inputs.volumes[i],
+                    0,
+                );
+                if fixture.checkpoints.contains(&i) {
+                    results.push((i, vals.deviation));
+                }
+            }
+            verify_indicator(fixture, "vwap_deviation", &results, tol);
+        }
+    }
+
+    #[test]
+    fn reftest_vwap_z_score() {
+        let file = load_fixtures();
+        let tol = file.tolerance;
+        for fixture in &file.fixtures {
+            let mut state = vwap::VwapState::new();
+            let mut results = Vec::new();
+            for i in 0..fixture.inputs.closes.len() {
+                let vals = state.update(
+                    fixture.inputs.highs[i],
+                    fixture.inputs.lows[i],
+                    fixture.inputs.closes[i],
+                    fixture.inputs.volumes[i],
+                    0,
+                );
+                if fixture.checkpoints.contains(&i) {
+                    results.push((i, vals.z_score));
+                }
+            }
+            verify_indicator(fixture, "vwap_z_score", &results, tol);
+        }
+    }
+
+    #[test]
+    fn reftest_donchian_upper() {
+        verify_all_fixtures(
+            "donchian_upper",
+            donchian::Donchian::<32>::new,
+            |d, _close, high, low, _vol| {
+                let vals = d.update(high, low);
+                vals.upper
+            },
+        );
+    }
+
+    #[test]
+    fn reftest_donchian_lower() {
+        verify_all_fixtures(
+            "donchian_lower",
+            donchian::Donchian::<32>::new,
+            |d, _close, high, low, _vol| {
+                let vals = d.update(high, low);
+                vals.lower
+            },
+        );
+    }
+
+    #[test]
+    fn reftest_donchian_mid() {
+        verify_all_fixtures(
+            "donchian_mid",
+            donchian::Donchian::<32>::new,
+            |d, _close, high, low, _vol| {
+                let vals = d.update(high, low);
+                vals.mid
+            },
+        );
+    }
+
+    #[test]
+    fn reftest_bandwidth_percentile() {
+        // Bandwidth percentile depends on Bollinger bandwidth, so we need
+        // to compute Bollinger first, then feed bandwidth to the percentile tracker.
+        struct State {
+            sma: Sma<32>,
+            stats: RollingStats<32>,
+            bp: donchian::BandwidthPercentile<64>,
+        }
+        verify_all_fixtures(
+            "bandwidth_percentile",
+            || State {
+                sma: Sma::new(),
+                stats: RollingStats::new(),
+                bp: donchian::BandwidthPercentile::new(),
+            },
+            |s, close, _, _, _| {
+                let sma = s.sma.push(close);
+                s.stats.push(close);
+                let std = s.stats.std_dev();
+                let upper = sma + 2.0 * std;
+                let lower = sma - 2.0 * std;
+                let width = upper - lower;
+                let bandwidth = if sma > 1e-10 { width / sma } else { 0.0 };
+                s.bp.push(bandwidth)
+            },
+        );
+    }
+
+    // ------------------------------------------------------------------
     // Full pipeline reference test: FeatureState end-to-end
     // ------------------------------------------------------------------
 
@@ -328,6 +467,7 @@ mod tests {
                     fixture.inputs.highs[i],
                     fixture.inputs.lows[i],
                     fixture.inputs.volumes[i],
+                    0, // no timestamp for reftests
                 );
 
                 if fixture.checkpoints.contains(&i) {
@@ -392,6 +532,54 @@ mod tests {
                         fixture.expected["bollinger_bandwidth"][&key],
                         tol,
                         &format!("[{label}] pipeline bollinger_bandwidth @ bar {i}"),
+                    );
+
+                    // VWAP
+                    assert_close(
+                        f.vwap,
+                        fixture.expected["vwap"][&key],
+                        tol,
+                        &format!("[{label}] pipeline vwap @ bar {i}"),
+                    );
+                    assert_close(
+                        f.vwap_deviation,
+                        fixture.expected["vwap_deviation"][&key],
+                        tol,
+                        &format!("[{label}] pipeline vwap_deviation @ bar {i}"),
+                    );
+                    assert_close(
+                        f.vwap_z_score,
+                        fixture.expected["vwap_z_score"][&key],
+                        tol,
+                        &format!("[{label}] pipeline vwap_z_score @ bar {i}"),
+                    );
+
+                    // Donchian
+                    assert_close(
+                        f.donchian_upper,
+                        fixture.expected["donchian_upper"][&key],
+                        tol,
+                        &format!("[{label}] pipeline donchian_upper @ bar {i}"),
+                    );
+                    assert_close(
+                        f.donchian_lower,
+                        fixture.expected["donchian_lower"][&key],
+                        tol,
+                        &format!("[{label}] pipeline donchian_lower @ bar {i}"),
+                    );
+                    assert_close(
+                        f.donchian_mid,
+                        fixture.expected["donchian_mid"][&key],
+                        tol,
+                        &format!("[{label}] pipeline donchian_mid @ bar {i}"),
+                    );
+
+                    // Bandwidth percentile
+                    assert_close(
+                        f.bandwidth_percentile,
+                        fixture.expected["bandwidth_percentile"][&key],
+                        tol,
+                        &format!("[{label}] pipeline bandwidth_percentile @ bar {i}"),
                     );
                 }
             }

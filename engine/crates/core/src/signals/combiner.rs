@@ -73,6 +73,12 @@ pub struct Config {
 
     /// Weight for momentum strategy. Default: 0.5
     pub weight_momentum: f64,
+
+    /// Weight for VWAP reversion strategy. Default: 0.0 (disabled by default)
+    pub weight_vwap_reversion: f64,
+
+    /// Weight for breakout strategy. Default: 0.0 (disabled by default)
+    pub weight_breakout: f64,
 }
 
 impl Default for Config {
@@ -82,6 +88,8 @@ impl Default for Config {
             min_net_score: 0.2,
             weight_mean_reversion: 0.5,
             weight_momentum: 0.5,
+            weight_vwap_reversion: 0.0,
+            weight_breakout: 0.0,
         }
     }
 }
