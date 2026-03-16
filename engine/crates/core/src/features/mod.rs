@@ -122,6 +122,13 @@ impl FeatureState {
         // Sma<64> needs 64 bars (binding constraint).
         // EMA(30) needs ~30, ADX(14) needs 28, RollingStats<32> needs 32.
         const WARMUP: usize = 64;
+        const EMA_SLOW_PERIOD: usize = 30;
+        const ADX_PERIOD: usize = 14;
+        // Guard: warmup must cover all indicators
+        debug_assert!(WARMUP >= 64, "must cover Sma<64>");
+        debug_assert!(WARMUP >= EMA_SLOW_PERIOD, "must cover EMA slow period");
+        debug_assert!(WARMUP >= ADX_PERIOD * 2, "must cover ADX (2×period)");
+        debug_assert!(WARMUP >= 32, "must cover RollingStats<32>");
 
         Self {
             closes: RingBuf::new(),

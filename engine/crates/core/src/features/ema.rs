@@ -221,6 +221,19 @@ mod tests {
         assert!((v - expected).abs() < 1e-10);
     }
 
+    #[test]
+    fn ema_exact_three_values_period_3() {
+        // EMA(3) of [10, 20, 30]: α = 2/4 = 0.5
+        // After [10]: 10.0
+        // After [20]: 0.5*20 + 0.5*10 = 15.0
+        // After [30]: 0.5*30 + 0.5*15 = 22.5
+        let mut ema = Ema::new(3);
+        ema.push(10.0);
+        ema.push(20.0);
+        let v = ema.push(30.0);
+        assert!((v - 22.5).abs() < 1e-10, "got {v}, expected 22.5");
+    }
+
     // --- WilderEma tests ---
 
     #[test]
