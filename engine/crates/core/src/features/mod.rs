@@ -32,6 +32,8 @@
 
 pub mod adx;
 pub mod ema;
+#[cfg(test)]
+mod reftest;
 pub mod ring_buf;
 pub mod rolling_stats;
 pub mod sma;
