@@ -89,6 +89,9 @@ pub struct SignalOutput {
     /// Cheap to copy (two f64s), useful for trade journals.
     pub z_score: f64,
     pub relative_volume: f64,
+    /// Vote breakdown from the combiner (e.g. "mr:BUY(0.48)+mom:BUY(0.21)").
+    /// Empty for single-strategy signals.
+    pub votes: String,
 }
 
 /// Trait that all strategies implement.

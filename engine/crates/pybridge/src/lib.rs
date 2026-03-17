@@ -237,6 +237,9 @@ impl Engine {
                 ),
             )?;
             dict.set_item("score", intent.signal_score)?;
+            if !intent.votes.is_empty() {
+                dict.set_item("votes", &intent.votes)?;
+            }
             results.push(dict);
         }
 

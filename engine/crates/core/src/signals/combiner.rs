@@ -68,6 +68,14 @@ pub struct Config {
     /// Set to 0.0 to let any signal fire (no conflict filtering).
     pub min_net_score: f64,
 
+    /// Minimum number of strategies that must vote (on either side) before
+    /// the combiner produces a signal. Default: 1.
+    ///
+    /// Set to 2 to require at least two strategies to agree/disagree before
+    /// acting. This prevents single-strategy pass-through when min_net_score
+    /// is low enough that one strategy alone clears the threshold.
+    pub min_strategies: usize,
+
     /// Weight for mean-reversion strategy. Default: 0.5
     pub weight_mean_reversion: f64,
 
@@ -86,6 +94,7 @@ impl Default for Config {
         Self {
             enabled: true,
             min_net_score: 0.2,
+            min_strategies: 1,
             weight_mean_reversion: 0.5,
             weight_momentum: 0.5,
             weight_vwap_reversion: 0.0,
@@ -102,6 +111,7 @@ impl Default for Config {
 pub struct StrategyCombiner {
     strategies: Vec<StrategyEntry>,
     min_net_score: f64,
+    min_strategies: usize,
 }
 
 impl StrategyCombiner {
@@ -109,7 +119,13 @@ impl StrategyCombiner {
         Self {
             strategies,
             min_net_score,
+            min_strategies: 1,
         }
+    }
+
+    pub fn with_min_strategies(mut self, min_strategies: usize) -> Self {
+        self.min_strategies = min_strategies;
+        self
     }
 }
 
@@ -117,6 +133,8 @@ impl Strategy for StrategyCombiner {
     fn score(&self, features: &FeatureValues, has_position: bool) -> Option<SignalOutput> {
         let mut vote_buy = 0.0_f64;
         let mut vote_sell = 0.0_f64;
+        let mut num_voters = 0_usize;
+        let mut vote_parts: Vec<String> = Vec::new();
         // Track the highest-conviction signal per side (owned, no Vec needed).
         let mut best_buy: Option<(SignalOutput, f64)> = None; // (signal, weighted_score)
         let mut best_sell: Option<(SignalOutput, f64)> = None;
@@ -125,6 +143,12 @@ impl Strategy for StrategyCombiner {
         for entry in &self.strategies {
             if let Some(signal) = entry.strategy.score(features, has_position) {
                 let weighted = entry.weight * signal.score;
+                num_voters += 1;
+                let side_label = match signal.side {
+                    Side::Buy => "BUY",
+                    Side::Sell => "SELL",
+                };
+                vote_parts.push(format!("{}:{}({:.2})", entry.name, side_label, weighted));
                 match signal.side {
                     Side::Buy => {
                         vote_buy += weighted;
@@ -142,11 +166,18 @@ impl Strategy for StrategyCombiner {
             }
         }
 
+        // Gate: require minimum number of strategies to vote
+        if num_voters < self.min_strategies {
+            return None;
+        }
+
         let net = vote_buy - vote_sell;
 
         if net.abs() < self.min_net_score {
             return None;
         }
+
+        let votes = vote_parts.join("+");
 
         if net > 0.0 {
             // Net buy — use the strongest buy signal's reason and snapshot
@@ -157,6 +188,7 @@ impl Strategy for StrategyCombiner {
                 reason: best.reason,
                 z_score: best.z_score,
                 relative_volume: best.relative_volume,
+                votes,
             })
         } else {
             // Net sell — use the strongest sell signal's reason and snapshot
@@ -167,6 +199,7 @@ impl Strategy for StrategyCombiner {
                 reason: best.reason,
                 z_score: best.z_score,
                 relative_volume: best.relative_volume,
+                votes,
             })
         }
     }
@@ -193,6 +226,7 @@ mod tests {
                     reason,
                     z_score: -2.5,
                     relative_volume: 1.5,
+                    votes: String::new(),
                 }),
             }
         }
@@ -205,6 +239,7 @@ mod tests {
                     reason,
                     z_score: 2.0,
                     relative_volume: 1.3,
+                    votes: String::new(),
                 }),
             }
         }
@@ -543,5 +578,95 @@ mod tests {
         // Momentum signal has z_score=-2.5, rel_vol=1.5 (from FixedStrategy::buy)
         assert!((sig.z_score - (-2.5)).abs() < 1e-10);
         assert!((sig.relative_volume - 1.5).abs() < 1e-10);
+    }
+
+    // --- min_strategies tests ---
+
+    #[test]
+    fn min_strategies_blocks_single_voter() {
+        let combiner = StrategyCombiner::new(
+            vec![
+                entry(
+                    FixedStrategy::buy(2.0, SignalReason::MomentumBuy),
+                    0.5,
+                    "mom",
+                ),
+                entry(FixedStrategy::none(), 0.5, "mr"),
+            ],
+            0.0, // no net score gate
+        )
+        .with_min_strategies(2);
+        // Only 1 voter, need 2
+        assert!(combiner.score(&warmed_features(), false).is_none());
+    }
+
+    #[test]
+    fn min_strategies_allows_two_voters() {
+        let combiner = StrategyCombiner::new(
+            vec![
+                entry(
+                    FixedStrategy::buy(1.0, SignalReason::MomentumBuy),
+                    0.5,
+                    "mom",
+                ),
+                entry(
+                    FixedStrategy::buy(0.8, SignalReason::MeanReversionBuy),
+                    0.5,
+                    "mr",
+                ),
+            ],
+            0.0,
+        )
+        .with_min_strategies(2);
+        // 2 voters, need 2 — passes
+        let sig = combiner.score(&warmed_features(), false).unwrap();
+        assert_eq!(sig.side, Side::Buy);
+    }
+
+    #[test]
+    fn min_strategies_counts_opposing_voters() {
+        let combiner = StrategyCombiner::new(
+            vec![
+                entry(
+                    FixedStrategy::buy(1.0, SignalReason::MomentumBuy),
+                    0.5,
+                    "mom",
+                ),
+                entry(
+                    FixedStrategy::sell(0.5, SignalReason::MeanReversionSell),
+                    0.5,
+                    "mr",
+                ),
+            ],
+            0.0,
+        )
+        .with_min_strategies(2);
+        // 2 voters (opposing sides) — still counts as 2 voters
+        let sig = combiner.score(&warmed_features(), false).unwrap();
+        assert_eq!(sig.side, Side::Buy); // net = 0.5 - 0.25 = 0.25
+    }
+
+    // --- Vote breakdown tests ---
+
+    #[test]
+    fn vote_breakdown_populated() {
+        let combiner = StrategyCombiner::new(
+            vec![
+                entry(
+                    FixedStrategy::buy(1.0, SignalReason::MeanReversionBuy),
+                    0.5,
+                    "mr",
+                ),
+                entry(
+                    FixedStrategy::buy(0.8, SignalReason::MomentumBuy),
+                    0.5,
+                    "mom",
+                ),
+            ],
+            0.0,
+        );
+        let sig = combiner.score(&warmed_features(), false).unwrap();
+        assert!(sig.votes.contains("mr:BUY"));
+        assert!(sig.votes.contains("mom:BUY"));
     }
 }
