@@ -89,6 +89,7 @@ pub fn check(
                 signal_score: 0.0,
                 z_score: 0.0,
                 relative_volume: 0.0,
+                votes: String::new(),
             });
         }
     } else if config.stop_loss_pct > 0.0 && return_pct < -config.stop_loss_pct {
@@ -101,6 +102,7 @@ pub fn check(
             signal_score: 0.0,
             z_score: 0.0,
             relative_volume: 0.0,
+                votes: String::new(),
         });
     }
 
@@ -114,6 +116,7 @@ pub fn check(
             signal_score: 0.0,
             z_score: 0.0,
             relative_volume: 0.0,
+                votes: String::new(),
         });
     }
 
@@ -127,6 +130,7 @@ pub fn check(
             signal_score: 0.0,
             z_score: 0.0,
             relative_volume: 0.0,
+                votes: String::new(),
         });
     }
 

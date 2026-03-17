@@ -99,6 +99,12 @@ enabled = true
 # At 0.0, any signal fires. At 0.5, strategies must agree strongly.
 min_net_score = 0.2
 
+# Minimum number of strategies that must vote before the combiner acts.
+# Set to 2 to require consensus — prevents a single strategy from
+# dominating when min_net_score is low enough for one signal to pass.
+# Default: 1 (any single strategy can trigger).
+min_strategies = 1
+
 # Strategy weights for score-weighted voting.
 # Higher weight = more influence on the combined signal.
 # Weights don't need to sum to 1.0, but it's easier to reason about.

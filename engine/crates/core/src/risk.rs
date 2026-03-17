@@ -154,6 +154,7 @@ mod tests {
             reason: SignalReason::MeanReversionBuy,
             z_score: -3.0,
             relative_volume: 1.5,
+            votes: String::new(),
         }
     }
 
@@ -164,6 +165,7 @@ mod tests {
             reason: SignalReason::MeanReversionSell,
             z_score: 3.0,
             relative_volume: 1.5,
+            votes: String::new(),
         }
     }
 

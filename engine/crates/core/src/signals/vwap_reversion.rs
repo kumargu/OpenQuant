@@ -96,6 +96,7 @@ impl Strategy for VwapReversion {
                 reason: SignalReason::VwapReversionSell,
                 z_score: features.vwap_z_score,
                 relative_volume: features.relative_volume,
+                    votes: String::new(),
             });
         }
 
@@ -141,6 +142,7 @@ impl Strategy for VwapReversion {
             reason: SignalReason::VwapReversionBuy,
             z_score: features.vwap_z_score,
             relative_volume: features.relative_volume,
+                    votes: String::new(),
         })
     }
 }

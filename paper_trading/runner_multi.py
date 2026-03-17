@@ -203,8 +203,10 @@ def run(
                     qty = intent["qty"]
                     price = bar["close"]
                     notional = qty * price
+                    votes = intent.get("votes", "")
+                    vote_str = f" votes=[{votes}]" if votes else ""
                     log.info(
-                        ">>> %s %s qty=%s @ $%.2f ($%.0f) | score=%.2f reason=%s",
+                        ">>> %s %s qty=%s @ $%.2f ($%.0f) | score=%.2f reason=%s%s",
                         side,
                         symbol,
                         qty,
@@ -212,6 +214,7 @@ def run(
                         notional,
                         intent["score"],
                         intent["reason"],
+                        vote_str,
                     )
 
                     try:

@@ -93,6 +93,7 @@ impl Strategy for MeanReversion {
                     reason: SignalReason::MeanReversionBuy,
                     z_score: features.return_z_score,
                     relative_volume: features.relative_volume,
+                    votes: String::new(),
                 });
             }
         }
@@ -108,6 +109,7 @@ impl Strategy for MeanReversion {
                     reason: SignalReason::MeanReversionSell,
                     z_score: features.return_z_score,
                     relative_volume: features.relative_volume,
+                    votes: String::new(),
                 });
             }
         }

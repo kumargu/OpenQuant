@@ -37,6 +37,8 @@ pub struct OrderIntent {
     pub signal_score: f64,
     pub z_score: f64,
     pub relative_volume: f64,
+    /// Vote breakdown from combiner (e.g. "mr:BUY(0.48)+mom:BUY(0.21)").
+    pub votes: String,
 }
 
 /// Full outcome of processing a bar — for journaling.
@@ -142,10 +144,10 @@ impl Engine {
             });
         }
 
-        Box::new(combiner::StrategyCombiner::new(
-            strategies,
-            config.combiner.min_net_score,
-        ))
+        Box::new(
+            combiner::StrategyCombiner::new(strategies, config.combiner.min_net_score)
+                .with_min_strategies(config.combiner.min_strategies),
+        )
     }
 
     /// Build the strategy from config — combiner or single mean-reversion.
@@ -365,6 +367,7 @@ impl Engine {
                     signal_score: signal.score,
                     z_score: signal.z_score,
                     relative_volume: signal.relative_volume,
+                    votes: signal.votes,
                 }]
             }
             Err(rejection) => {
@@ -527,6 +530,7 @@ impl Engine {
                     signal_score: signal.score,
                     z_score: signal.z_score,
                     relative_volume: signal.relative_volume,
+                    votes: signal.votes,
                 };
                 BarOutcome {
                     features,
