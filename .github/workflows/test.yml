@@ -40,8 +40,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-      - name: Performance gate
+      - name: Performance gate (engine)
         run: cargo test --test bench_gate --release -p openquant-core -- --ignored
+
+      - name: Performance gate (journal SQLite)
+        run: cargo test --test bench_gate --release -p openquant-journal -- --ignored
 
   python-bridge:
     name: Python bridge build
