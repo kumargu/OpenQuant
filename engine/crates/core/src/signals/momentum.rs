@@ -124,7 +124,7 @@ impl Strategy for Momentum {
                 reason: SignalReason::MomentumSell,
                 z_score: features.return_z_score,
                 relative_volume: features.relative_volume,
-                    votes: String::new(),
+                votes: String::new(),
             });
         }
 
@@ -181,7 +181,7 @@ impl Strategy for Momentum {
             reason: SignalReason::MomentumBuy,
             z_score: features.return_z_score,
             relative_volume: features.relative_volume,
-                    votes: String::new(),
+            votes: String::new(),
         })
     }
 }

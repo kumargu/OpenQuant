@@ -164,7 +164,7 @@ impl Strategy for Breakout {
             reason: SignalReason::BreakoutBuy,
             z_score: features.return_z_score,
             relative_volume: features.relative_volume,
-                    votes: String::new(),
+            votes: String::new(),
         })
     }
 }

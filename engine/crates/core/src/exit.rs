@@ -102,7 +102,7 @@ pub fn check(
             signal_score: 0.0,
             z_score: 0.0,
             relative_volume: 0.0,
-                votes: String::new(),
+            votes: String::new(),
         });
     }
 
@@ -116,7 +116,7 @@ pub fn check(
             signal_score: 0.0,
             z_score: 0.0,
             relative_volume: 0.0,
-                votes: String::new(),
+            votes: String::new(),
         });
     }
 
@@ -130,7 +130,7 @@ pub fn check(
             signal_score: 0.0,
             z_score: 0.0,
             relative_volume: 0.0,
-                votes: String::new(),
+            votes: String::new(),
         });
     }
 
