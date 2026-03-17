@@ -146,7 +146,8 @@ impl Engine {
 
         Box::new(
             combiner::StrategyCombiner::new(strategies, config.combiner.min_net_score)
-                .with_min_strategies(config.combiner.min_strategies),
+                .with_min_strategies(config.combiner.min_strategies)
+                .with_min_exit_strategies(config.combiner.min_exit_strategies),
         )
     }
 
