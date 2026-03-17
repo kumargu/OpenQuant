@@ -14,8 +14,8 @@
 use std::time::Instant;
 
 use openquant_core::features::FeatureValues;
-use openquant_journal::writer::{BarRecord, FillRecord};
 use openquant_journal::DataRuntime;
+use openquant_journal::writer::{BarRecord, FillRecord};
 use rusqlite::Connection;
 
 // ---------------------------------------------------------------------------
@@ -90,7 +90,10 @@ fn tmp_db(name: &str) -> std::path::PathBuf {
 }
 
 /// Write N bars through the DataRuntime, return total elapsed time.
-fn write_bars_through_runtime(n: usize, db_name: &str) -> (std::time::Duration, std::path::PathBuf) {
+fn write_bars_through_runtime(
+    n: usize,
+    db_name: &str,
+) -> (std::time::Duration, std::path::PathBuf) {
     let path = tmp_db(db_name);
     // Buffer must hold all bars + fills + flush. try_send drops on full channel.
     let buffer = n + n / 20 + 64;
