@@ -14,6 +14,7 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from openquant import Engine
 
@@ -171,7 +172,7 @@ def run(
 
                 ts = datetime.fromtimestamp(
                     bar_time / 1000, tz=timezone.utc
-                ).strftime("%H:%M:%S")
+                ).astimezone(ZoneInfo("America/New_York")).strftime("%H:%M:%S ET")
 
                 age = (datetime.now(timezone.utc) - datetime.fromtimestamp(bar_time / 1000, tz=timezone.utc)).total_seconds()
                 log.info(
