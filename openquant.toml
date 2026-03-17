@@ -102,10 +102,10 @@ min_net_score = 0.2
 # Strategy weights for score-weighted voting.
 # Higher weight = more influence on the combined signal.
 # Weights don't need to sum to 1.0, but it's easier to reason about.
-weight_mean_reversion = 0.4
-weight_momentum = 0.3
-weight_vwap_reversion = 0.15
-weight_breakout = 0.15
+weight_mean_reversion = 0.40
+weight_momentum = 0.35
+weight_vwap_reversion = 0.25
+weight_breakout = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ weight_breakout = 0.15
 
 # Enable VWAP reversion strategy. Default: false (enable after backtesting).
 # When enabled and combiner is on, participates in multi-strategy voting.
-enabled = false
+enabled = true
 
 # VWAP Z-score below which a buy signal fires. Default: -2.0
 # More negative = stricter, fewer trades, higher conviction.
@@ -221,7 +221,7 @@ take_profit_pct = 0.0
 # Stale bars are rejected — the engine does nothing rather than trade
 # on delayed data. 0 = disabled (appropriate for backtesting).
 # For live trading, set to something like 120 (2 minutes).
-max_bar_age_seconds = 0
+max_bar_age_seconds = 120
 
 
 # ---------------------------------------------------------------------------
