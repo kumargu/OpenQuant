@@ -68,13 +68,17 @@ pub struct Config {
     /// Set to 0.0 to let any signal fire (no conflict filtering).
     pub min_net_score: f64,
 
-    /// Minimum number of strategies that must vote (on either side) before
-    /// the combiner produces a signal. Default: 1.
-    ///
-    /// Set to 2 to require at least two strategies to agree/disagree before
-    /// acting. This prevents single-strategy pass-through when min_net_score
-    /// is low enough that one strategy alone clears the threshold.
+    /// Minimum number of strategies that must vote before the combiner
+    /// produces an entry signal. Default: 1.
     pub min_strategies: usize,
+
+    /// Minimum number of strategies that must vote SELL before the combiner
+    /// exits an existing position. Default: 2.
+    ///
+    /// Higher than min_strategies to prevent single-strategy churn: one
+    /// strategy buying and another immediately selling on the next bar.
+    /// Stop loss / take profit / max hold bypass this (hard exits always fire).
+    pub min_exit_strategies: usize,
 
     /// Weight for mean-reversion strategy. Default: 0.5
     pub weight_mean_reversion: f64,
@@ -95,6 +99,7 @@ impl Default for Config {
             enabled: true,
             min_net_score: 0.2,
             min_strategies: 1,
+            min_exit_strategies: 2,
             weight_mean_reversion: 0.5,
             weight_momentum: 0.5,
             weight_vwap_reversion: 0.0,
@@ -112,6 +117,7 @@ pub struct StrategyCombiner {
     strategies: Vec<StrategyEntry>,
     min_net_score: f64,
     min_strategies: usize,
+    min_exit_strategies: usize,
 }
 
 impl StrategyCombiner {
@@ -120,11 +126,17 @@ impl StrategyCombiner {
             strategies,
             min_net_score,
             min_strategies: 1,
+            min_exit_strategies: 2,
         }
     }
 
     pub fn with_min_strategies(mut self, min_strategies: usize) -> Self {
         self.min_strategies = min_strategies;
+        self
+    }
+
+    pub fn with_min_exit_strategies(mut self, min_exit_strategies: usize) -> Self {
+        self.min_exit_strategies = min_exit_strategies;
         self
     }
 }
@@ -174,6 +186,14 @@ impl Strategy for StrategyCombiner {
         let net = vote_buy - vote_sell;
 
         if net.abs() < self.min_net_score {
+            return None;
+        }
+
+        // Exit gate: when holding a position and the net vote is SELL,
+        // require more strategy agreement than for entries. This prevents
+        // one strategy from immediately unwinding what another opened.
+        let num_sell_voters = vote_parts.iter().filter(|v| v.contains("SELL")).count();
+        if has_position && net < 0.0 && num_sell_voters < self.min_exit_strategies {
             return None;
         }
 
@@ -361,7 +381,8 @@ mod tests {
                 ),
             ],
             0.2,
-        );
+        )
+        .with_min_exit_strategies(1); // test combiner math, not exit consensus
         let sig = combiner.score(&warmed_features(), true).unwrap();
         assert_eq!(sig.side, Side::Sell);
         // net = 0.5*0.6 - 0.5*1.5 = -0.45
@@ -401,7 +422,8 @@ mod tests {
                 entry(FixedStrategy::none(), 0.5, "mom"),
             ],
             0.2,
-        );
+        )
+        .with_min_exit_strategies(1); // test combiner math, not exit consensus
         let sig = combiner.score(&warmed_features(), true).unwrap();
         assert_eq!(sig.side, Side::Sell);
         assert!((sig.score - 0.5).abs() < 1e-10);
@@ -668,5 +690,95 @@ mod tests {
         let sig = combiner.score(&warmed_features(), false).unwrap();
         assert!(sig.votes.contains("mr:BUY"));
         assert!(sig.votes.contains("mom:BUY"));
+    }
+
+    // --- Exit consensus tests ---
+
+    #[test]
+    fn single_sell_blocked_when_holding_with_exit_consensus() {
+        // Momentum bought, VWAP wants to sell, mean-rev silent.
+        // With min_exit_strategies=2, single VWAP sell should be blocked.
+        let combiner = StrategyCombiner::new(
+            vec![
+                entry(FixedStrategy::none(), 0.4, "mr"),   // silent
+                entry(FixedStrategy::none(), 0.35, "mom"), // silent
+                entry(
+                    FixedStrategy::sell(1.0, SignalReason::VwapReversionSell),
+                    0.25,
+                    "vwap",
+                ),
+            ],
+            0.0, // no net score gate
+        )
+        .with_min_exit_strategies(2);
+
+        // has_position=true, only 1 sell voter → blocked
+        assert!(combiner.score(&warmed_features(), true).is_none());
+    }
+
+    #[test]
+    fn two_sells_allowed_when_holding_with_exit_consensus() {
+        // Both momentum and VWAP agree to sell.
+        let combiner = StrategyCombiner::new(
+            vec![
+                entry(FixedStrategy::none(), 0.4, "mr"),
+                entry(
+                    FixedStrategy::sell(1.0, SignalReason::MomentumSell),
+                    0.35,
+                    "mom",
+                ),
+                entry(
+                    FixedStrategy::sell(0.8, SignalReason::VwapReversionSell),
+                    0.25,
+                    "vwap",
+                ),
+            ],
+            0.0,
+        )
+        .with_min_exit_strategies(2);
+
+        // has_position=true, 2 sell voters → allowed
+        let sig = combiner.score(&warmed_features(), true).unwrap();
+        assert_eq!(sig.side, Side::Sell);
+    }
+
+    #[test]
+    fn single_sell_still_works_when_not_holding() {
+        // Entry sell (short signal) should not be gated by min_exit_strategies
+        let combiner = StrategyCombiner::new(
+            vec![
+                entry(FixedStrategy::none(), 0.4, "mr"),
+                entry(
+                    FixedStrategy::sell(1.0, SignalReason::MomentumSell),
+                    0.35,
+                    "mom",
+                ),
+            ],
+            0.0,
+        )
+        .with_min_exit_strategies(2);
+
+        // has_position=false → min_exit_strategies doesn't apply
+        let sig = combiner.score(&warmed_features(), false).unwrap();
+        assert_eq!(sig.side, Side::Sell);
+    }
+
+    #[test]
+    fn exit_consensus_does_not_block_buys_when_holding() {
+        // Already holding, but combiner wants to buy more (shouldn't happen
+        // in practice since engine blocks buys when holding, but test the gate)
+        let combiner = StrategyCombiner::new(
+            vec![entry(
+                FixedStrategy::buy(1.0, SignalReason::MomentumBuy),
+                0.5,
+                "mom",
+            )],
+            0.0,
+        )
+        .with_min_exit_strategies(2);
+
+        // has_position=true but signal is BUY → exit gate doesn't apply
+        let sig = combiner.score(&warmed_features(), true).unwrap();
+        assert_eq!(sig.side, Side::Buy);
     }
 }

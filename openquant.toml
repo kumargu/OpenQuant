@@ -105,6 +105,13 @@ min_net_score = 0.2
 # Default: 1 (any single strategy can trigger).
 min_strategies = 1
 
+# Minimum number of strategies that must vote SELL to exit an existing
+# position. Higher than min_strategies to prevent churn: one strategy
+# buying and another immediately selling on the next bar.
+# Stop loss / take profit / max hold bypass this (hard exits always fire).
+# Default: 2 (require consensus to exit).
+min_exit_strategies = 2
+
 # Strategy weights for score-weighted voting.
 # Higher weight = more influence on the combined signal.
 # Weights don't need to sum to 1.0, but it's easier to reason about.
