@@ -52,12 +52,61 @@ def _is_market_open() -> bool:
     return market_open <= now <= market_close
 
 
+def _warmup(symbols: list[str], engine: Engine, num_bars: int = 60):
+    """Pre-load historical bars to warm up indicators instantly."""
+    import os
+    from datetime import timedelta
+    from dotenv import load_dotenv
+    from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
+    from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed
+
+    load_dotenv()
+    start = datetime.now(timezone.utc) - timedelta(minutes=num_bars + 5)
+
+    for symbol in symbols:
+        is_crypto = "/" in symbol
+        if is_crypto:
+            client = CryptoHistoricalDataClient()
+            req = CryptoBarsRequest(
+                symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, start=start,
+            )
+            bars = client.get_crypto_bars(req)
+        else:
+            client = StockHistoricalDataClient(
+                os.environ["ALPACA_API_KEY"], os.environ["ALPACA_SECRET_KEY"],
+            )
+            req = StockBarsRequest(
+                symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, start=start, feed=DataFeed.IEX,
+            )
+            bars = client.get_stock_bars(req)
+
+        bar_key = symbol if symbol in bars.data else symbol.replace("/", "")
+        bar_list = bars.data.get(bar_key, [])
+        engine_symbol = symbol.replace("/", "")
+        for bar in bar_list:
+            engine.on_bar(
+                engine_symbol,
+                int(bar.timestamp.timestamp() * 1000),
+                float(bar.open),
+                float(bar.high),
+                float(bar.low),
+                float(bar.close),
+                float(bar.volume),
+            )
+        log.info("Warmup: fed %d historical bars for %s", len(bar_list), symbol)
+
+    log.info("Warmup complete — indicators hot, ready to trade")
+
+
 def run(
     symbols: list[str],
     interval_seconds: int,
     engine: Engine,
     max_retries: int = 10,
     require_market_hours: bool = True,
+    warmup_bars: int = 60,
 ):
     """Poll bars for all symbols and feed into a single engine."""
     log.info(
@@ -65,6 +114,9 @@ def run(
         ", ".join(symbols),
         interval_seconds,
     )
+
+    if warmup_bars > 0:
+        _warmup(symbols, engine, warmup_bars)
 
     last_bar_times: dict[str, int | None] = {s: None for s in symbols}
     consecutive_errors = 0
@@ -121,15 +173,16 @@ def run(
                     bar_time / 1000, tz=timezone.utc
                 ).strftime("%H:%M:%S")
 
-                if intents:
-                    log.info(
-                        "[%s] %s C=%.2f V=%.0f -> %d signal(s)",
-                        ts,
-                        symbol,
-                        bar["close"],
-                        bar["volume"],
-                        len(intents),
-                    )
+                age = (datetime.now(timezone.utc) - datetime.fromtimestamp(bar_time / 1000, tz=timezone.utc)).total_seconds()
+                log.info(
+                    "[%s] %s C=%.2f V=%.4f age=%ds -> %d signal(s)",
+                    ts,
+                    symbol,
+                    bar["close"],
+                    bar["volume"],
+                    int(age),
+                    len(intents),
+                )
 
                 total_bars = sum(bars_processed.values())
                 if total_bars % heartbeat_interval == 0 and total_bars > 0:
@@ -146,34 +199,45 @@ def run(
 
                 # Execute intents
                 for intent in intents:
+                    side = intent["side"].upper()
+                    qty = intent["qty"]
+                    price = bar["close"]
+                    notional = qty * price
                     log.info(
-                        "SIGNAL: %s %s %s (score=%.2f, reason=%s)",
-                        intent["side"].upper(),
-                        intent["qty"],
+                        ">>> %s %s qty=%s @ $%.2f ($%.0f) | score=%.2f reason=%s",
+                        side,
                         symbol,
+                        qty,
+                        price,
+                        notional,
                         intent["score"],
                         intent["reason"],
                     )
 
                     try:
                         if intent["side"] == "buy":
-                            result = alpaca.buy(symbol, intent["qty"])
+                            result = alpaca.buy(symbol, qty)
                         else:
-                            result = alpaca.sell(symbol, intent["qty"])
+                            result = alpaca.sell(symbol, qty)
 
                         log.info(
-                            "ORDER: %s (id=%s)", result["status"], result["id"][:12]
+                            "<<< FILLED %s %s qty=%s | order=%s status=%s",
+                            side,
+                            symbol,
+                            qty,
+                            result["id"][:12],
+                            result["status"],
                         )
                         trades_placed += 1
 
                         engine.on_fill(
                             engine_symbol,
                             intent["side"],
-                            intent["qty"],
-                            bar["close"],
+                            qty,
+                            price,
                         )
                     except Exception as e:
-                        log.error("ORDER FAILED for %s: %s", symbol, e)
+                        log.error("!!! ORDER FAILED %s %s: %s", side, symbol, e)
 
         except KeyboardInterrupt:
             break
@@ -258,6 +322,12 @@ def main():
         default=10,
         help="Max consecutive errors before exit",
     )
+    parser.add_argument(
+        "--warmup-bars",
+        type=int,
+        default=60,
+        help="Historical bars to pre-load for indicator warmup (0=skip)",
+    )
     args = parser.parse_args()
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -274,6 +344,7 @@ def main():
         engine=engine,
         max_retries=args.max_retries,
         require_market_hours=not args.no_market_hours,
+        warmup_bars=args.warmup_bars,
     )
 
 

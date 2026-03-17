@@ -163,15 +163,18 @@ def run(symbol: str, interval_seconds: int, engine: Engine, max_retries: int = 1
 
 def _get_latest_bar(symbol: str):
     """Get the most recent bar from Alpaca."""
+    from datetime import timedelta
     from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
     from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed
 
     is_crypto = "/" in symbol
+    start = datetime.now(timezone.utc) - timedelta(minutes=5)
 
     if is_crypto:
         client = CryptoHistoricalDataClient()
-        req = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, limit=1)
+        req = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, start=start)
         bars = client.get_crypto_bars(req)
     else:
         from dotenv import load_dotenv
@@ -180,15 +183,15 @@ def _get_latest_bar(symbol: str):
             os.environ["ALPACA_API_KEY"],
             os.environ["ALPACA_SECRET_KEY"],
         )
-        req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, limit=1)
+        req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, start=start, feed=DataFeed.IEX)
         bars = client.get_stock_bars(req)
 
-    # Extract the bar
+    # Extract the most recent bar
     bar_key = symbol if symbol in bars.data else symbol.replace("/", "")
     if bar_key not in bars.data or len(bars.data[bar_key]) == 0:
         return None
 
-    bar = bars.data[bar_key][0]
+    bar = bars.data[bar_key][-1]
     return {
         "timestamp": int(bar.timestamp.timestamp() * 1000),
         "open": float(bar.open),
