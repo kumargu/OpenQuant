@@ -203,9 +203,9 @@ max_daily_loss = 500.0
 min_reward_cost_ratio = 3.0
 
 # Estimated round-trip transaction cost in basis points (1 bp = 0.01%).
-# Used in the reward/cost check above. Set to your actual exchange fees.
-# Typical values: 0.001 (1 bp) for maker, 0.002-0.003 for taker.
-estimated_cost_bps = 0.001
+# Used in the reward/cost check above. Includes spread + slippage.
+# 0.005 (5 bps) reflects realistic retail execution costs for US equities.
+estimated_cost_bps = 0.005
 
 # Bet sizing method: "linear" (fixed qty) or "sigmoid" (score-scaled).
 # Sigmoid maps signal score through a sigmoid curve so higher conviction
@@ -248,6 +248,11 @@ max_hold_bars = 150
 # When > 0, exit if position gains this percentage from entry price.
 # Example: 0.03 = take profit at 3% gain.
 take_profit_pct = 0.0
+
+# Minimum bars to hold before strategy-driven exits are allowed.
+# Hard exits (stop loss, take profit) always fire regardless.
+# At 1-minute bars, 10 = hold at least 10 minutes — lets trades breathe.
+min_hold_bars = 10
 
 
 # ---------------------------------------------------------------------------

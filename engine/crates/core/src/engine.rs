@@ -68,6 +68,7 @@ pub struct SymbolOverrides {
     pub stop_loss_atr_mult: Option<f64>,
     pub max_hold_bars: Option<usize>,
     pub take_profit_pct: Option<f64>,
+    pub min_hold_bars: Option<usize>,
 }
 
 /// Engine configuration.
@@ -103,6 +104,8 @@ pub struct Engine {
     open_positions: HashMap<String, OpenPosition>,
     bar_counter: usize,
     max_bar_age_ms: i64,
+    /// When true, stale-data gate is bypassed (used during warmup replay).
+    warmup_mode: bool,
     stale_bars_skipped: HashMap<String, u64>,
     hot_metrics: HotMetrics,
 }
@@ -195,6 +198,7 @@ impl Engine {
                     .unwrap_or(config.exit.stop_loss_atr_mult),
                 max_hold_bars: ovr.max_hold_bars.unwrap_or(config.exit.max_hold_bars),
                 take_profit_pct: ovr.take_profit_pct.unwrap_or(config.exit.take_profit_pct),
+                min_hold_bars: ovr.min_hold_bars.unwrap_or(config.exit.min_hold_bars),
             };
             symbol_exit_configs.insert(symbol.clone(), exit);
         }
@@ -212,6 +216,7 @@ impl Engine {
             open_positions: HashMap::new(),
             bar_counter: 0,
             max_bar_age_ms: config.max_bar_age_ms,
+            warmup_mode: false,
             stale_bars_skipped: HashMap::new(),
             hot_metrics: HotMetrics::new(config.metrics_enabled),
         }
@@ -232,10 +237,16 @@ impl Engine {
             .unwrap_or(&self.default_exit_config)
     }
 
+    /// Enable or disable warmup mode. In warmup mode, the stale-data gate
+    /// is bypassed so historical bars can update features AND generate signals.
+    pub fn set_warmup_mode(&mut self, enabled: bool) {
+        self.warmup_mode = enabled;
+    }
+
     /// Check if a bar is stale (too old to act on).
     /// Returns true if the bar should be skipped for signal generation.
     fn is_stale(&mut self, bar: &Bar) -> bool {
-        if self.max_bar_age_ms <= 0 {
+        if self.warmup_mode || self.max_bar_age_ms <= 0 {
             return false;
         }
         let now_ms = std::time::SystemTime::now()
@@ -336,6 +347,21 @@ impl Engine {
                 return vec![];
             }
         };
+
+        // 3b. Min hold gate — block strategy-driven sells if position is too young
+        if signal.side == Side::Sell && exit_config.min_hold_bars > 0 {
+            if let Some(pos) = self.open_positions.get(&bar.symbol) {
+                let bars_held = self.bar_counter.saturating_sub(pos.entry_bar);
+                if bars_held < exit_config.min_hold_bars {
+                    if let Some(s) = start
+                        && let Some(m) = self.hot_metrics.get(&bar.symbol)
+                    {
+                        m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
+                    }
+                    return vec![];
+                }
+            }
+        }
 
         // Record signal metrics
         if let Some(m) = self.hot_metrics.get(&bar.symbol) {
@@ -500,6 +526,31 @@ impl Engine {
             }
         };
 
+        // 3b. Min hold gate — block strategy-driven sells if position is too young
+        if signal.side == Side::Sell && exit_config.min_hold_bars > 0 {
+            if let Some(pos) = self.open_positions.get(&bar.symbol) {
+                let bars_held = self.bar_counter.saturating_sub(pos.entry_bar);
+                if bars_held < exit_config.min_hold_bars {
+                    if let Some(s) = start
+                        && let Some(m) = self.hot_metrics.get(&bar.symbol)
+                    {
+                        m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
+                    }
+                    return BarOutcome {
+                        features,
+                        intents: vec![],
+                        signal_fired: true,
+                        signal_side: Some(signal.side),
+                        signal_score: Some(signal.score),
+                        signal_reason: Some(signal.reason),
+                        risk_passed: Some(false),
+                        risk_rejection: Some("min hold time not reached".to_string()),
+                        qty_approved: None,
+                    };
+                }
+            }
+        }
+
         // Record signal metrics
         if let Some(m) = self.hot_metrics.get(&bar.symbol) {
             match signal.side {
@@ -647,6 +698,7 @@ mod tests {
             stop_loss_atr_mult: 0.0,
             max_hold_bars: 0,
             take_profit_pct: 0.0,
+            min_hold_bars: 0,
         }
     }
 
@@ -739,6 +791,7 @@ mod tests {
                 stop_loss_atr_mult: 0.0,
                 max_hold_bars: 0,
                 take_profit_pct: 0.0,
+                min_hold_bars: 0,
             },
             signal: mean_reversion::Config {
                 trend_filter: false,
@@ -793,6 +846,7 @@ mod tests {
                 stop_loss_atr_mult: 0.0,
                 max_hold_bars: 5,
                 take_profit_pct: 0.0,
+                min_hold_bars: 0,
             },
             ..Default::default()
         };
@@ -822,6 +876,7 @@ mod tests {
                 stop_loss_atr_mult: 0.0,
                 max_hold_bars: 0,
                 take_profit_pct: 0.03, // 3%
+                min_hold_bars: 0,
             },
             ..Default::default()
         };
