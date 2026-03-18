@@ -349,17 +349,18 @@ impl Engine {
         };
 
         // 3b. Min hold gate — block strategy-driven sells if position is too young
-        if signal.side == Side::Sell && exit_config.min_hold_bars > 0 {
-            if let Some(pos) = self.open_positions.get(&bar.symbol) {
-                let bars_held = self.bar_counter.saturating_sub(pos.entry_bar);
-                if bars_held < exit_config.min_hold_bars {
-                    if let Some(s) = start
-                        && let Some(m) = self.hot_metrics.get(&bar.symbol)
-                    {
-                        m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
-                    }
-                    return vec![];
+        if signal.side == Side::Sell
+            && exit_config.min_hold_bars > 0
+            && let Some(pos) = self.open_positions.get(&bar.symbol)
+        {
+            let bars_held = self.bar_counter.saturating_sub(pos.entry_bar);
+            if bars_held < exit_config.min_hold_bars {
+                if let Some(s) = start
+                    && let Some(m) = self.hot_metrics.get(&bar.symbol)
+                {
+                    m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
                 }
+                return vec![];
             }
         }
 
@@ -527,27 +528,28 @@ impl Engine {
         };
 
         // 3b. Min hold gate — block strategy-driven sells if position is too young
-        if signal.side == Side::Sell && exit_config.min_hold_bars > 0 {
-            if let Some(pos) = self.open_positions.get(&bar.symbol) {
-                let bars_held = self.bar_counter.saturating_sub(pos.entry_bar);
-                if bars_held < exit_config.min_hold_bars {
-                    if let Some(s) = start
-                        && let Some(m) = self.hot_metrics.get(&bar.symbol)
-                    {
-                        m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
-                    }
-                    return BarOutcome {
-                        features,
-                        intents: vec![],
-                        signal_fired: true,
-                        signal_side: Some(signal.side),
-                        signal_score: Some(signal.score),
-                        signal_reason: Some(signal.reason),
-                        risk_passed: Some(false),
-                        risk_rejection: Some("min hold time not reached".to_string()),
-                        qty_approved: None,
-                    };
+        if signal.side == Side::Sell
+            && exit_config.min_hold_bars > 0
+            && let Some(pos) = self.open_positions.get(&bar.symbol)
+        {
+            let bars_held = self.bar_counter.saturating_sub(pos.entry_bar);
+            if bars_held < exit_config.min_hold_bars {
+                if let Some(s) = start
+                    && let Some(m) = self.hot_metrics.get(&bar.symbol)
+                {
+                    m.on_bar_duration_ns.record(s.elapsed().as_nanos() as f64);
                 }
+                return BarOutcome {
+                    features,
+                    intents: vec![],
+                    signal_fired: true,
+                    signal_side: Some(signal.side),
+                    signal_score: Some(signal.score),
+                    signal_reason: Some(signal.reason),
+                    risk_passed: Some(false),
+                    risk_rejection: Some("min hold time not reached".to_string()),
+                    qty_approved: None,
+                };
             }
         }
 
