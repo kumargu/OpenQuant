@@ -122,6 +122,14 @@ weight_momentum = 0.35
 weight_vwap_reversion = 0.25
 weight_breakout = 0.0
 
+# CUSUM entry gate: require a structural break (significant price move)
+# before opening new positions. Filters noise entries on quiet bars.
+# Based on AFML Ch. 2. Does NOT block exits.
+# Default: false — needs threshold tuning before enabling.
+# With ATR-dynamic threshold (1.0×), cuts 39% of trades but also cuts profits.
+# Try atr_multiplier < 0.5 or static threshold ~0.003 for lighter filtering.
+cusum_entry_gate = false
+
 
 # ---------------------------------------------------------------------------
 # VWAP Reversion — volume-weighted average price mean-reversion
