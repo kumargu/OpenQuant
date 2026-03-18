@@ -268,3 +268,17 @@ max_bar_age_seconds = 120
 #
 # [symbol_overrides.ETHUSD]
 # min_relative_volume = 1.5   # require more volume confirmation for ETH
+
+# Chronic losers from March 17 experiments — stricter entry criteria
+# to reduce false entries in low-signal symbols.
+
+[symbol_overrides.CVX]
+buy_z_threshold = -2.8        # much stricter entry (default: -2.2)
+min_relative_volume = 1.5     # require strong volume confirmation
+
+[symbol_overrides.INTC]
+buy_z_threshold = -2.5        # stricter entry
+max_hold_bars = 80            # shorter leash (default: 100)
+
+[symbol_overrides.JPM]
+min_relative_volume = 1.5     # require strong volume confirmation
