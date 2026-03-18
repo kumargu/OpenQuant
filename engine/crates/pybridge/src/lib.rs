@@ -487,6 +487,8 @@ fn backtest<'py>(
     dict.set_item("max_drawdown_pct", result.max_drawdown_pct)?;
     dict.set_item("expectancy", result.expectancy)?;
     dict.set_item("sharpe_approx", result.sharpe_approx)?;
+    dict.set_item("psr", result.psr)?;
+    dict.set_item("dsr", result.dsr)?;
     dict.set_item("signals_generated", result.signals_generated)?;
     dict.set_item("equity_curve", result.equity_curve)?;
 
@@ -557,6 +559,23 @@ fn validate_bars<'py>(
     Ok(dict)
 }
 
+/// Compute Deflated Sharpe Ratio for multiple-testing correction.
+///
+/// Arguments:
+///   observed_sr: the observed Sharpe ratio
+///   n_trades: number of trades in the backtest
+///   skewness: skewness of trade returns
+///   kurtosis: kurtosis of trade returns (raw, not excess)
+///   n_experiments: total number of experiments/configs tried
+///
+/// Returns DSR as a probability (0-1). DSR > 0.95 means the Sharpe is
+/// statistically significant even after correcting for multiple testing.
+#[pyfunction]
+#[pyo3(signature = (observed_sr, n_trades, skewness, kurtosis, n_experiments))]
+fn deflated_sharpe(observed_sr: f64, n_trades: usize, skewness: f64, kurtosis: f64, n_experiments: usize) -> f64 {
+    openquant_core::backtest::deflated_sharpe(observed_sr, n_trades, skewness, kurtosis, n_experiments)
+}
+
 /// Load and return the parsed TOML config as a JSON string (for Python inspection).
 #[pyfunction]
 #[pyo3(signature = (config_path))]
@@ -572,6 +591,7 @@ fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Engine>()?;
     m.add_function(wrap_pyfunction!(backtest, m)?)?;
     m.add_function(wrap_pyfunction!(validate_bars, m)?)?;
+    m.add_function(wrap_pyfunction!(deflated_sharpe, m)?)?;
     m.add_function(wrap_pyfunction!(load_config, m)?)?;
     Ok(())
 }
