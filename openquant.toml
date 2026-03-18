@@ -38,7 +38,8 @@ buy_z_threshold = -2.2
 # Z-score above which a sell signal fires (must be positive).
 # Higher = hold longer, waiting for a stronger reversion.
 # Lower = exit earlier, locking in smaller gains more often.
-sell_z_threshold = 2.0
+# Lowered from 2.0 to 1.8 — faster mean-reversion exits (exp 22).
+sell_z_threshold = 1.8
 
 # Minimum relative volume (current / 20-bar avg) to confirm a buy.
 # Ensures the price drop has real market participation behind it.
@@ -109,8 +110,9 @@ min_strategies = 1
 # position. Higher than min_strategies to prevent churn: one strategy
 # buying and another immediately selling on the next bar.
 # Stop loss / take profit / max hold bypass this (hard exits always fire).
-# Default: 2 (require consensus to exit).
-min_exit_strategies = 2
+# Lowered from 2 to 1 — single biggest lever in exp 22 (+$329 swing).
+# Intraday mean-reversion alpha decays in 2-5 min; consensus delays exits.
+min_exit_strategies = 1
 
 # Strategy weights for score-weighted voting.
 # Higher weight = more influence on the combined signal.
@@ -132,10 +134,10 @@ enabled = true
 
 # VWAP Z-score below which a buy signal fires. Default: -2.0
 # More negative = stricter, fewer trades, higher conviction.
-buy_z_threshold = -2.0
+buy_z_threshold = -1.8
 
 # VWAP Z-score above which an exit signal fires. Default: 1.5
-sell_z_threshold = 1.5
+sell_z_threshold = 1.2
 
 # Minimum volume relative to rolling average. Default: 1.0
 min_relative_volume = 1.0
@@ -216,8 +218,9 @@ stop_loss_atr_mult = 2.5
 
 # Maximum number of bars to hold a position before forced exit (0 = no limit).
 # Prevents capital from being tied up in stale positions.
-# At 1-minute bars, 100 bars = ~1.7 hours.
-max_hold_bars = 100
+# At 1-minute bars, 150 bars = ~2.5 hours.
+# Raised from 100 to 150 — let trades develop (exp 22).
+max_hold_bars = 150
 
 # Fixed percentage take-profit (0.0 = disabled).
 # When > 0, exit if position gains this percentage from entry price.
