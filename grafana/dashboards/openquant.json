@@ -467,13 +467,46 @@
     },
     {
       "type": "row",
+      "title": "\u2699 Config Reference",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 1001,
+      "panels": [
+        {
+          "type": "text",
+          "title": "",
+          "datasource": {
+            "type": "datasource",
+            "uid": "grafana"
+          },
+          "gridPos": {
+            "h": 16,
+            "w": 24,
+            "x": 0,
+            "y": 6
+          },
+          "id": 1002,
+          "options": {
+            "mode": "markdown",
+            "content": "## Active Configuration\n\n### Strategies\n| Strategy | Enabled | Key Params |\n|---|---|---|\n| **Mean Reversion** | \u2713 | buy z < **-2.2**, sell z > **1.8**, min vol **1.2\u00d7**, min score **0.5**, trend filter ON |\n| **Momentum** | \u2713 | ADX > **20**, min score **0.3**, +DI > -DI filter ON, min vol **0.8\u00d7** |\n| **VWAP Reversion** | \u2713 | buy z < **-1.8**, sell z > **1.2**, min vol **1.0\u00d7**, skip first **30** bars |\n| **Breakout** | \u2717 | squeeze required, vol surge **1.2\u00d7**, trailing stop **3.0\u00d7 ATR** |\n\n### Combiner\nMin net score: **0.2** \u00b7 Min strategies: **1** \u00b7 Min exit strategies: **1**\nWeights: mean-rev **0.40** \u00b7 momentum **0.35** \u00b7 vwap **0.25** \u00b7 breakout **0.0**\nCUSUM gate: **OFF**\n\n### Risk\nMax position: **$10,000** \u00b7 Max daily loss: **$500** \u00b7 Bet sizing: **linear**\nMin reward/cost: **3.0\u00d7** \u00b7 Est. cost: **5 bps**\n\n### Exits\nStop loss: **2.5\u00d7 ATR** (dynamic) \u00b7 Take profit: **disabled**\nMax hold: **150 bars** (~2.5 hrs) \u00b7 Min hold: **10 bars**\n\n### Symbol Overrides\n| Symbol | Override |\n|---|---|\n| CVX | buy z < -2.8, min vol 1.5\u00d7 |\n| INTC | buy z < -2.5, max hold 80 bars |\n| JPM | min vol 1.5\u00d7 |\n\n### Data\nMax bar age: **120s** (stale bars rejected)\n"
+          }
+        }
+      ]
+    },
+    {
+      "type": "row",
       "title": "Candlestick Chart",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 7
       },
       "id": 200,
       "panels": []
@@ -489,7 +522,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 8
       },
       "id": 10,
       "targets": [
@@ -532,7 +565,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 22
       },
       "id": 11,
       "targets": [
@@ -574,7 +607,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 28
       },
       "id": 300,
       "panels": [
@@ -737,8 +770,295 @@
               }
             ]
           }
+        },
+        {
+          "type": "timeseries",
+          "title": "Signal Score by Strategy Over Time",
+          "description": "Each dot is a fired signal, colored by strategy. Look for score clustering or drift.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 42
+          },
+          "id": 1003,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as score, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as score, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 6
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "momentum"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "mean-reversion"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "blue"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "vwap-reversion"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Z-Score at Signal Time",
+          "description": "Shows the return z-score when each buy/sell signal fired. Buy threshold: -2.2 (red line). Sell threshold: 1.8 (green line).",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 51
+          },
+          "id": 1004,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%mean-reversion%' ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%mean-reversion%' ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 8,
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "transparent",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": -2.2
+                  },
+                  {
+                    "color": "green",
+                    "value": 1.8
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "ADX at Momentum Signal Time",
+          "description": "ADX when momentum signals fired. Min ADX threshold: 20 (red line). Signals below 20 shouldn't exist.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 51
+          },
+          "id": 1005,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%momentum%' ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%momentum%' ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 8,
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "orange"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "transparent",
+                    "value": 20
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Relative Volume at Entry",
+          "description": "Volume confirmation at signal time. Mean-rev needs \u22651.2\u00d7 (red line). Momentum needs \u22650.8\u00d7 (orange line). Dots below threshold = filter bug.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 60
+          },
+          "id": 1006,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Rel Volume\", CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_side='buy' ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Rel Volume\", CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_side='buy' ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 6,
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "transparent",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.8
+                  },
+                  {
+                    "color": "red",
+                    "value": 1.2
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "barchart",
+          "title": "Exit Reasons",
+          "description": "How positions are closed. stop loss = ATR-based (2.5\u00d7). max hold = 150 bar timeout. Strategy exits = normal signal reversal.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 60
+          },
+          "id": 1007,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%stop loss%' THEN 'stop loss (2.5\u00d7 ATR)' WHEN d.signal_reason LIKE '%max hold%' THEN 'max hold (150 bars)' WHEN d.signal_reason LIKE '%take profit%' THEN 'take profit' WHEN d.signal_reason LIKE '%momentum sell%' THEN 'momentum exit' WHEN d.signal_reason LIKE '%mean-reversion sell%' THEN 'mean-rev exit' WHEN d.signal_reason LIKE '%vwap%sell%' THEN 'vwap exit' ELSE d.signal_reason END as reason, COUNT(*) as count FROM decisions d WHERE d.signal_fired=1 AND d.signal_side='sell' GROUP BY reason ORDER BY count DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%stop loss%' THEN 'stop loss (2.5\u00d7 ATR)' WHEN d.signal_reason LIKE '%max hold%' THEN 'max hold (150 bars)' WHEN d.signal_reason LIKE '%take profit%' THEN 'take profit' WHEN d.signal_reason LIKE '%momentum sell%' THEN 'momentum exit' WHEN d.signal_reason LIKE '%mean-reversion sell%' THEN 'mean-rev exit' WHEN d.signal_reason LIKE '%vwap%sell%' THEN 'vwap exit' ELSE d.signal_reason END as reason, COUNT(*) as count FROM decisions d WHERE d.signal_fired=1 AND d.signal_side='sell' GROUP BY reason ORDER BY count DESC",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "orientation": "horizontal"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              }
+            },
+            "overrides": []
+          }
         }
-      ]
+      ],
+      "description": "How each strategy contributes to signal generation. Mean-reversion fires on z-score extremes, momentum on ADX/EMA crossovers, VWAP on price-to-VWAP deviation."
     },
     {
       "type": "row",
@@ -748,7 +1068,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 29
       },
       "id": 400,
       "panels": [
@@ -938,7 +1258,8 @@
             "showHeader": true
           }
         }
-      ]
+      ],
+      "description": "Signal scoring health. Mean-rev score = 0.6\u00d7|z-threshold| + 0.4\u00d7(vol-1.0). Momentum = 0.5\u00d7adx + 0.3\u00d7ma_sep + 0.2\u00d7vol. Higher scores should correlate with better forward returns."
     },
     {
       "type": "row",
@@ -948,7 +1269,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 30
       },
       "id": 500,
       "panels": [
@@ -1088,7 +1409,8 @@
             "showHeader": true
           }
         }
-      ]
+      ],
+      "description": "Round-trip trade performance. Trades close via: strategy exit signal, stop loss (2.5\u00d7 ATR), take profit, or max hold (150 bars). No trades = positions still open or no fills matched."
     },
     {
       "type": "row",
@@ -1098,7 +1420,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 30
+        "y": 31
       },
       "id": 600,
       "panels": [
@@ -1218,7 +1540,8 @@
             ]
           }
         }
-      ]
+      ],
+      "description": "Signal timing patterns. US market hours: 13:30-20:00 UTC. Best alpha windows are typically first 30min and last 30min. VWAP skips first 30 bars (~30min) at session start."
     },
     {
       "type": "row",
@@ -1228,14 +1551,14 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 32
       },
       "id": 700,
       "panels": [
         {
           "type": "timeseries",
           "title": "ADX Trend Strength",
-          "description": "Above 25 = trending, below 15 = ranging, above 40 = strong trend",
+          "description": "Red zone (ADX<15): ranging \u2014 momentum fails here. Orange (15-25): weak trend. Green (25-40): trending \u2014 momentum sweet spot. Blue (>40): strong trend. Config: momentum min_adx=20.",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -1265,26 +1588,27 @@
               },
               "custom": {
                 "thresholdsStyle": {
-                  "mode": "line"
-                }
+                  "mode": "line+area"
+                },
+                "lineWidth": 2
               },
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "red",
+                    "color": "rgba(255,0,0,0.12)",
                     "value": null
                   },
                   {
-                    "color": "yellow",
+                    "color": "rgba(255,165,0,0.08)",
                     "value": 15
                   },
                   {
-                    "color": "green",
+                    "color": "rgba(0,200,0,0.08)",
                     "value": 25
                   },
                   {
-                    "color": "blue",
+                    "color": "rgba(0,100,255,0.08)",
                     "value": 40
                   }
                 ]
@@ -1402,8 +1726,104 @@
             "orientation": "vertical",
             "stacking": "normal"
           }
+        },
+        {
+          "type": "barchart",
+          "title": "Avg Signal Score by Regime",
+          "description": "Higher score in the right regime = strategies are well-calibrated. Low scores in ranging = momentum firing on noise. Low in trending = mean-rev fighting the trend.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 46
+          },
+          "id": 63,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' WHEN f.adx > 15 THEN 'weak' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-rev' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END AS strategy, ROUND(AVG(d.signal_score), 3) as avg_score, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' WHEN f.adx > 15 THEN 'weak' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-rev' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END AS strategy, ROUND(AVG(d.signal_score), 3) as avg_score, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "orientation": "vertical",
+            "stacking": "none",
+            "groupWidth": 0.7
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Regime Timeline",
+          "description": "ADX colored by regime. Red shade (<15) = ranging \u2014 mean-rev territory. Green shade (25-40) = trending \u2014 momentum territory. Blue (>40) = strong trend. Orange (15-25) = ambiguous.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 46
+          },
+          "id": 64,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "purple"
+              },
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 8,
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgba(255,50,50,0.12)",
+                    "value": null
+                  },
+                  {
+                    "color": "rgba(255,165,0,0.08)",
+                    "value": 15
+                  },
+                  {
+                    "color": "rgba(0,200,0,0.08)",
+                    "value": 25
+                  },
+                  {
+                    "color": "rgba(0,100,255,0.08)",
+                    "value": 40
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
         }
-      ]
+      ],
+      "description": "ADX-based regime classification. Momentum needs ADX > 20 (trending). Mean-reversion works best in ranging (ADX < 15). If momentum fires in ranging or mean-rev in trending, the combiner should downweight."
     },
     {
       "type": "row",
@@ -1413,7 +1833,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 33
       },
       "id": 800,
       "panels": [
@@ -1537,7 +1957,8 @@
                 ]
               }
             ]
-          }
+          },
+          "description": "Price with Bollinger Bands (20-period, 2\u03c3). Close below lower band = oversold (mean-rev buy zone). Above upper = overbought (mean-rev sell zone). Band width shows volatility compression/expansion."
         },
         {
           "type": "timeseries",
@@ -1616,7 +2037,8 @@
                 ]
               }
             ]
-          }
+          },
+          "description": "Fast EMA above slow = bullish (momentum buy). Below = bearish (momentum sell). Crossover points are where momentum signals fire. Config: directional_filter=true requires +DI > -DI too."
         },
         {
           "type": "timeseries",
@@ -1711,17 +2133,300 @@
               "custom": {
                 "drawStyle": "bars",
                 "fillOpacity": 60,
-                "lineWidth": 0
+                "lineWidth": 0,
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                }
               },
               "color": {
                 "mode": "fixed",
                 "fixedColor": "semi-dark-blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgba(255,0,0,0.1)",
+                    "value": null
+                  },
+                  {
+                    "color": "rgba(255,165,0,0.06)",
+                    "value": 0.8
+                  },
+                  {
+                    "color": "rgba(0,200,0,0.06)",
+                    "value": 1.2
+                  },
+                  {
+                    "color": "rgba(0,100,255,0.06)",
+                    "value": 2.0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "description": "Red (<0.8\u00d7): too quiet \u2014 no strategy should trade. Orange (0.8-1.2\u00d7): momentum OK (min 0.8\u00d7), mean-rev won't fire. Green (1.2-2.0\u00d7): mean-rev confirmed (min 1.2\u00d7). Blue (>2.0\u00d7): unusual activity \u2014 high conviction."
+        },
+        {
+          "type": "timeseries",
+          "title": "Bollinger %B",
+          "description": "Where price sits within Bollinger Bands. <0 = below lower band (oversold, mean-rev buy). >1 = above upper band (overbought, mean-rev sell). 0.5 = at SMA. Red zones = signal territory.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 47
+          },
+          "id": 74,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_pct_b as \"%B\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_pct_b as \"%B\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "yellow"
+              },
+              "custom": {
+                "lineWidth": 2,
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgba(0,150,255,0.15)",
+                    "value": null
+                  },
+                  {
+                    "color": "transparent",
+                    "value": 0
+                  },
+                  {
+                    "color": "transparent",
+                    "value": 0.99
+                  },
+                  {
+                    "color": "rgba(255,50,50,0.15)",
+                    "value": 1.0
+                  }
+                ]
               }
             },
             "overrides": []
           }
+        },
+        {
+          "type": "timeseries",
+          "title": "+DI vs -DI (Directional Index)",
+          "description": "+DI > -DI = bullish pressure (green zone). -DI > +DI = bearish (red zone). Momentum config: directional_filter=true requires +DI > -DI for buys.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 47
+          },
+          "id": 75,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.plus_di as \"+DI\", f.minus_di as \"-DI\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.plus_di as \"+DI\", f.minus_di as \"-DI\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "+DI"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "-DI"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Bollinger Bandwidth (Squeeze Detector)",
+          "description": "Low bandwidth = volatility squeeze (potential breakout). Breakout strategy (currently disabled) needs squeeze_required=true. Narrow bands \u2192 expansion often precedes big moves.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 56
+          },
+          "id": 76,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_bandwidth as \"Bandwidth\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_bandwidth as \"Bandwidth\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "semi-dark-green"
+              },
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 10
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "ATR (Stop Loss Reference)",
+          "description": "Average True Range drives the dynamic stop loss (entry - 2.5\u00d7 ATR). Higher ATR = wider stops = more room but more risk per trade.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 56
+          },
+          "id": 77,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.atr as \"ATR\", f.atr * 2.5 as \"Stop Distance (2.5\u00d7)\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.atr as \"ATR\", f.atr * 2.5 as \"Stop Distance (2.5\u00d7)\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "ATR"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Stop Distance (2.5\u00d7)"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  },
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash",
+                      "dash": [
+                        5,
+                        5
+                      ]
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 5
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
         }
-      ]
+      ],
+      "description": "Technical indicators driving signals. Bollinger bands (20-period SMA \u00b1 2\u03c3) drive mean-rev %B. EMA crossover (fast/slow) drives momentum. Z-score > \u00b12 = extreme. Relative volume > 1.2 required for mean-rev entry."
     },
     {
       "type": "row",
@@ -1731,7 +2436,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 34
       },
       "id": 900,
       "panels": [
@@ -1767,7 +2472,8 @@
               }
             },
             "overrides": []
-          }
+          },
+          "description": "Should be centered near 0. Config estimates 5 bps cost. If avg slippage >> 5 bps, the reward/cost ratio (min 3.0\u00d7) is miscalibrated."
         },
         {
           "type": "timeseries",
@@ -1805,7 +2511,8 @@
               }
             },
             "overrides": []
-          }
+          },
+          "description": "Look for degradation patterns. Slippage spikes during volatile periods or low liquidity. If trend is upward, execution quality is getting worse."
         },
         {
           "type": "table",
@@ -1832,7 +2539,8 @@
             "showHeader": true
           }
         }
-      ]
+      ],
+      "description": "Fill price vs bar close at signal time. Positive slippage = paid more than close (bad for buys). Target: < 5 bps avg. Est. cost in config: 5 bps. If actual slippage >> 5 bps, reward/cost ratio is wrong."
     },
     {
       "type": "row",
@@ -1842,7 +2550,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 35
       },
       "id": 1000,
       "panels": [
@@ -1997,7 +2705,8 @@
             ]
           }
         }
-      ]
+      ],
+      "description": "When strategies disagree or rapidly switch. High side-flip rate = whipsawing (buy then sell next bar). Combiner min_net_score=0.2 should filter weak consensus, but min_exit_strategies=1 allows fast exits."
     }
   ]
 }
