@@ -11,20 +11,15 @@
 use crate::signals::{Side, SignalOutput};
 
 /// Bet sizing method.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BetSizingMethod {
     /// Fixed sizing: qty = max_notional / price (current behavior).
+    #[default]
     Linear,
     /// Sigmoid scaling: qty = max_notional / price × sigmoid(score).
     /// Higher conviction signals get larger positions.
     Sigmoid,
-}
-
-impl Default for BetSizingMethod {
-    fn default() -> Self {
-        Self::Linear
-    }
 }
 
 /// Risk configuration.
