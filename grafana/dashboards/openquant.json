@@ -1,0 +1,2712 @@
+{
+  "id": null,
+  "uid": "openquant-main",
+  "title": "OpenQuant",
+  "description": "Quantitative trading dashboard \u2014 signals, P&L, execution quality, regime analysis",
+  "tags": [
+    "openquant",
+    "trading"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "editable": true,
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "frser-sqlite-datasource",
+        "current": {
+          "selected": true,
+          "text": "live-2026-03-17",
+          "value": "P3C56DBFE8D520920"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "label": "Journal",
+        "regex": ""
+      },
+      {
+        "name": "symbol",
+        "type": "query",
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "${datasource}"
+        },
+        "query": "SELECT DISTINCT symbol FROM bars ORDER BY symbol",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": "",
+        "label": "Symbol",
+        "refresh": 1,
+        "sort": 1
+      },
+      {
+        "name": "signal_side",
+        "type": "custom",
+        "query": "buy,sell",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "label": "Side"
+      },
+      {
+        "name": "chart_symbol",
+        "type": "query",
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "${datasource}"
+        },
+        "query": "SELECT DISTINCT symbol FROM bars ORDER BY symbol",
+        "current": {
+          "selected": true,
+          "text": "AAPL",
+          "value": "AAPL"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "label": "Chart Symbol",
+        "refresh": 1,
+        "sort": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Signals",
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "${datasource}"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "rawQuery": "SELECT b.timestamp/1000 as time, d.signal_side || ' ' || ROUND(d.signal_score, 2) || ' \u2014 ' || d.signal_reason as text, d.signal_side as tags FROM decisions d JOIN bars b ON d.bar_id = b.id WHERE d.signal_fired = 1"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Total Bars",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "targets": [
+        {
+          "refId": "A",
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM bars",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM bars"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text-primary"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Signals Fired",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 3,
+        "y": 1
+      },
+      "id": 2,
+      "targets": [
+        {
+          "refId": "A",
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Signal Rate",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 6,
+        "y": 1
+      },
+      "id": 3,
+      "targets": [
+        {
+          "refId": "A",
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(CAST(SUM(d.signal_fired) AS REAL) / COUNT(*) * 100, 2) as value FROM decisions d JOIN bars b ON d.bar_id=b.id",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(CAST(SUM(d.signal_fired) AS REAL) / COUNT(*) * 100, 2) as value FROM decisions d JOIN bars b ON d.bar_id=b.id"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Symbols",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 9,
+        "y": 1
+      },
+      "id": 4,
+      "targets": [
+        {
+          "refId": "A",
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(DISTINCT symbol) as value FROM bars",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(DISTINCT symbol) as value FROM bars"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text-primary"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Total Fills",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 12,
+        "y": 1
+      },
+      "id": 5,
+      "targets": [
+        {
+          "refId": "A",
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM fills f JOIN bars b ON f.bar_id=b.id",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM fills f JOIN bars b ON f.bar_id=b.id"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Total Trades",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 15,
+        "y": 1
+      },
+      "id": 6,
+      "targets": [
+        {
+          "refId": "A",
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM trades t",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM trades t"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Avg Slippage",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 18,
+        "y": 1
+      },
+      "id": 7,
+      "targets": [
+        {
+          "refId": "A",
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as value FROM fills f JOIN bars b ON f.bar_id=b.id",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as value FROM fills f JOIN bars b ON f.bar_id=b.id"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Cumulative P&L",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 21,
+        "y": 1
+      },
+      "id": 8,
+      "targets": [
+        {
+          "refId": "A",
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(SUM(pnl), 2) as value FROM trades",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(SUM(pnl), 2) as value FROM trades"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "\u2699 Config Reference",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 1001,
+      "panels": [
+        {
+          "type": "text",
+          "title": "",
+          "datasource": {
+            "type": "datasource",
+            "uid": "grafana"
+          },
+          "gridPos": {
+            "h": 16,
+            "w": 24,
+            "x": 0,
+            "y": 6
+          },
+          "id": 1002,
+          "options": {
+            "mode": "markdown",
+            "content": "## Active Configuration\n\n### Strategies\n| Strategy | Enabled | Key Params |\n|---|---|---|\n| **Mean Reversion** | \u2713 | buy z < **-2.2**, sell z > **1.8**, min vol **1.2\u00d7**, min score **0.5**, trend filter ON |\n| **Momentum** | \u2713 | ADX > **20**, min score **0.3**, +DI > -DI filter ON, min vol **0.8\u00d7** |\n| **VWAP Reversion** | \u2713 | buy z < **-1.8**, sell z > **1.2**, min vol **1.0\u00d7**, skip first **30** bars |\n| **Breakout** | \u2717 | squeeze required, vol surge **1.2\u00d7**, trailing stop **3.0\u00d7 ATR** |\n\n### Combiner\nMin net score: **0.2** \u00b7 Min strategies: **1** \u00b7 Min exit strategies: **1**\nWeights: mean-rev **0.40** \u00b7 momentum **0.35** \u00b7 vwap **0.25** \u00b7 breakout **0.0**\nCUSUM gate: **OFF**\n\n### Risk\nMax position: **$10,000** \u00b7 Max daily loss: **$500** \u00b7 Bet sizing: **linear**\nMin reward/cost: **3.0\u00d7** \u00b7 Est. cost: **5 bps**\n\n### Exits\nStop loss: **2.5\u00d7 ATR** (dynamic) \u00b7 Take profit: **disabled**\nMax hold: **150 bars** (~2.5 hrs) \u00b7 Min hold: **10 bars**\n\n### Symbol Overrides\n| Symbol | Override |\n|---|---|\n| CVX | buy z < -2.8, min vol 1.5\u00d7 |\n| INTC | buy z < -2.5, max hold 80 bars |\n| JPM | min vol 1.5\u00d7 |\n\n### Data\nMax bar age: **120s** (stale bars rejected)\n"
+          }
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Candlestick Chart",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "id": 200,
+      "panels": []
+    },
+    {
+      "type": "candlestick",
+      "title": "${chart_symbol} \u2014 Candlestick",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 10,
+      "targets": [
+        {
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.open, b.high, b.low, b.close FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.open, b.high, b.low, b.close FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisBorderShow": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mode": "candles",
+        "candleStyle": "candles",
+        "colorStrategy": "open-close",
+        "colors": {
+          "up": "#26a69a",
+          "down": "#ef5350",
+          "flat": "#888"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "${chart_symbol} \u2014 Volume",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "id": 11,
+      "targets": [
+        {
+          "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.volume FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
+          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.volume FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "pointSize": 1,
+            "lineWidth": 0
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "semi-dark-blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "hidden"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Strategy Performance",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "id": 300,
+      "panels": [
+        {
+          "type": "barchart",
+          "title": "Signals by Strategy",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 24
+          },
+          "id": 20,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY (buys+sells) DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY (buys+sells) DESC"
+            }
+          ],
+          "options": {
+            "orientation": "horizontal",
+            "xTickLabelRotation": 0,
+            "groupWidth": 0.7,
+            "barWidth": 0.8,
+            "stacking": "none"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "buys"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "sells"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "title": "Strategy Summary",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 24
+          },
+          "id": 21,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as signals, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells, ROUND(AVG(d.signal_score), 3) as avg_score, ROUND(AVG(d.risk_passed)*100, 1) as risk_pass_pct FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY signals DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as signals, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells, ROUND(AVG(d.signal_score), 3) as avg_score, ROUND(AVG(d.risk_passed)*100, 1) as risk_pass_pct FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY signals DESC"
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "signals",
+                "desc": true
+              }
+            ]
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          }
+        },
+        {
+          "type": "barchart",
+          "title": "Signals by Symbol",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 33
+          },
+          "id": 22,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.symbol, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY b.symbol ORDER BY (buys+sells) DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.symbol, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY b.symbol ORDER BY (buys+sells) DESC"
+            }
+          ],
+          "options": {
+            "orientation": "horizontal",
+            "stacking": "normal"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "buys"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "sells"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Signal Score by Strategy Over Time",
+          "description": "Each dot is a fired signal, colored by strategy. Look for score clustering or drift.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 42
+          },
+          "id": 1003,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as score, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as score, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 6
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "momentum"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "mean-reversion"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "blue"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "vwap-reversion"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Z-Score at Signal Time",
+          "description": "Shows the return z-score when each buy/sell signal fired. Buy threshold: -2.2 (red line). Sell threshold: 1.8 (green line).",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 51
+          },
+          "id": 1004,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%mean-reversion%' ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%mean-reversion%' ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 8,
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "transparent",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": -2.2
+                  },
+                  {
+                    "color": "green",
+                    "value": 1.8
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "ADX at Momentum Signal Time",
+          "description": "ADX when momentum signals fired. Min ADX threshold: 20 (red line). Signals below 20 shouldn't exist.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 51
+          },
+          "id": 1005,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%momentum%' ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%momentum%' ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 8,
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "orange"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "transparent",
+                    "value": 20
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Relative Volume at Entry",
+          "description": "Volume confirmation at signal time. Mean-rev needs \u22651.2\u00d7 (red line). Momentum needs \u22650.8\u00d7 (orange line). Dots below threshold = filter bug.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 60
+          },
+          "id": 1006,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Rel Volume\", CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_side='buy' ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Rel Volume\", CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_side='buy' ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 6,
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "transparent",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.8
+                  },
+                  {
+                    "color": "red",
+                    "value": 1.2
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "barchart",
+          "title": "Exit Reasons",
+          "description": "How positions are closed. stop loss = ATR-based (2.5\u00d7). max hold = 150 bar timeout. Strategy exits = normal signal reversal.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 60
+          },
+          "id": 1007,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%stop loss%' THEN 'stop loss (2.5\u00d7 ATR)' WHEN d.signal_reason LIKE '%max hold%' THEN 'max hold (150 bars)' WHEN d.signal_reason LIKE '%take profit%' THEN 'take profit' WHEN d.signal_reason LIKE '%momentum sell%' THEN 'momentum exit' WHEN d.signal_reason LIKE '%mean-reversion sell%' THEN 'mean-rev exit' WHEN d.signal_reason LIKE '%vwap%sell%' THEN 'vwap exit' ELSE d.signal_reason END as reason, COUNT(*) as count FROM decisions d WHERE d.signal_fired=1 AND d.signal_side='sell' GROUP BY reason ORDER BY count DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%stop loss%' THEN 'stop loss (2.5\u00d7 ATR)' WHEN d.signal_reason LIKE '%max hold%' THEN 'max hold (150 bars)' WHEN d.signal_reason LIKE '%take profit%' THEN 'take profit' WHEN d.signal_reason LIKE '%momentum sell%' THEN 'momentum exit' WHEN d.signal_reason LIKE '%mean-reversion sell%' THEN 'mean-rev exit' WHEN d.signal_reason LIKE '%vwap%sell%' THEN 'vwap exit' ELSE d.signal_reason END as reason, COUNT(*) as count FROM decisions d WHERE d.signal_fired=1 AND d.signal_side='sell' GROUP BY reason ORDER BY count DESC",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "orientation": "horizontal"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              }
+            },
+            "overrides": []
+          }
+        }
+      ],
+      "description": "How each strategy contributes to signal generation. Mean-reversion fires on z-score extremes, momentum on ADX/EMA crossovers, VWAP on price-to-VWAP deviation."
+    },
+    {
+      "type": "row",
+      "title": "Signal Quality",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 400,
+      "panels": [
+        {
+          "type": "histogram",
+          "title": "Score Distribution",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 25
+          },
+          "id": 30,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT d.signal_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT d.signal_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
+            }
+          ],
+          "options": {
+            "bucketCount": 30
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Signal Scores Over Time",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 25
+          },
+          "id": 31,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as \"score\" FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as \"score\" FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 6
+              },
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "orange"
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "gauge",
+          "title": "Risk Gate Pass Rate",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 6,
+            "x": 0,
+            "y": 34
+          },
+          "id": 32,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(AVG(d.risk_passed)*100, 1) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(AVG(d.risk_passed)*100, 1) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "showThresholdLabels": false
+          },
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "max": 100,
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 50
+                  },
+                  {
+                    "color": "green",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "table",
+          "title": "Risk Rejections",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 18,
+            "x": 6,
+            "y": 34
+          },
+          "id": 33,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT d.risk_rejection, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.risk_passed=0 AND d.signal_fired=1 GROUP BY d.risk_rejection ORDER BY count DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT d.risk_rejection, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.risk_passed=0 AND d.signal_fired=1 GROUP BY d.risk_rejection ORDER BY count DESC"
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "count",
+                "desc": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "title": "Recent Signals",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 43
+          },
+          "id": 34,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT datetime(b.timestamp/1000, 'unixepoch') as time, b.symbol, d.signal_side as side, ROUND(d.signal_score, 3) as score, d.signal_reason as reason, CASE WHEN d.risk_passed THEN '\u2713' ELSE '\u2717' END as risk, d.qty_approved as qty, ROUND(b.close, 2) as price FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp DESC LIMIT 100",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT datetime(b.timestamp/1000, 'unixepoch') as time, b.symbol, d.signal_side as side, ROUND(d.signal_score, 3) as score, d.signal_reason as reason, CASE WHEN d.risk_passed THEN '\u2713' ELSE '\u2717' END as risk, d.qty_approved as qty, ROUND(b.close, 2) as price FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp DESC LIMIT 100",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "options": {
+            "showHeader": true
+          }
+        }
+      ],
+      "description": "Signal scoring health. Mean-rev score = 0.6\u00d7|z-threshold| + 0.4\u00d7(vol-1.0). Momentum = 0.5\u00d7adx + 0.3\u00d7ma_sep + 0.2\u00d7vol. Higher scores should correlate with better forward returns."
+    },
+    {
+      "type": "row",
+      "title": "P&L & Drawdown",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 500,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Fill Activity Over Time",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 26
+          },
+          "id": 40,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.fill_price as \"Fill Price\", b.close as \"Bar Close\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.fill_price as \"Fill Price\", b.close as \"Bar Close\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 8
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Fill Price"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Bar Close"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "barchart",
+          "title": "Fills by Symbol",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 36
+          },
+          "id": 41,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT f.symbol, COUNT(*) as fills, SUM(CASE WHEN f.side='buy' THEN 1 ELSE 0 END) as buys, SUM(CASE WHEN f.side='sell' THEN 1 ELSE 0 END) as sells FROM fills f GROUP BY f.symbol ORDER BY fills DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT f.symbol, COUNT(*) as fills, SUM(CASE WHEN f.side='buy' THEN 1 ELSE 0 END) as buys, SUM(CASE WHEN f.side='sell' THEN 1 ELSE 0 END) as sells FROM fills f GROUP BY f.symbol ORDER BY fills DESC",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "orientation": "horizontal"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "table",
+          "title": "Fill Details",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 36
+          },
+          "id": 42,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT datetime(b.timestamp/1000, 'unixepoch') as time, f.symbol, f.side, ROUND(f.fill_price, 2) as fill_price, ROUND(b.close, 2) as bar_close, ROUND(f.slippage * 10000, 2) as slippage_bps, f.qty FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT datetime(b.timestamp/1000, 'unixepoch') as time, f.symbol, f.side, ROUND(f.fill_price, 2) as fill_price, ROUND(b.close, 2) as bar_close, ROUND(f.slippage * 10000, 2) as slippage_bps, f.qty FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp DESC",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "showHeader": true
+          }
+        }
+      ],
+      "description": "Round-trip trade performance. Trades close via: strategy exit signal, stop loss (2.5\u00d7 ATR), take profit, or max hold (150 bars). No trades = positions still open or no fills matched."
+    },
+    {
+      "type": "row",
+      "title": "Time-of-Day Analysis",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "id": 600,
+      "panels": [
+        {
+          "type": "table",
+          "title": "Signal Heatmap: Hour \u00d7 Strategy",
+          "description": "Signal count by hour and strategy \u2014 bright cells = active windows",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 16,
+            "x": 0,
+            "y": 27
+          },
+          "id": 50,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour, strategy ORDER BY hour",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour, strategy ORDER BY hour"
+            }
+          ],
+          "options": {
+            "showHeader": true
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "count"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background",
+                      "mode": "gradient"
+                    }
+                  },
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "continuous-YlOrRd"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "barchart",
+          "title": "Signals & Avg Score by Hour",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 8,
+            "x": 16,
+            "y": 27
+          },
+          "id": 51,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, COUNT(*) as count, ROUND(AVG(d.signal_score), 3) as avg_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour ORDER BY hour",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, COUNT(*) as count, ROUND(AVG(d.signal_score), 3) as avg_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour ORDER BY hour"
+            }
+          ],
+          "options": {
+            "orientation": "vertical"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "count"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "semi-dark-blue"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "avg_score"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  },
+                  {
+                    "id": "custom.axisPlacement",
+                    "value": "right"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Signal timing patterns. US market hours: 13:30-20:00 UTC. Best alpha windows are typically first 30min and last 30min. VWAP skips first 30 bars (~30min) at session start."
+    },
+    {
+      "type": "row",
+      "title": "Regime Analysis",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "id": 700,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "ADX Trend Strength",
+          "description": "Red zone (ADX<15): ranging \u2014 momentum fails here. Orange (15-25): weak trend. Green (25-40): trending \u2014 momentum sweet spot. Blue (>40): strong trend. Config: momentum min_adx=20.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 16,
+            "x": 0,
+            "y": 28
+          },
+          "id": 60,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "purple"
+              },
+              "custom": {
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                },
+                "lineWidth": 2
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgba(255,0,0,0.12)",
+                    "value": null
+                  },
+                  {
+                    "color": "rgba(255,165,0,0.08)",
+                    "value": 15
+                  },
+                  {
+                    "color": "rgba(0,200,0,0.08)",
+                    "value": 25
+                  },
+                  {
+                    "color": "rgba(0,100,255,0.08)",
+                    "value": 40
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "piechart",
+          "title": "Regime Distribution",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 8,
+            "x": 16,
+            "y": 28
+          },
+          "id": 61,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, COUNT(*) as count FROM features f JOIN bars b ON f.bar_id=b.id GROUP BY regime",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, COUNT(*) as count FROM features f JOIN bars b ON f.bar_id=b.id GROUP BY regime"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "pieType": "donut",
+            "legend": {
+              "displayMode": "list",
+              "placement": "right"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "ranging"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "yellow"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "trending"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "strong-trend"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "blue"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "barchart",
+          "title": "Signals per Regime \u00d7 Strategy",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 37
+          },
+          "id": 62,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime"
+            }
+          ],
+          "options": {
+            "orientation": "vertical",
+            "stacking": "normal"
+          }
+        },
+        {
+          "type": "barchart",
+          "title": "Avg Signal Score by Regime",
+          "description": "Higher score in the right regime = strategies are well-calibrated. Low scores in ranging = momentum firing on noise. Low in trending = mean-rev fighting the trend.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 46
+          },
+          "id": 63,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' WHEN f.adx > 15 THEN 'weak' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-rev' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END AS strategy, ROUND(AVG(d.signal_score), 3) as avg_score, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' WHEN f.adx > 15 THEN 'weak' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-rev' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END AS strategy, ROUND(AVG(d.signal_score), 3) as avg_score, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "orientation": "vertical",
+            "stacking": "none",
+            "groupWidth": 0.7
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Regime Timeline",
+          "description": "ADX colored by regime. Red shade (<15) = ranging \u2014 mean-rev territory. Green shade (25-40) = trending \u2014 momentum territory. Blue (>40) = strong trend. Orange (15-25) = ambiguous.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 46
+          },
+          "id": 64,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "purple"
+              },
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 8,
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgba(255,50,50,0.12)",
+                    "value": null
+                  },
+                  {
+                    "color": "rgba(255,165,0,0.08)",
+                    "value": 15
+                  },
+                  {
+                    "color": "rgba(0,200,0,0.08)",
+                    "value": 25
+                  },
+                  {
+                    "color": "rgba(0,100,255,0.08)",
+                    "value": 40
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        }
+      ],
+      "description": "ADX-based regime classification. Momentum needs ADX > 20 (trending). Mean-reversion works best in ranging (ADX < 15). If momentum fires in ranging or mean-rev in trending, the combiner should downweight."
+    },
+    {
+      "type": "row",
+      "title": "Indicators",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 800,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Bollinger Bands",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 29
+          },
+          "id": 70,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.close as \"Close\", f.bollinger_upper as \"Upper Band\", f.bollinger_lower as \"Lower Band\", f.sma_20 as \"SMA 20\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.close as \"Close\", f.bollinger_upper as \"Upper Band\", f.bollinger_lower as \"Lower Band\", f.sma_20 as \"SMA 20\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 1
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Close"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "white"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Upper Band"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "rgba(255,152,48,0.5)"
+                    }
+                  },
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash",
+                      "dash": [
+                        5,
+                        5
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Lower Band"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "rgba(255,152,48,0.5)"
+                    }
+                  },
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash",
+                      "dash": [
+                        5,
+                        5
+                      ]
+                    }
+                  },
+                  {
+                    "id": "custom.fillBelowTo",
+                    "value": "Upper Band"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "SMA 20"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "yellow"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "description": "Price with Bollinger Bands (20-period, 2\u03c3). Close below lower band = oversold (mean-rev buy zone). Above upper = overbought (mean-rev sell zone). Band width shows volatility compression/expansion."
+        },
+        {
+          "type": "timeseries",
+          "title": "EMA Crossover",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 29
+          },
+          "id": 71,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.close as \"Close\", f.ema_fast as \"EMA Fast\", f.ema_slow as \"EMA Slow\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.close as \"Close\", f.ema_fast as \"EMA Fast\", f.ema_slow as \"EMA Slow\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Close"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "white"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "EMA Fast"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "EMA Slow"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "description": "Fast EMA above slow = bullish (momentum buy). Below = bearish (momentum sell). Crossover points are where momentum signals fire. Config: directional_filter=true requires +DI > -DI too."
+        },
+        {
+          "type": "timeseries",
+          "title": "Return Z-Score",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 38
+          },
+          "id": 72,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "cyan"
+              },
+              "custom": {
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "transparent",
+                    "value": null
+                  },
+                  {
+                    "color": "rgba(255,0,0,0.1)",
+                    "value": -2
+                  },
+                  {
+                    "color": "transparent",
+                    "value": -1.99
+                  },
+                  {
+                    "color": "transparent",
+                    "value": 1.99
+                  },
+                  {
+                    "color": "rgba(255,0,0,0.1)",
+                    "value": 2
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Relative Volume",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 38
+          },
+          "id": 73,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Relative Volume\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Relative Volume\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "bars",
+                "fillOpacity": 60,
+                "lineWidth": 0,
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                }
+              },
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "semi-dark-blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgba(255,0,0,0.1)",
+                    "value": null
+                  },
+                  {
+                    "color": "rgba(255,165,0,0.06)",
+                    "value": 0.8
+                  },
+                  {
+                    "color": "rgba(0,200,0,0.06)",
+                    "value": 1.2
+                  },
+                  {
+                    "color": "rgba(0,100,255,0.06)",
+                    "value": 2.0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "description": "Red (<0.8\u00d7): too quiet \u2014 no strategy should trade. Orange (0.8-1.2\u00d7): momentum OK (min 0.8\u00d7), mean-rev won't fire. Green (1.2-2.0\u00d7): mean-rev confirmed (min 1.2\u00d7). Blue (>2.0\u00d7): unusual activity \u2014 high conviction."
+        },
+        {
+          "type": "timeseries",
+          "title": "Bollinger %B",
+          "description": "Where price sits within Bollinger Bands. <0 = below lower band (oversold, mean-rev buy). >1 = above upper band (overbought, mean-rev sell). 0.5 = at SMA. Red zones = signal territory.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 47
+          },
+          "id": 74,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_pct_b as \"%B\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_pct_b as \"%B\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "yellow"
+              },
+              "custom": {
+                "lineWidth": 2,
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgba(0,150,255,0.15)",
+                    "value": null
+                  },
+                  {
+                    "color": "transparent",
+                    "value": 0
+                  },
+                  {
+                    "color": "transparent",
+                    "value": 0.99
+                  },
+                  {
+                    "color": "rgba(255,50,50,0.15)",
+                    "value": 1.0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "+DI vs -DI (Directional Index)",
+          "description": "+DI > -DI = bullish pressure (green zone). -DI > +DI = bearish (red zone). Momentum config: directional_filter=true requires +DI > -DI for buys.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 47
+          },
+          "id": 75,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.plus_di as \"+DI\", f.minus_di as \"-DI\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.plus_di as \"+DI\", f.minus_di as \"-DI\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "+DI"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "-DI"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Bollinger Bandwidth (Squeeze Detector)",
+          "description": "Low bandwidth = volatility squeeze (potential breakout). Breakout strategy (currently disabled) needs squeeze_required=true. Narrow bands \u2192 expansion often precedes big moves.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 56
+          },
+          "id": 76,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_bandwidth as \"Bandwidth\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_bandwidth as \"Bandwidth\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "semi-dark-green"
+              },
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 10
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "ATR (Stop Loss Reference)",
+          "description": "Average True Range drives the dynamic stop loss (entry - 2.5\u00d7 ATR). Higher ATR = wider stops = more room but more risk per trade.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 56
+          },
+          "id": 77,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.atr as \"ATR\", f.atr * 2.5 as \"Stop Distance (2.5\u00d7)\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.atr as \"ATR\", f.atr * 2.5 as \"Stop Distance (2.5\u00d7)\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "ATR"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Stop Distance (2.5\u00d7)"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  },
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash",
+                      "dash": [
+                        5,
+                        5
+                      ]
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 5
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
+        }
+      ],
+      "description": "Technical indicators driving signals. Bollinger bands (20-period SMA \u00b1 2\u03c3) drive mean-rev %B. EMA crossover (fast/slow) drives momentum. Z-score > \u00b12 = extreme. Relative volume > 1.2 required for mean-rev entry."
+    },
+    {
+      "type": "row",
+      "title": "Execution Quality",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "id": 900,
+      "panels": [
+        {
+          "type": "histogram",
+          "title": "Slippage Distribution",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 30
+          },
+          "id": 80,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT (f.fill_price - b.close) / b.close * 10000 AS slippage_bps FROM fills f JOIN bars b ON f.bar_id=b.id",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT (f.fill_price - b.close) / b.close * 10000 AS slippage_bps FROM fills f JOIN bars b ON f.bar_id=b.id"
+            }
+          ],
+          "options": {
+            "bucketCount": 30
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "red"
+              }
+            },
+            "overrides": []
+          },
+          "description": "Should be centered near 0. Config estimates 5 bps cost. If avg slippage >> 5 bps, the reward/cost ratio (min 3.0\u00d7) is miscalibrated."
+        },
+        {
+          "type": "timeseries",
+          "title": "Slippage Over Time",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 30
+          },
+          "id": 81,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, (f.fill_price - b.close) / b.close * 10000 AS \"Slippage (bps)\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, (f.fill_price - b.close) / b.close * 10000 AS \"Slippage (bps)\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "points",
+                "pointSize": 5
+              },
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "red"
+              }
+            },
+            "overrides": []
+          },
+          "description": "Look for degradation patterns. Slippage spikes during volatile periods or low liquidity. If trend is upward, execution quality is getting worse."
+        },
+        {
+          "type": "table",
+          "title": "Slippage by Symbol",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 39
+          },
+          "id": 82,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT f.symbol, COUNT(*) as fills, ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as avg_bps, ROUND(MAX(ABS((f.fill_price - b.close) / b.close * 10000)), 2) as max_bps FROM fills f JOIN bars b ON f.bar_id=b.id GROUP BY f.symbol ORDER BY avg_bps DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT f.symbol, COUNT(*) as fills, ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as avg_bps, ROUND(MAX(ABS((f.fill_price - b.close) / b.close * 10000)), 2) as max_bps FROM fills f JOIN bars b ON f.bar_id=b.id GROUP BY f.symbol ORDER BY avg_bps DESC"
+            }
+          ],
+          "options": {
+            "showHeader": true
+          }
+        }
+      ],
+      "description": "Fill price vs bar close at signal time. Positive slippage = paid more than close (bad for buys). Target: < 5 bps avg. Est. cost in config: 5 bps. If actual slippage >> 5 bps, reward/cost ratio is wrong."
+    },
+    {
+      "type": "row",
+      "title": "Strategy Conflicts",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "id": 1000,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Strategy Switches",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 5,
+            "w": 8,
+            "x": 0,
+            "y": 31
+          },
+          "id": 90,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, d.signal_side, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE strategy != prev_strategy AND prev_strategy IS NOT NULL",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, d.signal_side, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE strategy != prev_strategy AND prev_strategy IS NOT NULL"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "orange"
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Side Flips (Buy\u2194Sell)",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 5,
+            "w": 8,
+            "x": 8,
+            "y": 31
+          },
+          "id": 91,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, d.signal_side, LAG(d.signal_side) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_side FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE signal_side != prev_side AND prev_side IS NOT NULL",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, d.signal_side, LAG(d.signal_side) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_side FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE signal_side != prev_side AND prev_side IS NOT NULL"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "red"
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Total Signals",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 5,
+            "w": 8,
+            "x": 16,
+            "y": 31
+          },
+          "id": 92,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "table",
+          "title": "Strategy Transition Matrix",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 36
+          },
+          "id": 93,
+          "targets": [
+            {
+              "refId": "A",
+              "queryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS from_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT from_strategy as \"From\", strategy as \"To\", COUNT(*) as count FROM sig WHERE from_strategy IS NOT NULL AND strategy != from_strategy GROUP BY from_strategy, strategy ORDER BY count DESC",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS from_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT from_strategy as \"From\", strategy as \"To\", COUNT(*) as count FROM sig WHERE from_strategy IS NOT NULL AND strategy != from_strategy GROUP BY from_strategy, strategy ORDER BY count DESC"
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "count",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "description": "When strategies disagree or rapidly switch. High side-flip rate = whipsawing (buy then sell next bar). Combiner min_net_score=0.2 should filter weak consensus, but min_exit_strategies=1 allows fast exits."
+    }
+  ]
+}

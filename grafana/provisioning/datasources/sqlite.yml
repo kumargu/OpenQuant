@@ -1,0 +1,44 @@
+apiVersion: 1
+datasources:
+  - name: all-bars
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: false
+    editable: true
+    jsonData:
+      path: /Users/gulshan/OpenQuant/data/journal/all-bars.db
+  - name: backtest
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: false
+    editable: true
+    jsonData:
+      path: /Users/gulshan/OpenQuant/data/journal/backtest.db
+  - name: fullday-2026-03-17
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: false
+    editable: true
+    jsonData:
+      path: /Users/gulshan/OpenQuant/data/journal/fullday-2026-03-17.db
+  - name: live_20260318
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: true
+    editable: true
+    jsonData:
+      path: /Users/gulshan/OpenQuant/data/journal/live_20260318.db
+  - name: live-2026-03-17
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: false
+    editable: true
+    jsonData:
+      path: /Users/gulshan/OpenQuant/data/journal/live-2026-03-17.db
+  - name: live
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: false
+    editable: true
+    jsonData:
+      path: /Users/gulshan/OpenQuant/data/journal/live.db
