@@ -199,6 +199,20 @@ min_reward_cost_ratio = 3.0
 # Typical values: 0.001 (1 bp) for maker, 0.002-0.003 for taker.
 estimated_cost_bps = 0.001
 
+# Bet sizing method: "linear" (fixed qty) or "sigmoid" (score-scaled).
+# Sigmoid maps signal score through a sigmoid curve so higher conviction
+# signals get larger positions. Default: "linear" (backward compatible).
+# Note: sigmoid needs tuning of slope/center per strategy before enabling.
+bet_sizing = "linear"
+
+# Sigmoid steepness — higher = sharper transition around center.
+# 10.0 gives smooth scaling; 20.0 is more binary (low or full size).
+sigmoid_slope = 10.0
+
+# Score at which sigmoid outputs 50% of max position size.
+# Below this: smaller positions. Above: larger positions.
+sigmoid_center = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Exit — stop-loss, take-profit, and time-based exits
