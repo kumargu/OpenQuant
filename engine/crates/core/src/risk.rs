@@ -301,9 +301,15 @@ mod tests {
         // Low score → small position (but above cost filter since ratio=0)
         let low = check(&buy_signal(0.1), 100.0, 0.0, &state, &config).unwrap();
 
-        assert!(high > low, "high score ({high}) should get larger position than low score ({low})");
+        assert!(
+            high > low,
+            "high score ({high}) should get larger position than low score ({low})"
+        );
         // Full linear qty would be 100 (10_000/100). Sigmoid at 1.0 is ~0.993 → ~99
-        assert!(high > 90.0, "high conviction should be near max, got {high}");
+        assert!(
+            high > 90.0,
+            "high conviction should be near max, got {high}"
+        );
     }
 
     #[test]
@@ -318,6 +324,9 @@ mod tests {
 
         let high = check(&buy_signal(1.0), 100.0, 0.0, &state, &config).unwrap();
         let low = check(&buy_signal(0.1), 100.0, 0.0, &state, &config).unwrap();
-        assert_eq!(high, low, "linear sizing should give same qty regardless of score");
+        assert_eq!(
+            high, low,
+            "linear sizing should give same qty regardless of score"
+        );
     }
 }

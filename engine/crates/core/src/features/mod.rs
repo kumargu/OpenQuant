@@ -143,8 +143,8 @@ pub struct FeatureState {
 
     // V4 state: CUSUM filter
     cusum: CusumDetector,
-    cusum_dynamic: bool,      // use ATR-based dynamic threshold
-    cusum_atr_mult: f64,      // threshold = (ATR / close) × this multiplier
+    cusum_dynamic: bool, // use ATR-based dynamic threshold
+    cusum_atr_mult: f64, // threshold = (ATR / close) × this multiplier
 }
 
 impl Default for FeatureState {
