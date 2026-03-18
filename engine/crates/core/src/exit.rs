@@ -42,6 +42,11 @@ pub struct ExitConfig {
     /// Close position if price rises this % above entry. 0.0 = disabled.
     /// Example: 0.03 = 3% take profit.
     pub take_profit_pct: f64,
+
+    /// Minimum bars to hold before strategy-driven exits (sell signals) are allowed.
+    /// Hard exits (stop loss, take profit) always fire regardless of this setting.
+    /// 0 = disabled (exit any time). Default: 0.
+    pub min_hold_bars: usize,
 }
 
 impl Default for ExitConfig {
@@ -51,6 +56,7 @@ impl Default for ExitConfig {
             stop_loss_atr_mult: 2.5, // 2.5x ATR dynamic stop
             max_hold_bars: 100,      // ~8 hours on 5-min bars
             take_profit_pct: 0.0,    // disabled by default
+            min_hold_bars: 0,        // no minimum hold time by default
         }
     }
 }
@@ -154,6 +160,7 @@ mod tests {
         ExitConfig {
             stop_loss_pct: 0.02,
             stop_loss_atr_mult: 0.0, // disable ATR stop for fixed % tests
+            min_hold_bars: 0,
             max_hold_bars: 100,
             take_profit_pct: 0.03,
         }
@@ -208,6 +215,7 @@ mod tests {
             stop_loss_atr_mult: 2.0,
             max_hold_bars: 0,
             take_profit_pct: 0.0,
+            min_hold_bars: 0,
         };
         // ATR = 1.5, mult = 2.0 → stop at 100 - 3.0 = 97.0
         // Price 96.0 < 97.0 → should fire
@@ -224,6 +232,7 @@ mod tests {
             stop_loss_atr_mult: 2.0,
             max_hold_bars: 0,
             take_profit_pct: 0.0,
+            min_hold_bars: 0,
         };
         // ATR = 1.5, mult = 2.0 → stop at 97.0, price 98.0 is safe
         assert!(check(&p, 98.0, 5, 1.5, &config).is_none());
@@ -237,6 +246,7 @@ mod tests {
             stop_loss_atr_mult: 3.0, // ATR=1.5, 3x → stop at 95.5
             max_hold_bars: 0,
             take_profit_pct: 0.0,
+            min_hold_bars: 0,
         };
         // Price 97.0 would trigger fixed 2% but ATR stop is at 95.5 → no exit
         assert!(check(&p, 97.0, 5, 1.5, &config).is_none());
@@ -330,6 +340,7 @@ mod tests {
             stop_loss_atr_mult: 0.0,
             max_hold_bars: 0,
             take_profit_pct: 0.0,
+            min_hold_bars: 0,
         };
         assert!(check(&p, 50.0, 9999, 0.0, &config).is_none());
     }

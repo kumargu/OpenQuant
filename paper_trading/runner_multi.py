@@ -66,6 +66,9 @@ def _warmup(symbols: list[str], engine: Engine, num_bars: int = 60):
     load_dotenv()
     start = datetime.now(timezone.utc) - timedelta(minutes=num_bars + 5)
 
+    # Bypass stale-data gate during warmup — historical bars are always "old"
+    engine.set_warmup_mode(True)
+
     for symbol in symbols:
         is_crypto = "/" in symbol
         if is_crypto:
@@ -98,6 +101,8 @@ def _warmup(symbols: list[str], engine: Engine, num_bars: int = 60):
             )
         log.info("Warmup: fed %d historical bars for %s", len(bar_list), symbol)
 
+    # Switch back to live mode — re-enable stale-data gate
+    engine.set_warmup_mode(False)
     log.info("Warmup complete — indicators hot, ready to trade")
 
 

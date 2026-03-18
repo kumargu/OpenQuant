@@ -94,6 +94,10 @@ impl Engine {
                             .get_item("take_profit_pct")?
                             .map(|v| v.extract())
                             .transpose()?,
+                        min_hold_bars: params
+                            .get_item("min_hold_bars")?
+                            .map(|v| v.extract())
+                            .transpose()?,
                     };
                     map.insert(symbol, ovr);
                 }
@@ -120,6 +124,7 @@ impl Engine {
                 max_hold_bars,
                 take_profit_pct,
                 stop_loss_atr_mult,
+                min_hold_bars: 0,
             },
             symbol_overrides: overrides,
             max_bar_age_ms: max_bar_age_seconds * 1000,
@@ -273,6 +278,13 @@ impl Engine {
         }
 
         Ok(())
+    }
+
+    /// Enable or disable warmup mode (bypasses stale-data gate).
+    /// Call with `true` before feeding historical warmup bars,
+    /// then `false` once switching to live data.
+    fn set_warmup_mode(&mut self, enabled: bool) {
+        self.inner.set_warmup_mode(enabled);
     }
 
     /// Reset daily risk state.
@@ -464,6 +476,7 @@ fn backtest<'py>(
             max_hold_bars,
             take_profit_pct,
             stop_loss_atr_mult,
+            min_hold_bars: 0,
         },
         symbol_overrides: HashMap::new(),
         max_bar_age_ms: 0, // disabled for backtesting — historical data is always "old"
