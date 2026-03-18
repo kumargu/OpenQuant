@@ -67,6 +67,8 @@ METRICS_KEYS = [
     "max_drawdown",
     "expectancy",
     "sharpe_approx",
+    "psr",
+    "dsr",
     "winning_trades",
     "losing_trades",
 ]
@@ -185,12 +187,17 @@ def aggregate_results(results: dict) -> dict:
     weighted_pf = 0
     max_dd = 0
 
+    weighted_psr = 0
+    weighted_dsr = 0
+
     for r in results.values():
         n = r.get("total_trades", 0)
         if n > 0 and total_trades > 0:
             w = n / total_trades
             weighted_sharpe += r.get("sharpe_approx", 0) * w
             weighted_pf += r.get("profit_factor", 0) * w
+            weighted_psr += r.get("psr", 0.5) * w
+            weighted_dsr += r.get("dsr", 0.5) * w
         max_dd = max(max_dd, r.get("max_drawdown", 0))
 
     return {
@@ -202,6 +209,8 @@ def aggregate_results(results: dict) -> dict:
         "expectancy": expectancy,
         "profit_factor": weighted_pf,
         "sharpe_approx": weighted_sharpe,
+        "psr": weighted_psr,
+        "dsr": weighted_dsr,
         "max_drawdown": max_dd,
     }
 
@@ -322,6 +331,8 @@ def _metrics_table(base: dict, cand: dict) -> str:
         ("Expectancy", "expectancy", "${:,.2f}", True),
         ("Profit Factor", "profit_factor", "{:.2f}", True),
         ("Sharpe", "sharpe_approx", "{:.2f}", True),
+        ("PSR", "psr", "{:.1%}", True),
+        ("DSR", "dsr", "{:.1%}", True),
         ("Max Drawdown", "max_drawdown", "${:,.2f}", False),  # lower is better
     ]
 
@@ -424,6 +435,7 @@ def print_report(report: dict):
     print(f"  Expectancy: ${agg.get('expectancy', 0):,.2f} | "
           f"PF: {agg.get('profit_factor', 0):.2f} | "
           f"Sharpe: {agg.get('sharpe_approx', 0):.2f} | "
+          f"PSR: {agg.get('psr', 0.5):.1%} | "
           f"MaxDD: ${agg.get('max_drawdown', 0):,.2f}")
 
 
