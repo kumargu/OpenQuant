@@ -1,68 +1,301 @@
 {
-  "timestamp": "2026-03-15T07:20:47.926570+00:00",
-  "engine_version": "df6ae2c",
+  "timestamp": "2026-03-18T04:42:13.510298+00:00",
+  "engine_version": "190c125",
   "days": 30,
   "timeframe": "1Min",
   "params": {
     "max_position_notional": 10000.0,
     "max_daily_loss": 500.0,
     "buy_z_threshold": -2.2,
-    "sell_z_threshold": 2.0,
+    "sell_z_threshold": 1.8,
     "min_relative_volume": 1.2,
     "stop_loss_pct": 0.02,
-    "max_hold_bars": 100,
+    "max_hold_bars": 150,
     "take_profit_pct": 0.0
   },
   "categories": {
-    "crypto": {
+    "tech": {
       "symbols": {
-        "BTC/USD": {
-          "total_trades": 114,
-          "win_rate": 0.6578947368421053,
-          "total_pnl": 1832.282573788935,
-          "profit_factor": 2.0935507558987925,
-          "max_drawdown": 315.79585961840417,
-          "expectancy": 16.07265415604329,
-          "sharpe_approx": 0.2644422888979284,
-          "winning_trades": 75,
-          "losing_trades": 39,
-          "total_bars": 42747
+        "AAPL": {
+          "total_trades": 32,
+          "win_rate": 0.4375,
+          "total_pnl": -238.63999999999908,
+          "profit_factor": 0.6937076849029365,
+          "max_drawdown": 380.6899999999955,
+          "expectancy": -7.457499999999971,
+          "sharpe_approx": -0.12580841317336647,
+          "winning_trades": 14,
+          "losing_trades": 18,
+          "total_bars": 7796,
+          "zero_volume_pct": 0.0
         },
-        "ETH/USD": {
-          "total_trades": 6,
-          "win_rate": 0.0,
-          "total_pnl": -656.1082406139991,
-          "profit_factor": -0.0,
-          "max_drawdown": 656.1082406139991,
-          "expectancy": -109.35137343566652,
-          "sharpe_approx": -1.4649567800234877,
-          "winning_trades": 0,
-          "losing_trades": 6,
-          "total_bars": 34421
+        "MSFT": {
+          "total_trades": 34,
+          "win_rate": 0.35294117647058826,
+          "total_pnl": -621.2800000000002,
+          "profit_factor": 0.5300364984209235,
+          "max_drawdown": 621.2800000000002,
+          "expectancy": -18.272941176470596,
+          "sharpe_approx": -0.21314762386348154,
+          "winning_trades": 12,
+          "losing_trades": 22,
+          "total_bars": 7891,
+          "zero_volume_pct": 0.0
+        },
+        "NVDA": {
+          "total_trades": 36,
+          "win_rate": 0.3888888888888889,
+          "total_pnl": -372.30000000000797,
+          "profit_factor": 0.7869668090511883,
+          "max_drawdown": 771.7300000000043,
+          "expectancy": -10.341666666666889,
+          "sharpe_approx": -0.08974268397106665,
+          "winning_trades": 14,
+          "losing_trades": 22,
+          "total_bars": 7930,
+          "zero_volume_pct": 0.0
         }
       },
       "aggregated": {
-        "total_trades": 120,
-        "winning_trades": 75,
-        "losing_trades": 45,
-        "win_rate": 0.625,
-        "total_pnl": 1176.1743331749358,
-        "expectancy": 9.801452776457799,
-        "profit_factor": 1.9888732181038526,
-        "sharpe_approx": 0.1779723354518576,
-        "max_drawdown": 656.1082406139991
+        "total_trades": 102,
+        "winning_trades": 40,
+        "losing_trades": 62,
+        "win_rate": 0.39215686274509803,
+        "total_pnl": -1232.2200000000073,
+        "expectancy": -12.08058823529419,
+        "profit_factor": 0.6720656077357661,
+        "sharpe_approx": -0.14219240250847548,
+        "max_drawdown": 771.7300000000043
+      }
+    },
+    "oil_gas": {
+      "symbols": {
+        "XOM": {
+          "total_trades": 35,
+          "win_rate": 0.5714285714285714,
+          "total_pnl": 501.35000000000275,
+          "profit_factor": 1.7674879637496523,
+          "max_drawdown": 215.23000000000008,
+          "expectancy": 14.324285714285793,
+          "sharpe_approx": 0.18092342059050798,
+          "winning_trades": 20,
+          "losing_trades": 15,
+          "total_bars": 7762,
+          "zero_volume_pct": 0.0
+        },
+        "CVX": {
+          "total_trades": 32,
+          "win_rate": 0.65625,
+          "total_pnl": 714.6450000000016,
+          "profit_factor": 2.302872300666339,
+          "max_drawdown": 261.8199999999998,
+          "expectancy": 22.33265625000005,
+          "sharpe_approx": 0.26236644839877876,
+          "winning_trades": 21,
+          "losing_trades": 11,
+          "total_bars": 7134,
+          "zero_volume_pct": 0.0
+        }
+      },
+      "aggregated": {
+        "total_trades": 67,
+        "winning_trades": 41,
+        "losing_trades": 26,
+        "win_rate": 0.6119402985074627,
+        "total_pnl": 1215.9950000000044,
+        "expectancy": 18.14917910447768,
+        "profit_factor": 2.023193915709861,
+        "sharpe_approx": 0.21982158312580147,
+        "max_drawdown": 261.8199999999998
+      }
+    },
+    "energy": {
+      "symbols": {
+        "NEE": {
+          "total_trades": 34,
+          "win_rate": 0.5882352941176471,
+          "total_pnl": 186.9999999999976,
+          "profit_factor": 1.3475836431226726,
+          "max_drawdown": 312.5000000000014,
+          "expectancy": 5.49999999999993,
+          "sharpe_approx": 0.10245748922584785,
+          "winning_trades": 20,
+          "losing_trades": 14,
+          "total_bars": 7343,
+          "zero_volume_pct": 0.0
+        },
+        "ENPH": {
+          "total_trades": 29,
+          "win_rate": 0.4827586206896552,
+          "total_pnl": 31.500000000001194,
+          "profit_factor": 1.0289655172413803,
+          "max_drawdown": 565.4999999999987,
+          "expectancy": 1.0862068965517653,
+          "sharpe_approx": 0.023212920714076955,
+          "winning_trades": 14,
+          "losing_trades": 15,
+          "total_bars": 5905,
+          "zero_volume_pct": 0.0
+        }
+      },
+      "aggregated": {
+        "total_trades": 63,
+        "winning_trades": 34,
+        "losing_trades": 29,
+        "win_rate": 0.5396825396825397,
+        "total_pnl": 218.4999999999988,
+        "expectancy": 3.4682539682539493,
+        "profit_factor": 1.200918156605887,
+        "sharpe_approx": 0.06597983070455649,
+        "max_drawdown": 565.4999999999987
+      }
+    },
+    "metals": {
+      "symbols": {
+        "GLD": {
+          "total_trades": 29,
+          "win_rate": 0.41379310344827586,
+          "total_pnl": 191.0650000000009,
+          "profit_factor": 1.2448735037038952,
+          "max_drawdown": 343.7899999999992,
+          "expectancy": 6.5884482758621,
+          "sharpe_approx": 0.06746053638626855,
+          "winning_trades": 12,
+          "losing_trades": 17,
+          "total_bars": 7081,
+          "zero_volume_pct": 0.0
+        },
+        "SLV": {
+          "total_trades": 32,
+          "win_rate": 0.46875,
+          "total_pnl": 252.50000000000063,
+          "profit_factor": 1.1212484993997605,
+          "max_drawdown": 1133.999999999999,
+          "expectancy": 7.8906250000000195,
+          "sharpe_approx": 0.05208479410380751,
+          "winning_trades": 15,
+          "losing_trades": 17,
+          "total_bars": 7887,
+          "zero_volume_pct": 0.0
+        }
+      },
+      "aggregated": {
+        "total_trades": 61,
+        "winning_trades": 27,
+        "losing_trades": 34,
+        "win_rate": 0.4426229508196721,
+        "total_pnl": 443.56500000000153,
+        "expectancy": 7.271557377049206,
+        "profit_factor": 1.180021042429595,
+        "sharpe_approx": 0.05939457322169882,
+        "max_drawdown": 1133.999999999999
+      }
+    },
+    "pharma": {
+      "symbols": {
+        "JNJ": {
+          "total_trades": 31,
+          "win_rate": 0.45161290322580644,
+          "total_pnl": -301.6250000000041,
+          "profit_factor": 0.6500382883928112,
+          "max_drawdown": 420.80000000000143,
+          "expectancy": -9.729838709677551,
+          "sharpe_approx": -0.15207458193143997,
+          "winning_trades": 14,
+          "losing_trades": 17,
+          "total_bars": 6259,
+          "zero_volume_pct": 0.0
+        },
+        "PFE": {
+          "total_trades": 44,
+          "win_rate": 0.29545454545454547,
+          "total_pnl": -210.99999999999994,
+          "profit_factor": 0.4343163538873998,
+          "max_drawdown": 214.9999999999995,
+          "expectancy": -4.795454545454544,
+          "sharpe_approx": -0.2717028077108495,
+          "winning_trades": 13,
+          "losing_trades": 31,
+          "total_bars": 7823,
+          "zero_volume_pct": 0.0
+        },
+        "ABBV": {
+          "total_trades": 19,
+          "win_rate": 0.42105263157894735,
+          "total_pnl": -589.7650000000011,
+          "profit_factor": 0.36280542155332135,
+          "max_drawdown": 605.775000000001,
+          "expectancy": -31.040263157894795,
+          "sharpe_approx": -0.3493900361534525,
+          "winning_trades": 8,
+          "losing_trades": 11,
+          "total_bars": 6007,
+          "zero_volume_pct": 0.0
+        }
+      },
+      "aggregated": {
+        "total_trades": 94,
+        "winning_trades": 35,
+        "losing_trades": 59,
+        "win_rate": 0.3723404255319149,
+        "total_pnl": -1102.390000000005,
+        "expectancy": -11.727553191489417,
+        "profit_factor": 0.4910043566035728,
+        "sharpe_approx": -0.24795368368157034,
+        "max_drawdown": 605.775000000001
+      }
+    },
+    "crypto": {
+      "symbols": {
+        "BTC/USD": {
+          "total_trades": 33,
+          "win_rate": 0.42424242424242425,
+          "total_pnl": -520.000982882033,
+          "profit_factor": 0.4287004866188816,
+          "max_drawdown": 520.000982882033,
+          "expectancy": -15.757605541879787,
+          "sharpe_approx": -0.32266994044575237,
+          "winning_trades": 14,
+          "losing_trades": 19,
+          "total_bars": 42754,
+          "zero_volume_pct": 0.6432380595967628
+        },
+        "ETH/USD": {
+          "total_trades": 39,
+          "win_rate": 0.5384615384615384,
+          "total_pnl": -518.6296955256214,
+          "profit_factor": 0.6297303440823905,
+          "max_drawdown": 532.8337260420699,
+          "expectancy": -13.298197321169779,
+          "sharpe_approx": -0.1833944107636715,
+          "winning_trades": 21,
+          "losing_trades": 18,
+          "total_bars": 34971,
+          "zero_volume_pct": 0.791341397157645
+        }
+      },
+      "aggregated": {
+        "total_trades": 72,
+        "winning_trades": 35,
+        "losing_trades": 37,
+        "win_rate": 0.4861111111111111,
+        "total_pnl": -1038.6306784076544,
+        "expectancy": -14.4254260889952,
+        "profit_factor": 0.5375916594116156,
+        "sharpe_approx": -0.2472290285346252,
+        "max_drawdown": 532.8337260420699
       }
     }
   },
   "aggregated": {
-    "total_trades": 120,
-    "winning_trades": 75,
-    "losing_trades": 45,
-    "win_rate": 0.625,
-    "total_pnl": 1176.1743331749358,
-    "expectancy": 9.801452776457799,
-    "profit_factor": 1.9888732181038526,
-    "sharpe_approx": 0.1779723354518576,
-    "max_drawdown": 656.1082406139991
+    "total_trades": 459,
+    "winning_trades": 212,
+    "losing_trades": 247,
+    "win_rate": 0.46187363834422657,
+    "total_pnl": -1495.180678407662,
+    "expectancy": -3.2574742448968674,
+    "profit_factor": 0.9512087599005604,
+    "sharpe_approx": -0.07212182354267047,
+    "max_drawdown": 1133.999999999999
   }
 }

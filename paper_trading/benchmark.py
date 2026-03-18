@@ -51,10 +51,10 @@ DEFAULT_PARAMS = {
     "max_position_notional": 10_000.0,
     "max_daily_loss": 500.0,
     "buy_z_threshold": -2.2,
-    "sell_z_threshold": 2.0,
+    "sell_z_threshold": 1.8,
     "min_relative_volume": 1.2,
     "stop_loss_pct": 0.02,
-    "max_hold_bars": 100,
+    "max_hold_bars": 150,
     "take_profit_pct": 0.0,
 }
 
