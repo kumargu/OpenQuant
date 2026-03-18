@@ -96,6 +96,16 @@ pub struct Config {
     /// When true, BUY signals are blocked unless features.cusum_triggered is set.
     /// Does NOT affect SELL/exit signals — positions can always be closed.
     pub cusum_entry_gate: bool,
+
+    /// Enable confidence decay for aging positions. Default: true.
+    /// Progressively lowers exit threshold for positions held beyond decay_start_bars.
+    pub exit_decay_enabled: bool,
+    /// Bars before decay begins. Default: 30 (~30 min at 1-min bars).
+    pub exit_decay_start_bars: usize,
+    /// Bars over which decay ramps to full effect. Default: 60.
+    pub exit_decay_window: usize,
+    /// Maximum decay fraction (0.0-1.0). Default: 0.8 (reduce threshold by 80%).
+    pub exit_decay_rate: f64,
 }
 
 impl Default for Config {
@@ -110,6 +120,10 @@ impl Default for Config {
             weight_vwap_reversion: 0.0,
             weight_breakout: 0.0,
             cusum_entry_gate: false,
+            exit_decay_enabled: true,
+            exit_decay_start_bars: 30,
+            exit_decay_window: 60,
+            exit_decay_rate: 0.8,
         }
     }
 }
@@ -125,6 +139,10 @@ pub struct StrategyCombiner {
     min_strategies: usize,
     min_exit_strategies: usize,
     cusum_entry_gate: bool,
+    exit_decay_enabled: bool,
+    exit_decay_start_bars: usize,
+    exit_decay_window: usize,
+    exit_decay_rate: f64,
 }
 
 impl StrategyCombiner {
@@ -135,6 +153,10 @@ impl StrategyCombiner {
             min_strategies: 1,
             min_exit_strategies: 2,
             cusum_entry_gate: false,
+            exit_decay_enabled: true,
+            exit_decay_start_bars: 30,
+            exit_decay_window: 60,
+            exit_decay_rate: 0.8,
         }
     }
 
@@ -150,6 +172,14 @@ impl StrategyCombiner {
 
     pub fn with_cusum_entry_gate(mut self, enabled: bool) -> Self {
         self.cusum_entry_gate = enabled;
+        self
+    }
+
+    pub fn with_exit_decay(mut self, config: &Config) -> Self {
+        self.exit_decay_enabled = config.exit_decay_enabled;
+        self.exit_decay_start_bars = config.exit_decay_start_bars;
+        self.exit_decay_window = config.exit_decay_window;
+        self.exit_decay_rate = config.exit_decay_rate;
         self
     }
 }
@@ -211,9 +241,25 @@ impl Strategy for StrategyCombiner {
         // Exit gate: when holding a position and the net vote is SELL,
         // require more strategy agreement than for entries. This prevents
         // one strategy from immediately unwinding what another opened.
+        //
+        // Confidence decay: after decay_start_bars, progressively lower
+        // the effective threshold so stale positions exit faster.
         let num_sell_voters = vote_parts.iter().filter(|v| v.contains("SELL")).count();
-        if has_position && net < 0.0 && num_sell_voters < self.min_exit_strategies {
-            return None;
+        if has_position && net < 0.0 {
+            let effective_min_exit =
+                if self.exit_decay_enabled && features.bars_held > self.exit_decay_start_bars {
+                    let elapsed = (features.bars_held - self.exit_decay_start_bars) as f64;
+                    let decay =
+                        (elapsed / self.exit_decay_window as f64).min(1.0) * self.exit_decay_rate;
+                    let reduced = self.min_exit_strategies as f64 * (1.0 - decay);
+                    // Floor at 1 — always need at least one strategy to vote sell
+                    (reduced.ceil() as usize).max(1)
+                } else {
+                    self.min_exit_strategies
+                };
+            if num_sell_voters < effective_min_exit {
+                return None;
+            }
         }
 
         let votes = vote_parts.join("+");

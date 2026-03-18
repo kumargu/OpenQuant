@@ -148,7 +148,8 @@ impl Engine {
             combiner::StrategyCombiner::new(strategies, config.combiner.min_net_score)
                 .with_min_strategies(config.combiner.min_strategies)
                 .with_min_exit_strategies(config.combiner.min_exit_strategies)
-                .with_cusum_entry_gate(config.combiner.cusum_entry_gate),
+                .with_cusum_entry_gate(config.combiner.cusum_entry_gate)
+                .with_exit_decay(&config.combiner),
         )
     }
 
@@ -275,7 +276,7 @@ impl Engine {
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
         let feature_state = self.features.entry(bar.symbol.clone()).or_default();
 
-        let features =
+        let mut features =
             feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
         self.last_features
             .insert(bar.symbol.clone(), features.clone());
@@ -324,6 +325,12 @@ impl Engine {
 
         // 3. Score via strategy (per-symbol strategy, only if no exit and no position)
         let has_position = self.open_positions.contains_key(&bar.symbol);
+        // Inject bars_held for confidence decay
+        features.bars_held = self
+            .open_positions
+            .get(&bar.symbol)
+            .map(|p| self.bar_counter.saturating_sub(p.entry_bar))
+            .unwrap_or(0);
         let strategy = self.strategy_for(&bar.symbol);
         let signal = match strategy.score(&features, has_position) {
             Some(s) => s,
@@ -408,7 +415,7 @@ impl Engine {
         // 1. Update features (always, even for stale bars)
         let feature_state = self.features.entry(bar.symbol.clone()).or_default();
 
-        let features =
+        let mut features =
             feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
         self.last_features
             .insert(bar.symbol.clone(), features.clone());
@@ -477,6 +484,11 @@ impl Engine {
 
         // 3. Score via strategy (per-symbol)
         let has_position = self.open_positions.contains_key(&bar.symbol);
+        features.bars_held = self
+            .open_positions
+            .get(&bar.symbol)
+            .map(|p| self.bar_counter.saturating_sub(p.entry_bar))
+            .unwrap_or(0);
         let strategy = self.strategy_for(&bar.symbol);
         let signal = match strategy.score(&features, has_position) {
             Some(s) => s,

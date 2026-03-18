@@ -130,6 +130,14 @@ weight_breakout = 0.0
 # Try atr_multiplier < 0.5 or static threshold ~0.003 for lighter filtering.
 cusum_entry_gate = false
 
+# Confidence decay: progressively lower exit threshold for aging positions.
+# Only has effect when min_exit_strategies >= 2 (consensus mode).
+# With min_exit_strategies=1, exits already fire immediately — decay is a no-op.
+exit_decay_enabled = false
+exit_decay_start_bars = 30    # begin decay after 30 bars (~30 min)
+exit_decay_window = 60        # ramp to full decay over 60 bars
+exit_decay_rate = 0.8         # reduce exit threshold by up to 80%
+
 
 # ---------------------------------------------------------------------------
 # VWAP Reversion — volume-weighted average price mean-reversion

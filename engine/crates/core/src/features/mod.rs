@@ -103,6 +103,9 @@ pub struct FeatureValues {
 
     // --- V4: CUSUM structural break detection ---
     pub cusum_triggered: bool, // true when cumulative returns exceed threshold
+
+    // --- Engine-injected context (not computed by feature pipeline) ---
+    pub bars_held: usize, // bars since position entry (0 if no position), set by engine
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +364,7 @@ impl FeatureState {
             squeeze,
             bandwidth_percentile,
             cusum_triggered,
+            bars_held: 0, // set by engine before strategy.score()
         }
     }
 }
