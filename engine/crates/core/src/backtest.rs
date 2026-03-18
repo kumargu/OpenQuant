@@ -20,30 +20,51 @@ fn normal_cdf(x: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.2316419 * a);
     let d = 0.3989422804014327; // 1/√(2π)
     let p = d * (-a * a / 2.0).exp();
-    let c = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+    let c = t
+        * (0.319381530
+            + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
     if x >= 0.0 { 1.0 - p * c } else { p * c }
 }
 
 /// Inverse normal CDF (Peter Acklam's rational approximation, |ε| < 1.15e-9).
 fn normal_inv(p: f64) -> f64 {
-    if p <= 0.0 { return f64::NEG_INFINITY; }
-    if p >= 1.0 { return f64::INFINITY; }
-    if (p - 0.5).abs() < 1e-15 { return 0.0; }
+    if p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
+    if (p - 0.5).abs() < 1e-15 {
+        return 0.0;
+    }
 
     const A: [f64; 6] = [
-        -3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2,
-        1.383577518672690e2, -3.066479806614716e1, 2.506628277459239e0,
+        -3.969683028665376e1,
+        2.209460984245205e2,
+        -2.759285104469687e2,
+        1.383_577_518_672_69e2,
+        -3.066479806614716e1,
+        2.506628277459239e0,
     ];
     const B: [f64; 5] = [
-        -5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2,
-        6.680131188771972e1, -1.328068155288572e1,
+        -5.447609879822406e1,
+        1.615858368580409e2,
+        -1.556989798598866e2,
+        6.680131188771972e1,
+        -1.328068155288572e1,
     ];
     const C: [f64; 6] = [
-        -7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838e0,
-        -2.549732539343734e0, 4.374664141464968e0, 2.938163982698783e0,
+        -7.784894002430293e-3,
+        -3.223964580411365e-1,
+        -2.400758277161838e0,
+        -2.549732539343734e0,
+        4.374664141464968e0,
+        2.938163982698783e0,
     ];
     const D: [f64; 4] = [
-        7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996e0,
+        7.784695709041462e-3,
+        3.224671290700398e-1,
+        2.445134137142996e0,
         3.754408661907416e0,
     ];
 
@@ -52,17 +73,17 @@ fn normal_inv(p: f64) -> f64 {
 
     if p < p_low {
         let q = (-2.0 * p.ln()).sqrt();
-        (((((C[0]*q + C[1])*q + C[2])*q + C[3])*q + C[4])*q + C[5])
-            / ((((D[0]*q + D[1])*q + D[2])*q + D[3])*q + 1.0)
+        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
     } else if p <= p_high {
         let q = p - 0.5;
         let r = q * q;
-        (((((A[0]*r + A[1])*r + A[2])*r + A[3])*r + A[4])*r + A[5]) * q
-            / (((((B[0]*r + B[1])*r + B[2])*r + B[3])*r + B[4])*r + 1.0)
+        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
     } else {
         let q = (-2.0 * (1.0 - p).ln()).sqrt();
-        -(((((C[0]*q + C[1])*q + C[2])*q + C[3])*q + C[4])*q + C[5])
-            / ((((D[0]*q + D[1])*q + D[2])*q + D[3])*q + 1.0)
+        -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
     }
 }
 
@@ -95,7 +116,8 @@ pub fn deflated_sharpe(
     };
 
     // DSR = Φ((SR - SR*) × √(n-1) / √(1 - skew×SR + (kurt-1)/4 × SR²))
-    let denom_sq = 1.0 - skewness * observed_sr + (kurtosis - 1.0) / 4.0 * observed_sr * observed_sr;
+    let denom_sq =
+        1.0 - skewness * observed_sr + (kurtosis - 1.0) / 4.0 * observed_sr * observed_sr;
     if denom_sq <= 0.0 {
         return 0.5;
     }
@@ -313,8 +335,16 @@ pub fn run(bars: &[Bar], config: EngineConfig) -> BacktestResult {
         // PSR = Φ((SR - SR*) × √(n-1) / √(1 - skew×SR + (kurt-1)/4 × SR²))
         // SR* = benchmark Sharpe (0 for "do no harm")
         let psr_val = if std > 0.0 && n > 2.0 {
-            let m3 = returns.iter().map(|r| ((r - mean) / std).powi(3)).sum::<f64>() / n;
-            let m4 = returns.iter().map(|r| ((r - mean) / std).powi(4)).sum::<f64>() / n;
+            let m3 = returns
+                .iter()
+                .map(|r| ((r - mean) / std).powi(3))
+                .sum::<f64>()
+                / n;
+            let m4 = returns
+                .iter()
+                .map(|r| ((r - mean) / std).powi(4))
+                .sum::<f64>()
+                / n;
             let skew = m3;
             let kurt = m4; // excess kurtosis = m4 - 3, but formula uses raw kurtosis
             let denom_sq = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr * sr;
@@ -468,7 +498,10 @@ mod tests {
         for &p in &[0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975] {
             let z = normal_inv(p);
             let p_back = normal_cdf(z);
-            assert!((p - p_back).abs() < 1e-5, "roundtrip failed for p={p}: got {p_back}");
+            assert!(
+                (p - p_back).abs() < 1e-5,
+                "roundtrip failed for p={p}: got {p_back}"
+            );
         }
     }
 
@@ -476,14 +509,20 @@ mod tests {
     fn test_deflated_sharpe_single_experiment_equals_psr() {
         // With 1 experiment, DSR should equal PSR (SR* = 0)
         let dsr = deflated_sharpe(0.5, 100, 0.0, 3.0, 1);
-        assert!(dsr > 0.99, "DSR with 1 experiment and good SR should be high, got {dsr}");
+        assert!(
+            dsr > 0.99,
+            "DSR with 1 experiment and good SR should be high, got {dsr}"
+        );
     }
 
     #[test]
     fn test_deflated_sharpe_penalizes_many_experiments() {
         let dsr_1 = deflated_sharpe(0.3, 50, 0.1, 3.5, 1);
         let dsr_29 = deflated_sharpe(0.3, 50, 0.1, 3.5, 29);
-        assert!(dsr_1 > dsr_29, "DSR should decrease with more experiments: {dsr_1} vs {dsr_29}");
+        assert!(
+            dsr_1 > dsr_29,
+            "DSR should decrease with more experiments: {dsr_1} vs {dsr_29}"
+        );
     }
 
     #[test]

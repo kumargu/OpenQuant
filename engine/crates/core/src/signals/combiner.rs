@@ -91,6 +91,11 @@ pub struct Config {
 
     /// Weight for breakout strategy. Default: 0.0 (disabled by default)
     pub weight_breakout: f64,
+
+    /// Require CUSUM structural break for entry signals. Default: false.
+    /// When true, BUY signals are blocked unless features.cusum_triggered is set.
+    /// Does NOT affect SELL/exit signals — positions can always be closed.
+    pub cusum_entry_gate: bool,
 }
 
 impl Default for Config {
@@ -104,6 +109,7 @@ impl Default for Config {
             weight_momentum: 0.5,
             weight_vwap_reversion: 0.0,
             weight_breakout: 0.0,
+            cusum_entry_gate: false,
         }
     }
 }
@@ -118,6 +124,7 @@ pub struct StrategyCombiner {
     min_net_score: f64,
     min_strategies: usize,
     min_exit_strategies: usize,
+    cusum_entry_gate: bool,
 }
 
 impl StrategyCombiner {
@@ -127,6 +134,7 @@ impl StrategyCombiner {
             min_net_score,
             min_strategies: 1,
             min_exit_strategies: 2,
+            cusum_entry_gate: false,
         }
     }
 
@@ -137,6 +145,11 @@ impl StrategyCombiner {
 
     pub fn with_min_exit_strategies(mut self, min_exit_strategies: usize) -> Self {
         self.min_exit_strategies = min_exit_strategies;
+        self
+    }
+
+    pub fn with_cusum_entry_gate(mut self, enabled: bool) -> Self {
+        self.cusum_entry_gate = enabled;
         self
     }
 }
@@ -186,6 +199,12 @@ impl Strategy for StrategyCombiner {
         let net = vote_buy - vote_sell;
 
         if net.abs() < self.min_net_score {
+            return None;
+        }
+
+        // CUSUM entry gate: block BUY entries unless a structural break was detected.
+        // Does NOT block SELL/exit signals — positions can always be closed.
+        if self.cusum_entry_gate && net > 0.0 && !has_position && !features.cusum_triggered {
             return None;
         }
 

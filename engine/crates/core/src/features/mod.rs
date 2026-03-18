@@ -31,6 +31,7 @@
 //! ```
 
 pub mod adx;
+pub mod cusum;
 pub mod donchian;
 pub mod ema;
 #[cfg(test)]
@@ -42,6 +43,7 @@ pub mod vwap;
 
 // Re-export all types so existing code (`use crate::features::*`) still works.
 pub use adx::Adx;
+pub use cusum::CusumDetector;
 pub use donchian::{BandwidthPercentile, Donchian};
 pub use ema::{Ema, WilderEma};
 pub use ring_buf::RingBuf;
@@ -98,6 +100,9 @@ pub struct FeatureValues {
     pub donchian_mid: f64,         // (upper + lower) / 2
     pub squeeze: bool,             // true when bandwidth is in bottom 20th percentile
     pub bandwidth_percentile: f64, // 0.0-1.0 percentile rank of current bandwidth
+
+    // --- V4: CUSUM structural break detection ---
+    pub cusum_triggered: bool, // true when cumulative returns exceed threshold
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +140,11 @@ pub struct FeatureState {
     // V3 state: Donchian channels + squeeze detection
     donchian: Donchian<32>,
     bandwidth_pct: BandwidthPercentile<64>,
+
+    // V4 state: CUSUM filter
+    cusum: CusumDetector,
+    cusum_dynamic: bool, // use ATR-based dynamic threshold
+    cusum_atr_mult: f64, // threshold = (ATR / close) × this multiplier
 }
 
 impl Default for FeatureState {
@@ -180,6 +190,10 @@ impl FeatureState {
 
             donchian: Donchian::new(),
             bandwidth_pct: BandwidthPercentile::new(),
+
+            cusum: CusumDetector::new(0.005), // 0.5% static threshold
+            cusum_dynamic: true,
+            cusum_atr_mult: 1.0,
         }
     }
 
@@ -304,6 +318,14 @@ impl FeatureState {
         let bandwidth_percentile = self.bandwidth_pct.push(bollinger_bandwidth);
         let squeeze = bandwidth_percentile < 0.20;
 
+        // --- V4: CUSUM structural break detection ---
+        let dynamic_thresh = if self.cusum_dynamic && close > 0.0 && atr > 0.0 {
+            Some(atr / close * self.cusum_atr_mult)
+        } else {
+            None
+        };
+        let cusum_triggered = self.cusum.update(return_1, dynamic_thresh);
+
         FeatureValues {
             return_1,
             return_5,
@@ -338,6 +360,7 @@ impl FeatureState {
             donchian_mid: donchian_vals.mid,
             squeeze,
             bandwidth_percentile,
+            cusum_triggered,
         }
     }
 }

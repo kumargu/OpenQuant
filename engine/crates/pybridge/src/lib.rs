@@ -572,8 +572,20 @@ fn validate_bars<'py>(
 /// statistically significant even after correcting for multiple testing.
 #[pyfunction]
 #[pyo3(signature = (observed_sr, n_trades, skewness, kurtosis, n_experiments))]
-fn deflated_sharpe(observed_sr: f64, n_trades: usize, skewness: f64, kurtosis: f64, n_experiments: usize) -> f64 {
-    openquant_core::backtest::deflated_sharpe(observed_sr, n_trades, skewness, kurtosis, n_experiments)
+fn deflated_sharpe(
+    observed_sr: f64,
+    n_trades: usize,
+    skewness: f64,
+    kurtosis: f64,
+    n_experiments: usize,
+) -> f64 {
+    openquant_core::backtest::deflated_sharpe(
+        observed_sr,
+        n_trades,
+        skewness,
+        kurtosis,
+        n_experiments,
+    )
 }
 
 /// Load and return the parsed TOML config as a JSON string (for Python inspection).
