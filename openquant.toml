@@ -117,9 +117,9 @@ min_exit_strategies = 1
 # Strategy weights for score-weighted voting.
 # Higher weight = more influence on the combined signal.
 # Weights don't need to sum to 1.0, but it's easier to reason about.
-weight_mean_reversion = 0.40
+weight_mean_reversion = 0.30
 weight_momentum = 0.35
-weight_vwap_reversion = 0.25
+weight_vwap_reversion = 0.35
 weight_breakout = 0.0
 
 # CUSUM entry gate: require a structural break (significant price move)
@@ -382,14 +382,58 @@ buy_z_threshold = -2.0        # looser than default -2.2 (ETH reverts faster)
 stop_loss_atr_mult = 3.0      # wider stop for crypto volatility
 min_relative_volume = 1.0     # ETH has lower volume bars, relax filter
 
-# Equity overrides — stricter filters until equity-specific alpha is developed.
+# Equity overrides — suppress z-score mean-reversion (0% profitable in sweep),
+# let VWAP reversion and momentum carry the weight instead.
+# Very tight buy_z means mean-reversion almost never fires on equities,
+# so the combiner effectively runs VWAP + momentum only.
+
+[symbol_overrides.AAPL]
+buy_z_threshold = -3.5        # nearly disabled for mean-reversion
+min_relative_volume = 1.8     # require strong volume
+stop_loss_atr_mult = 2.0      # tighter stops for equities
+
+[symbol_overrides.MSFT]
+buy_z_threshold = -3.5
+min_relative_volume = 1.8
+stop_loss_atr_mult = 2.0
+
+[symbol_overrides.NVDA]
+buy_z_threshold = -3.5
+min_relative_volume = 1.8
+stop_loss_atr_mult = 2.0
+
+[symbol_overrides.XOM]
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
+
 [symbol_overrides.CVX]
-buy_z_threshold = -2.8        # much stricter entry (default: -2.2)
-min_relative_volume = 1.5     # require strong volume confirmation
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
 
-[symbol_overrides.INTC]
-buy_z_threshold = -2.5        # stricter entry
-max_hold_bars = 80            # shorter leash
+[symbol_overrides.NEE]
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
 
-[symbol_overrides.JPM]
-min_relative_volume = 1.5     # require strong volume confirmation
+[symbol_overrides.ENPH]
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
+
+[symbol_overrides.GLD]
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
+
+[symbol_overrides.SLV]
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
+
+[symbol_overrides.JNJ]
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
+
+[symbol_overrides.PFE]
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
+
+[symbol_overrides.ABBV]
+buy_z_threshold = -3.5
+min_relative_volume = 1.5
