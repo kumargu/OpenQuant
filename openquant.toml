@@ -280,19 +280,24 @@ min_reward_cost_ratio = 3.0
 # 0.005 (5 bps) reflects realistic retail execution costs for US equities.
 estimated_cost_bps = 0.005
 
-# Bet sizing method: "linear" (fixed qty) or "sigmoid" (score-scaled).
-# Sigmoid maps signal score through a sigmoid curve so higher conviction
-# signals get larger positions. Default: "linear" (backward compatible).
-# Note: sigmoid needs tuning of slope/center per strategy before enabling.
-bet_sizing = "linear"
+# Bet sizing method: "linear" (fixed qty) or "kelly" (Bayesian Kelly).
+# Kelly uses posterior win rate + payoff ratio to size positions,
+# automatically conservative with few trades, growing as edge is confirmed.
+bet_sizing = "kelly"
 
-# Sigmoid steepness — higher = sharper transition around center.
-# 10.0 gives smooth scaling; 20.0 is more binary (low or full size).
-sigmoid_slope = 10.0
+# Kelly fraction ceiling (half-Kelly). 0.5 = bet at most half the optimal.
+# Lower = more conservative but smoother equity curve.
+kelly_fraction = 0.5
 
-# Score at which sigmoid outputs 50% of max position size.
-# Below this: smaller positions. Above: larger positions.
-sigmoid_center = 0.5
+# Minimum/maximum Kelly size as fraction of max_position_notional.
+# Prevents zero sizing during cold start and excessive concentration.
+kelly_min_size = 0.05
+kelly_max_size = 0.80
+
+# Beta prior parameters for win rate. Beta(2,2) = weakly informative,
+# centered at 50% win rate. Higher values = stronger prior, slower adaptation.
+kelly_prior_wins = 2.0
+kelly_prior_losses = 2.0
 
 
 # ---------------------------------------------------------------------------

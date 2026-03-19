@@ -103,6 +103,7 @@ pub struct Engine {
     portfolio: Portfolio,
     risk_state: RiskState,
     risk_config: RiskConfig,
+    kelly_state: risk::BayesianKellyState,
     open_positions: HashMap<String, OpenPosition>,
     bar_counter: usize,
     max_bar_age_ms: i64,
@@ -220,6 +221,10 @@ impl Engine {
             last_features: HashMap::new(),
             portfolio: Portfolio::new(),
             risk_state: RiskState::new(),
+            kelly_state: risk::BayesianKellyState::new(
+                config.risk.kelly_prior_wins,
+                config.risk.kelly_prior_losses,
+            ),
             risk_config: config.risk,
             open_positions: HashMap::new(),
             bar_counter: 0,
@@ -398,6 +403,7 @@ impl Engine {
             bar.close,
             position_qty,
             &self.risk_state,
+            &self.kelly_state,
             &self.risk_config,
         );
 
@@ -595,6 +601,7 @@ impl Engine {
             bar.close,
             position_qty,
             &self.risk_state,
+            &self.kelly_state,
             &self.risk_config,
         );
 
@@ -663,6 +670,7 @@ impl Engine {
         let realized_pnl = self.portfolio.on_fill(symbol, side, qty, fill_price);
         if realized_pnl != 0.0 {
             self.risk_state.record_pnl(realized_pnl, &self.risk_config);
+            self.kelly_state.observe_trade(realized_pnl);
         }
 
         match side {
