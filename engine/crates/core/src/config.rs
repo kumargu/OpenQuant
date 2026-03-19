@@ -68,10 +68,10 @@ impl ConfigFile {
         let mut resolved_overrides = HashMap::new();
 
         for (symbol, mut ovr) in self.symbol_overrides {
-            if let Some(class_name) = &ovr.asset_class {
-                if let Some(class_defaults) = self.asset_class.get(class_name) {
-                    ovr = merge_overrides(ovr, class_defaults);
-                }
+            if let Some(class_name) = &ovr.asset_class
+                && let Some(class_defaults) = self.asset_class.get(class_name)
+            {
+                ovr = merge_overrides(ovr, class_defaults);
             }
             resolved_overrides.insert(symbol, ovr);
         }
