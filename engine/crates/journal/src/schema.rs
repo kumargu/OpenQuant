@@ -118,6 +118,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             "bollinger_bandwidth",
             "REAL NOT NULL DEFAULT 0.0",
         ),
+        // V5 migrations: GARCH volatility
+        ("features", "garch_vol", "REAL NOT NULL DEFAULT 0.0"),
     ];
 
     for (table, column, col_type) in &new_columns {

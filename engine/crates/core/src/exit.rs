@@ -72,20 +72,32 @@ pub struct OpenPosition {
 
 /// Check if an open position should be exited.
 /// Returns Some(OrderIntent) if an exit rule fires, None otherwise.
+///
 /// `atr` is the current Average True Range — used when stop_loss_atr_mult > 0.
+/// `garch_vol` is the GJR-GARCH conditional volatility in return-space.
+/// When > 0, it takes precedence over ATR for dynamic stop placement.
 pub fn check(
     pos: &OpenPosition,
     current_price: f64,
     current_bar: usize,
     atr: f64,
+    garch_vol: f64,
     config: &ExitConfig,
 ) -> Option<OrderIntent> {
     let bars_held = current_bar.saturating_sub(pos.entry_bar);
     let return_pct = (current_price - pos.entry_price) / pos.entry_price;
 
-    // Stop loss — ATR-based dynamic stop takes precedence over fixed %
-    if config.stop_loss_atr_mult > 0.0 && atr > 0.0 {
-        let stop_price = pos.entry_price - (atr * config.stop_loss_atr_mult);
+    // Stop loss — GARCH vol preferred, ATR fallback, then fixed %
+    // GARCH vol is per-bar return std dev; multiply by price for price-space.
+    // ATR is already in price-space.
+    let vol_distance = match (garch_vol > 0.0, atr > 0.0) {
+        (true, _) => garch_vol * current_price,
+        (_, true) => atr,
+        _ => 0.0,
+    };
+
+    if config.stop_loss_atr_mult > 0.0 && vol_distance > 0.0 {
+        let stop_price = pos.entry_price - vol_distance * config.stop_loss_atr_mult;
         if current_price < stop_price {
             return Some(OrderIntent {
                 symbol: pos.symbol.clone(),
@@ -172,7 +184,7 @@ mod tests {
     fn stop_loss_fires_when_price_drops_below_threshold() {
         let p = pos(100.0, 0);
         // Price dropped 3% (below 2% stop)
-        let exit = check(&p, 97.0, 5, 0.0, &fixed_stop_config());
+        let exit = check(&p, 97.0, 5, 0.0, 0.0, &fixed_stop_config());
         assert!(exit.is_some());
         let exit = exit.unwrap();
         assert_eq!(exit.side, Side::Sell);
@@ -184,7 +196,7 @@ mod tests {
     fn stop_loss_does_not_fire_within_threshold() {
         let p = pos(100.0, 0);
         // Price dropped 1% (within 2% stop)
-        assert!(check(&p, 99.0, 5, 0.0, &fixed_stop_config()).is_none());
+        assert!(check(&p, 99.0, 5, 0.0, 0.0, &fixed_stop_config()).is_none());
     }
 
     #[test]
@@ -195,14 +207,14 @@ mod tests {
             stop_loss_atr_mult: 0.0,
             ..fixed_stop_config()
         };
-        assert!(check(&p, 90.0, 5, 0.0, &config).is_none());
+        assert!(check(&p, 90.0, 5, 0.0, 0.0, &config).is_none());
     }
 
     #[test]
     fn stop_loss_at_exact_threshold_does_not_fire() {
         let p = pos(100.0, 0);
         // Price dropped exactly 2% — not less than -2%, so should not fire
-        assert!(check(&p, 98.0, 5, 0.0, &fixed_stop_config()).is_none());
+        assert!(check(&p, 98.0, 5, 0.0, 0.0, &fixed_stop_config()).is_none());
     }
 
     // --- ATR-based stop loss ---
@@ -219,7 +231,7 @@ mod tests {
         };
         // ATR = 1.5, mult = 2.0 → stop at 100 - 3.0 = 97.0
         // Price 96.0 < 97.0 → should fire
-        let exit = check(&p, 96.0, 5, 1.5, &config);
+        let exit = check(&p, 96.0, 5, 1.5, 0.0, &config);
         assert!(exit.is_some());
         assert_eq!(exit.unwrap().reason, SignalReason::StopLoss);
     }
@@ -235,7 +247,7 @@ mod tests {
             min_hold_bars: 0,
         };
         // ATR = 1.5, mult = 2.0 → stop at 97.0, price 98.0 is safe
-        assert!(check(&p, 98.0, 5, 1.5, &config).is_none());
+        assert!(check(&p, 98.0, 5, 1.5, 0.0, &config).is_none());
     }
 
     #[test]
@@ -249,9 +261,9 @@ mod tests {
             min_hold_bars: 0,
         };
         // Price 97.0 would trigger fixed 2% but ATR stop is at 95.5 → no exit
-        assert!(check(&p, 97.0, 5, 1.5, &config).is_none());
+        assert!(check(&p, 97.0, 5, 1.5, 0.0, &config).is_none());
         // Price 95.0 < 95.5 → should fire
-        assert!(check(&p, 95.0, 5, 1.5, &config).is_some());
+        assert!(check(&p, 95.0, 5, 1.5, 0.0, &config).is_some());
     }
 
     // --- Take profit ---
@@ -260,7 +272,7 @@ mod tests {
     fn take_profit_fires_when_price_rises_above_threshold() {
         let p = pos(100.0, 0);
         // Price rose 4% (above 3% take profit)
-        let exit = check(&p, 104.0, 5, 0.0, &fixed_stop_config());
+        let exit = check(&p, 104.0, 5, 0.0, 0.0, &fixed_stop_config());
         assert!(exit.is_some());
         assert_eq!(exit.unwrap().reason, SignalReason::TakeProfit);
     }
@@ -268,7 +280,7 @@ mod tests {
     #[test]
     fn take_profit_does_not_fire_within_threshold() {
         let p = pos(100.0, 0);
-        assert!(check(&p, 102.0, 5, 0.0, &fixed_stop_config()).is_none());
+        assert!(check(&p, 102.0, 5, 0.0, 0.0, &fixed_stop_config()).is_none());
     }
 
     #[test]
@@ -278,7 +290,7 @@ mod tests {
             take_profit_pct: 0.0,
             ..fixed_stop_config()
         };
-        assert!(check(&p, 200.0, 5, 0.0, &config).is_none());
+        assert!(check(&p, 200.0, 5, 0.0, 0.0, &config).is_none());
     }
 
     // --- Max hold ---
@@ -286,7 +298,7 @@ mod tests {
     #[test]
     fn max_hold_fires_after_n_bars() {
         let p = pos(100.0, 0);
-        let exit = check(&p, 100.0, 100, 0.0, &fixed_stop_config());
+        let exit = check(&p, 100.0, 100, 0.0, 0.0, &fixed_stop_config());
         assert!(exit.is_some());
         assert_eq!(exit.unwrap().reason, SignalReason::MaxHoldTime);
     }
@@ -294,7 +306,7 @@ mod tests {
     #[test]
     fn max_hold_does_not_fire_before_n_bars() {
         let p = pos(100.0, 0);
-        assert!(check(&p, 100.0, 99, 0.0, &fixed_stop_config()).is_none());
+        assert!(check(&p, 100.0, 99, 0.0, 0.0, &fixed_stop_config()).is_none());
     }
 
     #[test]
@@ -304,7 +316,7 @@ mod tests {
             max_hold_bars: 0,
             ..fixed_stop_config()
         };
-        assert!(check(&p, 100.0, 9999, 0.0, &config).is_none());
+        assert!(check(&p, 100.0, 9999, 0.0, 0.0, &config).is_none());
     }
 
     // --- Priority ---
@@ -313,14 +325,14 @@ mod tests {
     fn stop_loss_takes_priority_over_max_hold() {
         let p = pos(100.0, 0);
         // Both stop loss and max hold would fire
-        let exit = check(&p, 95.0, 200, 0.0, &fixed_stop_config());
+        let exit = check(&p, 95.0, 200, 0.0, 0.0, &fixed_stop_config());
         assert_eq!(exit.unwrap().reason, SignalReason::StopLoss);
     }
 
     #[test]
     fn take_profit_takes_priority_over_max_hold() {
         let p = pos(100.0, 0);
-        let exit = check(&p, 105.0, 200, 0.0, &fixed_stop_config());
+        let exit = check(&p, 105.0, 200, 0.0, 0.0, &fixed_stop_config());
         assert_eq!(exit.unwrap().reason, SignalReason::TakeProfit);
     }
 
@@ -329,7 +341,7 @@ mod tests {
     #[test]
     fn no_exit_when_price_flat_and_within_hold() {
         let p = pos(100.0, 10);
-        assert!(check(&p, 100.5, 50, 0.0, &fixed_stop_config()).is_none());
+        assert!(check(&p, 100.5, 50, 0.0, 0.0, &fixed_stop_config()).is_none());
     }
 
     #[test]
@@ -342,6 +354,6 @@ mod tests {
             take_profit_pct: 0.0,
             min_hold_bars: 0,
         };
-        assert!(check(&p, 50.0, 9999, 0.0, &config).is_none());
+        assert!(check(&p, 50.0, 9999, 0.0, 0.0, &config).is_none());
     }
 }

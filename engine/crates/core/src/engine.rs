@@ -81,6 +81,7 @@ pub struct EngineConfig {
     pub combiner: combiner::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
+    pub garch: crate::features::GarchConfig,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
     /// Maximum allowed age (in milliseconds) of a bar before it's considered stale.
     /// Stale bars still update features (for warmup) but never generate signals.
@@ -108,6 +109,7 @@ pub struct Engine {
     warmup_mode: bool,
     stale_bars_skipped: HashMap<String, u64>,
     hot_metrics: HotMetrics,
+    garch_config: crate::features::GarchConfig,
 }
 
 impl Engine {
@@ -219,6 +221,7 @@ impl Engine {
             warmup_mode: false,
             stale_bars_skipped: HashMap::new(),
             hot_metrics: HotMetrics::new(config.metrics_enabled),
+            garch_config: config.garch,
         }
     }
 
@@ -284,7 +287,10 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
-        let feature_state = self.features.entry(bar.symbol.clone()).or_default();
+        let feature_state = self
+            .features
+            .entry(bar.symbol.clone())
+            .or_insert_with(|| FeatureState::with_garch(self.garch_config.clone()));
 
         let features =
             feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
@@ -316,8 +322,14 @@ impl Engine {
         // 2. Check exit rules on open positions (per-symbol exit config)
         let exit_config = self.exit_config_for(&bar.symbol);
         if let Some(pos) = self.open_positions.get(&bar.symbol)
-            && let Some(exit_intent) =
-                exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config)
+            && let Some(exit_intent) = exit::check(
+                pos,
+                bar.close,
+                self.bar_counter,
+                features.atr,
+                features.garch_vol,
+                exit_config,
+            )
         {
             if let Some(m) = self.hot_metrics.get(&bar.symbol) {
                 match exit_intent.reason {
@@ -433,7 +445,10 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars)
-        let feature_state = self.features.entry(bar.symbol.clone()).or_default();
+        let feature_state = self
+            .features
+            .entry(bar.symbol.clone())
+            .or_insert_with(|| FeatureState::with_garch(self.garch_config.clone()));
 
         let features =
             feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
@@ -475,8 +490,14 @@ impl Engine {
         // 2. Check exit rules on open positions (per-symbol exit config)
         let exit_config = self.exit_config_for(&bar.symbol);
         if let Some(pos) = self.open_positions.get(&bar.symbol)
-            && let Some(exit_intent) =
-                exit::check(pos, bar.close, self.bar_counter, features.atr, exit_config)
+            && let Some(exit_intent) = exit::check(
+                pos,
+                bar.close,
+                self.bar_counter,
+                features.atr,
+                features.garch_vol,
+                exit_config,
+            )
         {
             if let Some(m) = self.hot_metrics.get(&bar.symbol) {
                 match exit_intent.reason {

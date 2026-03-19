@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crate::engine::{EngineConfig, SymbolOverrides};
 use crate::exit::ExitConfig;
+use crate::features::GarchConfig;
 use crate::risk::RiskConfig;
 use crate::signals::{breakout, combiner, mean_reversion, momentum, vwap_reversion};
 
@@ -23,6 +24,7 @@ pub struct ConfigFile {
     pub breakout: breakout::Config,
     pub risk: RiskConfig,
     pub exit: ExitConfig,
+    pub garch: GarchConfig,
     pub data: DataConfig,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
 }
@@ -66,6 +68,7 @@ impl ConfigFile {
             combiner: self.combiner,
             risk: self.risk,
             exit: self.exit,
+            garch: self.garch,
             symbol_overrides: self.symbol_overrides,
             max_bar_age_ms: self.data.max_bar_age_seconds * 1000,
             metrics_enabled: self.metrics.enabled,
