@@ -301,7 +301,11 @@ estimated_cost_bps = 0.005
 # Bet sizing method: "linear" (fixed qty) or "kelly" (Bayesian Kelly).
 # Kelly uses posterior win rate + payoff ratio to size positions,
 # automatically conservative with few trades, growing as edge is confirmed.
-bet_sizing = "kelly"
+# Switched from "kelly" to "linear" for live paper trading: Kelly with
+# limited trade history caps at 5-6% of max notional (1 share of GLD).
+# Use linear to fully utilize the $10k budget while building trade history.
+# Switch back to Kelly once we have 50+ live trades to calibrate from.
+bet_sizing = "linear"
 
 # Kelly fraction ceiling (half-Kelly). 0.5 = bet at most half the optimal.
 # Lower = more conservative but smoother equity curve.
