@@ -57,6 +57,13 @@ min_score = 0.5
 # Set to false if you want to trade mean-reversion in both directions.
 trend_filter = true
 
+# Adaptive z-threshold: replace fixed buy_z_threshold with a rolling percentile.
+# When true, entry fires when z_score is in the bottom adaptive_z_percentile of
+# recent z-scores. Removes the fragile fixed threshold parameter — adapts to
+# changing volatility automatically.
+adaptive_z = true
+adaptive_z_percentile = 0.05   # bottom 5% of recent z-scores
+
 
 # ---------------------------------------------------------------------------
 # Momentum — trend-following strategy parameters
