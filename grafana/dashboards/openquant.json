@@ -2,7 +2,7 @@
   "id": null,
   "uid": "openquant-main",
   "title": "OpenQuant",
-  "description": "Quantitative trading dashboard \u2014 signals, P&L, execution quality, regime analysis",
+  "description": "Quantitative trading dashboard — signals, P&L, execution quality, regime analysis",
   "tags": [
     "openquant",
     "trading"
@@ -104,7 +104,7 @@
         "enable": true,
         "hide": false,
         "iconColor": "rgba(0, 211, 255, 1)",
-        "rawQuery": "SELECT b.timestamp/1000 as time, d.signal_side || ' ' || ROUND(d.signal_score, 2) || ' \u2014 ' || d.signal_reason as text, d.signal_side as tags FROM decisions d JOIN bars b ON d.bar_id = b.id WHERE d.signal_fired = 1"
+        "rawQuery": "SELECT b.timestamp/1000 as time, d.signal_side || ' ' || ROUND(d.signal_score, 2) || ' — ' || d.signal_reason as text, d.signal_side as tags FROM decisions d JOIN bars b ON d.bar_id = b.id WHERE d.signal_fired = 1"
       }
     ]
   },
@@ -139,8 +139,8 @@
       "targets": [
         {
           "refId": "A",
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM bars",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM bars"
+          "queryText": "SELECT COUNT(*) as value FROM bars",
+          "rawQueryText": "SELECT COUNT(*) as value FROM bars"
         }
       ],
       "options": {
@@ -180,8 +180,8 @@
       "targets": [
         {
           "refId": "A",
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
+          "queryText": "SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
+          "rawQueryText": "SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
         }
       ],
       "options": {
@@ -221,8 +221,8 @@
       "targets": [
         {
           "refId": "A",
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(CAST(SUM(d.signal_fired) AS REAL) / COUNT(*) * 100, 2) as value FROM decisions d JOIN bars b ON d.bar_id=b.id",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(CAST(SUM(d.signal_fired) AS REAL) / COUNT(*) * 100, 2) as value FROM decisions d JOIN bars b ON d.bar_id=b.id"
+          "queryText": "SELECT ROUND(CAST(SUM(d.signal_fired) AS REAL) / COUNT(*) * 100, 2) as value FROM decisions d JOIN bars b ON d.bar_id=b.id",
+          "rawQueryText": "SELECT ROUND(CAST(SUM(d.signal_fired) AS REAL) / COUNT(*) * 100, 2) as value FROM decisions d JOIN bars b ON d.bar_id=b.id"
         }
       ],
       "options": {
@@ -263,8 +263,8 @@
       "targets": [
         {
           "refId": "A",
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(DISTINCT symbol) as value FROM bars",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(DISTINCT symbol) as value FROM bars"
+          "queryText": "SELECT COUNT(DISTINCT symbol) as value FROM bars",
+          "rawQueryText": "SELECT COUNT(DISTINCT symbol) as value FROM bars"
         }
       ],
       "options": {
@@ -304,8 +304,8 @@
       "targets": [
         {
           "refId": "A",
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM fills f JOIN bars b ON f.bar_id=b.id",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM fills f JOIN bars b ON f.bar_id=b.id"
+          "queryText": "SELECT COUNT(*) as value FROM fills f JOIN bars b ON f.bar_id=b.id",
+          "rawQueryText": "SELECT COUNT(*) as value FROM fills f JOIN bars b ON f.bar_id=b.id"
         }
       ],
       "options": {
@@ -345,8 +345,8 @@
       "targets": [
         {
           "refId": "A",
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM trades t",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM trades t"
+          "queryText": "SELECT COUNT(*) as value FROM trades t",
+          "rawQueryText": "SELECT COUNT(*) as value FROM trades t"
         }
       ],
       "options": {
@@ -386,8 +386,8 @@
       "targets": [
         {
           "refId": "A",
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as value FROM fills f JOIN bars b ON f.bar_id=b.id",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as value FROM fills f JOIN bars b ON f.bar_id=b.id"
+          "queryText": "SELECT ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as value FROM fills f JOIN bars b ON f.bar_id=b.id",
+          "rawQueryText": "SELECT ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as value FROM fills f JOIN bars b ON f.bar_id=b.id"
         }
       ],
       "options": {
@@ -428,8 +428,8 @@
       "targets": [
         {
           "refId": "A",
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(SUM(pnl), 2) as value FROM trades",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(SUM(pnl), 2) as value FROM trades"
+          "queryText": "SELECT ROUND(SUM(pnl), 2) as value FROM trades",
+          "rawQueryText": "SELECT ROUND(SUM(pnl), 2) as value FROM trades"
         }
       ],
       "options": {
@@ -467,7 +467,7 @@
     },
     {
       "type": "row",
-      "title": "\u2699 Config Reference",
+      "title": "⚙ Config Reference",
       "collapsed": true,
       "gridPos": {
         "h": 1,
@@ -493,7 +493,7 @@
           "id": 1002,
           "options": {
             "mode": "markdown",
-            "content": "## Active Configuration\n\n### Strategies\n| Strategy | Enabled | Key Params |\n|---|---|---|\n| **Mean Reversion** | \u2713 | buy z < **-2.2**, sell z > **1.8**, min vol **1.2\u00d7**, min score **0.5**, trend filter ON |\n| **Momentum** | \u2713 | ADX > **20**, min score **0.3**, +DI > -DI filter ON, min vol **0.8\u00d7** |\n| **VWAP Reversion** | \u2713 | buy z < **-1.8**, sell z > **1.2**, min vol **1.0\u00d7**, skip first **30** bars |\n| **Breakout** | \u2717 | squeeze required, vol surge **1.2\u00d7**, trailing stop **3.0\u00d7 ATR** |\n\n### Combiner\nMin net score: **0.2** \u00b7 Min strategies: **1** \u00b7 Min exit strategies: **1**\nWeights: mean-rev **0.40** \u00b7 momentum **0.35** \u00b7 vwap **0.25** \u00b7 breakout **0.0**\nCUSUM gate: **OFF**\n\n### Risk\nMax position: **$10,000** \u00b7 Max daily loss: **$500** \u00b7 Bet sizing: **linear**\nMin reward/cost: **3.0\u00d7** \u00b7 Est. cost: **5 bps**\n\n### Exits\nStop loss: **2.5\u00d7 ATR** (dynamic) \u00b7 Take profit: **disabled**\nMax hold: **150 bars** (~2.5 hrs) \u00b7 Min hold: **10 bars**\n\n### Symbol Overrides\n| Symbol | Override |\n|---|---|\n| CVX | buy z < -2.8, min vol 1.5\u00d7 |\n| INTC | buy z < -2.5, max hold 80 bars |\n| JPM | min vol 1.5\u00d7 |\n\n### Data\nMax bar age: **120s** (stale bars rejected)\n"
+            "content": "## Active Configuration\n\n### Strategies\n| Strategy | Enabled | Key Params |\n|---|---|---|\n| **Mean Reversion** | ✓ | buy z < **-2.2**, sell z > **1.8**, min vol **1.2×**, min score **0.5**, trend filter ON |\n| **Momentum** | ✓ | ADX > **20**, min score **0.3**, +DI > -DI filter ON, min vol **0.8×** |\n| **VWAP Reversion** | ✓ | buy z < **-1.8**, sell z > **1.2**, min vol **1.0×**, skip first **30** bars |\n| **Breakout** | ✗ | squeeze required, vol surge **1.2×**, trailing stop **3.0× ATR** |\n\n### Combiner\nMin net score: **0.2** · Min strategies: **1** · Min exit strategies: **1**\nWeights: mean-rev **0.40** · momentum **0.35** · vwap **0.25** · breakout **0.0**\nCUSUM gate: **OFF**\n\n### Risk\nMax position: **$10,000** · Max daily loss: **$500** · Bet sizing: **linear**\nMin reward/cost: **3.0×** · Est. cost: **5 bps**\n\n### Exits\nStop loss: **2.5× ATR** (dynamic) · Take profit: **disabled**\nMax hold: **150 bars** (~2.5 hrs) · Min hold: **10 bars**\n\n### Symbol Overrides\n| Symbol | Override |\n|---|---|\n| CVX | buy z < -2.8, min vol 1.5× |\n| INTC | buy z < -2.5, max hold 80 bars |\n| JPM | min vol 1.5× |\n\n### Data\nMax bar age: **120s** (stale bars rejected)\n"
           }
         }
       ]
@@ -513,7 +513,7 @@
     },
     {
       "type": "candlestick",
-      "title": "${chart_symbol} \u2014 Candlestick",
+      "title": "${chart_symbol} — Candlestick",
       "datasource": {
         "type": "frser-sqlite-datasource",
         "uid": "${datasource}"
@@ -527,8 +527,8 @@
       "id": 10,
       "targets": [
         {
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.open, b.high, b.low, b.close FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.open, b.high, b.low, b.close FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
+          "queryText": "SELECT b.timestamp/1000 as time, b.open, b.high, b.low, b.close FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
+          "rawQueryText": "SELECT b.timestamp/1000 as time, b.open, b.high, b.low, b.close FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -556,7 +556,7 @@
     },
     {
       "type": "timeseries",
-      "title": "${chart_symbol} \u2014 Volume",
+      "title": "${chart_symbol} — Volume",
       "datasource": {
         "type": "frser-sqlite-datasource",
         "uid": "${datasource}"
@@ -570,8 +570,8 @@
       "id": 11,
       "targets": [
         {
-          "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.volume FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
-          "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.volume FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
+          "queryText": "SELECT b.timestamp/1000 as time, b.volume FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
+          "rawQueryText": "SELECT b.timestamp/1000 as time, b.volume FROM bars b WHERE b.symbol = '${chart_symbol}' ORDER BY b.timestamp",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -600,6 +600,305 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "${chart_symbol} — Z-Score (buy threshold shown)",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 901,
+      "targets": [
+        {
+          "queryText": "SELECT b.timestamp/1000 as time, f.return_z_score as z_score FROM features f JOIN bars b ON f.bar_id = b.id WHERE b.symbol = '${chart_symbol}' AND f.warmed_up = 1 ORDER BY b.timestamp",
+          "rawQueryText": "SELECT b.timestamp/1000 as time, f.return_z_score as z_score FROM features f JOIN bars b ON f.bar_id = b.id WHERE b.symbol = '${chart_symbol}' AND f.warmed_up = 1 ORDER BY b.timestamp",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 3
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": -2.5
+              },
+              {
+                "color": "orange",
+                "value": -2.0
+              },
+              {
+                "color": "green",
+                "value": -0.5
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              },
+              {
+                "color": "orange",
+                "value": 1.5
+              },
+              {
+                "color": "red",
+                "value": 2.0
+              }
+            ]
+          },
+          "custom.thresholdsStyle": {
+            "mode": "line"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "hidden"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "${chart_symbol} — Relative Volume (min 1.2× for signal)",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 902,
+      "targets": [
+        {
+          "queryText": "SELECT b.timestamp/1000 as time, f.relative_volume FROM features f JOIN bars b ON f.bar_id = b.id WHERE b.symbol = '${chart_symbol}' AND f.warmed_up = 1 ORDER BY b.timestamp",
+          "rawQueryText": "SELECT b.timestamp/1000 as time, f.relative_volume FROM features f JOIN bars b ON f.bar_id = b.id WHERE b.symbol = '${chart_symbol}' AND f.warmed_up = 1 ORDER BY b.timestamp",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 40,
+            "lineWidth": 0
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "semi-dark-blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "semi-dark-blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1.2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "hidden"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "${chart_symbol} — ADX (trend strength, >20 = tradeable)",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "id": 903,
+      "targets": [
+        {
+          "queryText": "SELECT b.timestamp/1000 as time, f.adx, f.plus_di, f.minus_di FROM features f JOIN bars b ON f.bar_id = b.id WHERE b.symbol = '${chart_symbol}' AND f.warmed_up = 1 ORDER BY b.timestamp",
+          "rawQueryText": "SELECT b.timestamp/1000 as time, f.adx, f.plus_di, f.minus_di FROM features f JOIN bars b ON f.bar_id = b.id WHERE b.symbol = '${chart_symbol}' AND f.warmed_up = 1 ORDER BY b.timestamp",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "adx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "white"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "plus_di"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "minus_di"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "${chart_symbol} — Regime & GARCH Vol Percentile",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "id": 904,
+      "targets": [
+        {
+          "queryText": "SELECT b.timestamp/1000 as time, f.garch_vol_percentile, f.regime_change_prob FROM features f JOIN bars b ON f.bar_id = b.id WHERE b.symbol = '${chart_symbol}' AND f.warmed_up = 1 ORDER BY b.timestamp",
+          "rawQueryText": "SELECT b.timestamp/1000 as time, f.garch_vol_percentile, f.regime_change_prob FROM features f JOIN bars b ON f.bar_id = b.id WHERE b.symbol = '${chart_symbol}' AND f.warmed_up = 1 ORDER BY b.timestamp",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "garch_vol_percentile"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "regime_change_prob"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
       "type": "row",
       "title": "Strategy Performance",
       "collapsed": true,
@@ -607,7 +906,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 42
       },
       "id": 300,
       "panels": [
@@ -628,8 +927,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY (buys+sells) DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY (buys+sells) DESC"
+              "queryText": "SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY (buys+sells) DESC",
+              "rawQueryText": "SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY (buys+sells) DESC"
             }
           ],
           "options": {
@@ -692,8 +991,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as signals, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells, ROUND(AVG(d.signal_score), 3) as avg_score, ROUND(AVG(d.risk_passed)*100, 1) as risk_pass_pct FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY signals DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as signals, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells, ROUND(AVG(d.signal_score), 3) as avg_score, ROUND(AVG(d.risk_passed)*100, 1) as risk_pass_pct FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY signals DESC"
+              "queryText": "SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as signals, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells, ROUND(AVG(d.signal_score), 3) as avg_score, ROUND(AVG(d.risk_passed)*100, 1) as risk_pass_pct FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY signals DESC",
+              "rawQueryText": "SELECT CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as signals, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells, ROUND(AVG(d.signal_score), 3) as avg_score, ROUND(AVG(d.risk_passed)*100, 1) as risk_pass_pct FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY strategy ORDER BY signals DESC"
             }
           ],
           "options": {
@@ -727,8 +1026,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.symbol, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY b.symbol ORDER BY (buys+sells) DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.symbol, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY b.symbol ORDER BY (buys+sells) DESC"
+              "queryText": "SELECT b.symbol, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY b.symbol ORDER BY (buys+sells) DESC",
+              "rawQueryText": "SELECT b.symbol, SUM(CASE WHEN d.signal_side='buy' THEN 1 ELSE 0 END) AS buys, SUM(CASE WHEN d.signal_side='sell' THEN 1 ELSE 0 END) AS sells FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY b.symbol ORDER BY (buys+sells) DESC"
             }
           ],
           "options": {
@@ -788,8 +1087,8 @@
           "id": 1003,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as score, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as score, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, d.signal_score as score, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, d.signal_score as score, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -875,8 +1174,8 @@
           "id": 1004,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%mean-reversion%' ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%mean-reversion%' ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%mean-reversion%' ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%mean-reversion%' ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -930,8 +1229,8 @@
           "id": 1005,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%momentum%' ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%momentum%' ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.adx as \"ADX\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%momentum%' ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.adx as \"ADX\", d.signal_side as side FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_reason LIKE '%momentum%' ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -971,7 +1270,7 @@
         {
           "type": "timeseries",
           "title": "Relative Volume at Entry",
-          "description": "Volume confirmation at signal time. Mean-rev needs \u22651.2\u00d7 (red line). Momentum needs \u22650.8\u00d7 (orange line). Dots below threshold = filter bug.",
+          "description": "Volume confirmation at signal time. Mean-rev needs ≥1.2× (red line). Momentum needs ≥0.8× (orange line). Dots below threshold = filter bug.",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -985,8 +1284,8 @@
           "id": 1006,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Rel Volume\", CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_side='buy' ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Rel Volume\", CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_side='buy' ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.relative_volume as \"Rel Volume\", CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_side='buy' ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.relative_volume as \"Rel Volume\", CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END as strategy FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 AND d.signal_side='buy' ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -1026,7 +1325,7 @@
         {
           "type": "barchart",
           "title": "Exit Reasons",
-          "description": "How positions are closed. stop loss = ATR-based (2.5\u00d7). max hold = 150 bar timeout. Strategy exits = normal signal reversal.",
+          "description": "How positions are closed. stop loss = ATR-based (2.5×). max hold = 150 bar timeout. Strategy exits = normal signal reversal.",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -1040,8 +1339,8 @@
           "id": 1007,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%stop loss%' THEN 'stop loss (2.5\u00d7 ATR)' WHEN d.signal_reason LIKE '%max hold%' THEN 'max hold (150 bars)' WHEN d.signal_reason LIKE '%take profit%' THEN 'take profit' WHEN d.signal_reason LIKE '%momentum sell%' THEN 'momentum exit' WHEN d.signal_reason LIKE '%mean-reversion sell%' THEN 'mean-rev exit' WHEN d.signal_reason LIKE '%vwap%sell%' THEN 'vwap exit' ELSE d.signal_reason END as reason, COUNT(*) as count FROM decisions d WHERE d.signal_fired=1 AND d.signal_side='sell' GROUP BY reason ORDER BY count DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN d.signal_reason LIKE '%stop loss%' THEN 'stop loss (2.5\u00d7 ATR)' WHEN d.signal_reason LIKE '%max hold%' THEN 'max hold (150 bars)' WHEN d.signal_reason LIKE '%take profit%' THEN 'take profit' WHEN d.signal_reason LIKE '%momentum sell%' THEN 'momentum exit' WHEN d.signal_reason LIKE '%mean-reversion sell%' THEN 'mean-rev exit' WHEN d.signal_reason LIKE '%vwap%sell%' THEN 'vwap exit' ELSE d.signal_reason END as reason, COUNT(*) as count FROM decisions d WHERE d.signal_fired=1 AND d.signal_side='sell' GROUP BY reason ORDER BY count DESC",
+              "queryText": "SELECT CASE WHEN d.signal_reason LIKE '%stop loss%' THEN 'stop loss (2.5× ATR)' WHEN d.signal_reason LIKE '%max hold%' THEN 'max hold (150 bars)' WHEN d.signal_reason LIKE '%take profit%' THEN 'take profit' WHEN d.signal_reason LIKE '%momentum sell%' THEN 'momentum exit' WHEN d.signal_reason LIKE '%mean-reversion sell%' THEN 'mean-rev exit' WHEN d.signal_reason LIKE '%vwap%sell%' THEN 'vwap exit' ELSE d.signal_reason END as reason, COUNT(*) as count FROM decisions d WHERE d.signal_fired=1 AND d.signal_side='sell' GROUP BY reason ORDER BY count DESC",
+              "rawQueryText": "SELECT CASE WHEN d.signal_reason LIKE '%stop loss%' THEN 'stop loss (2.5× ATR)' WHEN d.signal_reason LIKE '%max hold%' THEN 'max hold (150 bars)' WHEN d.signal_reason LIKE '%take profit%' THEN 'take profit' WHEN d.signal_reason LIKE '%momentum sell%' THEN 'momentum exit' WHEN d.signal_reason LIKE '%mean-reversion sell%' THEN 'mean-rev exit' WHEN d.signal_reason LIKE '%vwap%sell%' THEN 'vwap exit' ELSE d.signal_reason END as reason, COUNT(*) as count FROM decisions d WHERE d.signal_fired=1 AND d.signal_side='sell' GROUP BY reason ORDER BY count DESC",
               "refId": "A"
             }
           ],
@@ -1068,7 +1367,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 43
       },
       "id": 400,
       "panels": [
@@ -1089,8 +1388,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT d.signal_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT d.signal_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
+              "queryText": "SELECT d.signal_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
+              "rawQueryText": "SELECT d.signal_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
             }
           ],
           "options": {
@@ -1123,8 +1422,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as \"score\" FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, d.signal_score as \"score\" FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, d.signal_score as \"score\" FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, d.signal_score as \"score\" FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp",
               "timeColumns": [
                 "time"
               ]
@@ -1161,8 +1460,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(AVG(d.risk_passed)*100, 1) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT ROUND(AVG(d.risk_passed)*100, 1) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
+              "queryText": "SELECT ROUND(AVG(d.risk_passed)*100, 1) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
+              "rawQueryText": "SELECT ROUND(AVG(d.risk_passed)*100, 1) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
             }
           ],
           "options": {
@@ -1216,8 +1515,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT d.risk_rejection, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.risk_passed=0 AND d.signal_fired=1 GROUP BY d.risk_rejection ORDER BY count DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT d.risk_rejection, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.risk_passed=0 AND d.signal_fired=1 GROUP BY d.risk_rejection ORDER BY count DESC"
+              "queryText": "SELECT d.risk_rejection, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.risk_passed=0 AND d.signal_fired=1 GROUP BY d.risk_rejection ORDER BY count DESC",
+              "rawQueryText": "SELECT d.risk_rejection, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.risk_passed=0 AND d.signal_fired=1 GROUP BY d.risk_rejection ORDER BY count DESC"
             }
           ],
           "options": {
@@ -1247,8 +1546,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT datetime(b.timestamp/1000, 'unixepoch') as time, b.symbol, d.signal_side as side, ROUND(d.signal_score, 3) as score, d.signal_reason as reason, CASE WHEN d.risk_passed THEN '\u2713' ELSE '\u2717' END as risk, d.qty_approved as qty, ROUND(b.close, 2) as price FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp DESC LIMIT 100",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT datetime(b.timestamp/1000, 'unixepoch') as time, b.symbol, d.signal_side as side, ROUND(d.signal_score, 3) as score, d.signal_reason as reason, CASE WHEN d.risk_passed THEN '\u2713' ELSE '\u2717' END as risk, d.qty_approved as qty, ROUND(b.close, 2) as price FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp DESC LIMIT 100",
+              "queryText": "SELECT datetime(b.timestamp/1000, 'unixepoch') as time, b.symbol, d.signal_side as side, ROUND(d.signal_score, 3) as score, d.signal_reason as reason, CASE WHEN d.risk_passed THEN '✓' ELSE '✗' END as risk, d.qty_approved as qty, ROUND(b.close, 2) as price FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp DESC LIMIT 100",
+              "rawQueryText": "SELECT datetime(b.timestamp/1000, 'unixepoch') as time, b.symbol, d.signal_side as side, ROUND(d.signal_score, 3) as score, d.signal_reason as reason, CASE WHEN d.risk_passed THEN '✓' ELSE '✗' END as risk, d.qty_approved as qty, ROUND(b.close, 2) as price FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 ORDER BY b.timestamp DESC LIMIT 100",
               "timeColumns": [
                 "time"
               ]
@@ -1259,7 +1558,7 @@
           }
         }
       ],
-      "description": "Signal scoring health. Mean-rev score = 0.6\u00d7|z-threshold| + 0.4\u00d7(vol-1.0). Momentum = 0.5\u00d7adx + 0.3\u00d7ma_sep + 0.2\u00d7vol. Higher scores should correlate with better forward returns."
+      "description": "Signal scoring health. Mean-rev score = 0.6×|z-threshold| + 0.4×(vol-1.0). Momentum = 0.5×adx + 0.3×ma_sep + 0.2×vol. Higher scores should correlate with better forward returns."
     },
     {
       "type": "row",
@@ -1269,7 +1568,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 30
+        "y": 44
       },
       "id": 500,
       "panels": [
@@ -1289,8 +1588,8 @@
           "id": 40,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.fill_price as \"Fill Price\", b.close as \"Bar Close\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.fill_price as \"Fill Price\", b.close as \"Bar Close\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.fill_price as \"Fill Price\", b.close as \"Bar Close\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.fill_price as \"Fill Price\", b.close as \"Bar Close\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -1354,8 +1653,8 @@
           "id": 41,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT f.symbol, COUNT(*) as fills, SUM(CASE WHEN f.side='buy' THEN 1 ELSE 0 END) as buys, SUM(CASE WHEN f.side='sell' THEN 1 ELSE 0 END) as sells FROM fills f GROUP BY f.symbol ORDER BY fills DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT f.symbol, COUNT(*) as fills, SUM(CASE WHEN f.side='buy' THEN 1 ELSE 0 END) as buys, SUM(CASE WHEN f.side='sell' THEN 1 ELSE 0 END) as sells FROM fills f GROUP BY f.symbol ORDER BY fills DESC",
+              "queryText": "SELECT f.symbol, COUNT(*) as fills, SUM(CASE WHEN f.side='buy' THEN 1 ELSE 0 END) as buys, SUM(CASE WHEN f.side='sell' THEN 1 ELSE 0 END) as sells FROM fills f GROUP BY f.symbol ORDER BY fills DESC",
+              "rawQueryText": "SELECT f.symbol, COUNT(*) as fills, SUM(CASE WHEN f.side='buy' THEN 1 ELSE 0 END) as buys, SUM(CASE WHEN f.side='sell' THEN 1 ELSE 0 END) as sells FROM fills f GROUP BY f.symbol ORDER BY fills DESC",
               "refId": "A"
             }
           ],
@@ -1400,8 +1699,8 @@
           "id": 42,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT datetime(b.timestamp/1000, 'unixepoch') as time, f.symbol, f.side, ROUND(f.fill_price, 2) as fill_price, ROUND(b.close, 2) as bar_close, ROUND(f.slippage * 10000, 2) as slippage_bps, f.qty FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT datetime(b.timestamp/1000, 'unixepoch') as time, f.symbol, f.side, ROUND(f.fill_price, 2) as fill_price, ROUND(b.close, 2) as bar_close, ROUND(f.slippage * 10000, 2) as slippage_bps, f.qty FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp DESC",
+              "queryText": "SELECT datetime(b.timestamp/1000, 'unixepoch') as time, f.symbol, f.side, ROUND(f.fill_price, 2) as fill_price, ROUND(b.close, 2) as bar_close, ROUND(f.slippage * 10000, 2) as slippage_bps, f.qty FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp DESC",
+              "rawQueryText": "SELECT datetime(b.timestamp/1000, 'unixepoch') as time, f.symbol, f.side, ROUND(f.fill_price, 2) as fill_price, ROUND(b.close, 2) as bar_close, ROUND(f.slippage * 10000, 2) as slippage_bps, f.qty FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp DESC",
               "refId": "A"
             }
           ],
@@ -1410,7 +1709,7 @@
           }
         }
       ],
-      "description": "Round-trip trade performance. Trades close via: strategy exit signal, stop loss (2.5\u00d7 ATR), take profit, or max hold (150 bars). No trades = positions still open or no fills matched."
+      "description": "Round-trip trade performance. Trades close via: strategy exit signal, stop loss (2.5× ATR), take profit, or max hold (150 bars). No trades = positions still open or no fills matched."
     },
     {
       "type": "row",
@@ -1420,14 +1719,14 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 45
       },
       "id": 600,
       "panels": [
         {
           "type": "table",
-          "title": "Signal Heatmap: Hour \u00d7 Strategy",
-          "description": "Signal count by hour and strategy \u2014 bright cells = active windows",
+          "title": "Signal Heatmap: Hour × Strategy",
+          "description": "Signal count by hour and strategy — bright cells = active windows",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -1442,8 +1741,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour, strategy ORDER BY hour",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour, strategy ORDER BY hour"
+              "queryText": "SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour, strategy ORDER BY hour",
+              "rawQueryText": "SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour, strategy ORDER BY hour"
             }
           ],
           "options": {
@@ -1493,8 +1792,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, COUNT(*) as count, ROUND(AVG(d.signal_score), 3) as avg_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour ORDER BY hour",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, COUNT(*) as count, ROUND(AVG(d.signal_score), 3) as avg_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour ORDER BY hour"
+              "queryText": "SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, COUNT(*) as count, ROUND(AVG(d.signal_score), 3) as avg_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour ORDER BY hour",
+              "rawQueryText": "SELECT CAST(strftime('%H', datetime(b.timestamp/1000, 'unixepoch')) AS INTEGER) AS hour, COUNT(*) as count, ROUND(AVG(d.signal_score), 3) as avg_score FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1 GROUP BY hour ORDER BY hour"
             }
           ],
           "options": {
@@ -1551,14 +1850,14 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 46
       },
       "id": 700,
       "panels": [
         {
           "type": "timeseries",
           "title": "ADX Trend Strength",
-          "description": "Red zone (ADX<15): ranging \u2014 momentum fails here. Orange (15-25): weak trend. Green (25-40): trending \u2014 momentum sweet spot. Blue (>40): strong trend. Config: momentum min_adx=20.",
+          "description": "Red zone (ADX<15): ranging — momentum fails here. Orange (15-25): weak trend. Green (25-40): trending — momentum sweet spot. Blue (>40): strong trend. Config: momentum min_adx=20.",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -1573,8 +1872,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.adx FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.adx FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "timeColumns": [
                 "time"
               ]
@@ -1634,8 +1933,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, COUNT(*) as count FROM features f JOIN bars b ON f.bar_id=b.id GROUP BY regime",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, COUNT(*) as count FROM features f JOIN bars b ON f.bar_id=b.id GROUP BY regime"
+              "queryText": "SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, COUNT(*) as count FROM features f JOIN bars b ON f.bar_id=b.id GROUP BY regime",
+              "rawQueryText": "SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, COUNT(*) as count FROM features f JOIN bars b ON f.bar_id=b.id GROUP BY regime"
             }
           ],
           "options": {
@@ -1703,7 +2002,7 @@
         },
         {
           "type": "barchart",
-          "title": "Signals per Regime \u00d7 Strategy",
+          "title": "Signals per Regime × Strategy",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -1718,8 +2017,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime"
+              "queryText": "SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
+              "rawQueryText": "SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime"
             }
           ],
           "options": {
@@ -1744,8 +2043,8 @@
           "id": 63,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' WHEN f.adx > 15 THEN 'weak' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-rev' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END AS strategy, ROUND(AVG(d.signal_score), 3) as avg_score, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' WHEN f.adx > 15 THEN 'weak' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-rev' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END AS strategy, ROUND(AVG(d.signal_score), 3) as avg_score, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
+              "queryText": "SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' WHEN f.adx > 15 THEN 'weak' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-rev' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END AS strategy, ROUND(AVG(d.signal_score), 3) as avg_score, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
+              "rawQueryText": "SELECT CASE WHEN f.adx > 40 THEN 'strong-trend' WHEN f.adx > 25 THEN 'trending' WHEN f.adx > 15 THEN 'weak' ELSE 'ranging' END AS regime, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' THEN 'mean-rev' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap' ELSE 'other' END AS strategy, ROUND(AVG(d.signal_score), 3) as avg_score, COUNT(*) as count FROM decisions d JOIN bars b ON d.bar_id=b.id JOIN features f ON f.bar_id=b.id WHERE d.signal_fired=1 GROUP BY regime, strategy ORDER BY regime",
               "refId": "A"
             }
           ],
@@ -1762,7 +2061,7 @@
         {
           "type": "timeseries",
           "title": "Regime Timeline",
-          "description": "ADX colored by regime. Red shade (<15) = ranging \u2014 mean-rev territory. Green shade (25-40) = trending \u2014 momentum territory. Blue (>40) = strong trend. Orange (15-25) = ambiguous.",
+          "description": "ADX colored by regime. Red shade (<15) = ranging — mean-rev territory. Green shade (25-40) = trending — momentum territory. Blue (>40) = strong trend. Orange (15-25) = ambiguous.",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -1776,8 +2075,8 @@
           "id": 64,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.adx as \"ADX\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.adx as \"ADX\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.adx as \"ADX\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -1839,10 +2138,12 @@
           "id": 92,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.market_regime as \"Regime\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.market_regime as \"Regime\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.market_regime as \"Regime\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.market_regime as \"Regime\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
-              "timeColumns": ["time"]
+              "timeColumns": [
+                "time"
+              ]
             }
           ],
           "fieldConfig": {
@@ -1873,10 +2174,12 @@
           "id": 93,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.garch_vol_percentile as \"Vol Percentile\", f.regime_change_prob as \"Changepoint Prob\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.garch_vol_percentile as \"Vol Percentile\", f.regime_change_prob as \"Changepoint Prob\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.garch_vol_percentile as \"Vol Percentile\", f.regime_change_prob as \"Changepoint Prob\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.garch_vol_percentile as \"Vol Percentile\", f.regime_change_prob as \"Changepoint Prob\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
-              "timeColumns": ["time"]
+              "timeColumns": [
+                "time"
+              ]
             }
           ],
           "fieldConfig": {
@@ -1889,16 +2192,43 @@
             },
             "overrides": [
               {
-                "matcher": {"id": "byName", "options": "Vol Percentile"},
+                "matcher": {
+                  "id": "byName",
+                  "options": "Vol Percentile"
+                },
                 "properties": [
-                  {"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "blue"
+                    }
+                  }
                 ]
               },
               {
-                "matcher": {"id": "byName", "options": "Changepoint Prob"},
+                "matcher": {
+                  "id": "byName",
+                  "options": "Changepoint Prob"
+                },
                 "properties": [
-                  {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}},
-                  {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [5, 5]}}
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  },
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash",
+                      "dash": [
+                        5,
+                        5
+                      ]
+                    }
+                  }
                 ]
               }
             ]
@@ -1927,10 +2257,12 @@
           "id": 94,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, CASE f.market_regime WHEN 'LowVol' THEN 0.40*1.5 WHEN 'Normal' THEN 0.40*1.0 WHEN 'HighVol' THEN 0.40*0.2 WHEN 'Crisis' THEN 0.0 ELSE 0.40 END as \"MeanRev Weight\", CASE f.market_regime WHEN 'LowVol' THEN 0.35*0.3 WHEN 'Normal' THEN 0.35*1.0 WHEN 'HighVol' THEN 0.35*1.5 WHEN 'Crisis' THEN 0.35*0.5 ELSE 0.35 END as \"Momentum Weight\", CASE f.market_regime WHEN 'LowVol' THEN 0.25*1.3 WHEN 'Normal' THEN 0.25*1.0 WHEN 'HighVol' THEN 0.25*0.5 WHEN 'Crisis' THEN 0.0 ELSE 0.25 END as \"VWAP Weight\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, CASE f.market_regime WHEN 'LowVol' THEN 0.40*1.5 WHEN 'Normal' THEN 0.40*1.0 WHEN 'HighVol' THEN 0.40*0.2 WHEN 'Crisis' THEN 0.0 ELSE 0.40 END as \"MeanRev Weight\", CASE f.market_regime WHEN 'LowVol' THEN 0.35*0.3 WHEN 'Normal' THEN 0.35*1.0 WHEN 'HighVol' THEN 0.35*1.5 WHEN 'Crisis' THEN 0.35*0.5 ELSE 0.35 END as \"Momentum Weight\", CASE f.market_regime WHEN 'LowVol' THEN 0.25*1.3 WHEN 'Normal' THEN 0.25*1.0 WHEN 'HighVol' THEN 0.25*0.5 WHEN 'Crisis' THEN 0.0 ELSE 0.25 END as \"VWAP Weight\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, CASE f.market_regime WHEN 'LowVol' THEN 0.40*1.5 WHEN 'Normal' THEN 0.40*1.0 WHEN 'HighVol' THEN 0.40*0.2 WHEN 'Crisis' THEN 0.0 ELSE 0.40 END as \"MeanRev Weight\", CASE f.market_regime WHEN 'LowVol' THEN 0.35*0.3 WHEN 'Normal' THEN 0.35*1.0 WHEN 'HighVol' THEN 0.35*1.5 WHEN 'Crisis' THEN 0.35*0.5 ELSE 0.35 END as \"Momentum Weight\", CASE f.market_regime WHEN 'LowVol' THEN 0.25*1.3 WHEN 'Normal' THEN 0.25*1.0 WHEN 'HighVol' THEN 0.25*0.5 WHEN 'Crisis' THEN 0.0 ELSE 0.25 END as \"VWAP Weight\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, CASE f.market_regime WHEN 'LowVol' THEN 0.40*1.5 WHEN 'Normal' THEN 0.40*1.0 WHEN 'HighVol' THEN 0.40*0.2 WHEN 'Crisis' THEN 0.0 ELSE 0.40 END as \"MeanRev Weight\", CASE f.market_regime WHEN 'LowVol' THEN 0.35*0.3 WHEN 'Normal' THEN 0.35*1.0 WHEN 'HighVol' THEN 0.35*1.5 WHEN 'Crisis' THEN 0.35*0.5 ELSE 0.35 END as \"Momentum Weight\", CASE f.market_regime WHEN 'LowVol' THEN 0.25*1.3 WHEN 'Normal' THEN 0.25*1.0 WHEN 'HighVol' THEN 0.25*0.5 WHEN 'Crisis' THEN 0.0 ELSE 0.25 END as \"VWAP Weight\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
-              "timeColumns": ["time"]
+              "timeColumns": [
+                "time"
+              ]
             }
           ],
           "fieldConfig": {
@@ -1938,21 +2270,56 @@
               "custom": {
                 "lineWidth": 2,
                 "fillOpacity": 15,
-                "stacking": {"mode": "normal"}
+                "stacking": {
+                  "mode": "normal"
+                }
               }
             },
             "overrides": [
               {
-                "matcher": {"id": "byName", "options": "MeanRev Weight"},
-                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
+                "matcher": {
+                  "id": "byName",
+                  "options": "MeanRev Weight"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
               },
               {
-                "matcher": {"id": "byName", "options": "Momentum Weight"},
-                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]
+                "matcher": {
+                  "id": "byName",
+                  "options": "Momentum Weight"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  }
+                ]
               },
               {
-                "matcher": {"id": "byName", "options": "VWAP Weight"},
-                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}]
+                "matcher": {
+                  "id": "byName",
+                  "options": "VWAP Weight"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "blue"
+                    }
+                  }
+                ]
               }
             ]
           },
@@ -1980,22 +2347,37 @@
           "id": 95,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, CASE f.market_regime WHEN 'LowVol' THEN 0.6 WHEN 'Normal' THEN 0.5 WHEN 'HighVol' THEN 0.25 WHEN 'Crisis' THEN 0.10 ELSE 0.5 END as \"Kelly Ceiling\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, CASE f.market_regime WHEN 'LowVol' THEN 0.6 WHEN 'Normal' THEN 0.5 WHEN 'HighVol' THEN 0.25 WHEN 'Crisis' THEN 0.10 ELSE 0.5 END as \"Kelly Ceiling\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, CASE f.market_regime WHEN 'LowVol' THEN 0.6 WHEN 'Normal' THEN 0.5 WHEN 'HighVol' THEN 0.25 WHEN 'Crisis' THEN 0.10 ELSE 0.5 END as \"Kelly Ceiling\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, CASE f.market_regime WHEN 'LowVol' THEN 0.6 WHEN 'Normal' THEN 0.5 WHEN 'HighVol' THEN 0.25 WHEN 'Crisis' THEN 0.10 ELSE 0.5 END as \"Kelly Ceiling\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
-              "timeColumns": ["time"]
+              "timeColumns": [
+                "time"
+              ]
             }
           ],
           "fieldConfig": {
             "defaults": {
-              "custom": {"lineWidth": 2},
+              "custom": {
+                "lineWidth": 2
+              },
               "min": 0,
               "max": 1
             },
             "overrides": [
               {
-                "matcher": {"id": "byName", "options": "Kelly Ceiling"},
-                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "purple"}}]
+                "matcher": {
+                  "id": "byName",
+                  "options": "Kelly Ceiling"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "purple"
+                    }
+                  }
+                ]
               }
             ]
           },
@@ -2017,7 +2399,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 47
       },
       "id": 800,
       "panels": [
@@ -2038,8 +2420,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.close as \"Close\", f.bollinger_upper as \"Upper Band\", f.bollinger_lower as \"Lower Band\", f.sma_20 as \"SMA 20\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.close as \"Close\", f.bollinger_upper as \"Upper Band\", f.bollinger_lower as \"Lower Band\", f.sma_20 as \"SMA 20\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, b.close as \"Close\", f.bollinger_upper as \"Upper Band\", f.bollinger_lower as \"Lower Band\", f.sma_20 as \"SMA 20\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, b.close as \"Close\", f.bollinger_upper as \"Upper Band\", f.bollinger_lower as \"Lower Band\", f.sma_20 as \"SMA 20\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "timeColumns": [
                 "time"
               ]
@@ -2142,7 +2524,7 @@
               }
             ]
           },
-          "description": "Price with Bollinger Bands (20-period, 2\u03c3). Close below lower band = oversold (mean-rev buy zone). Above upper = overbought (mean-rev sell zone). Band width shows volatility compression/expansion."
+          "description": "Price with Bollinger Bands (20-period, 2σ). Close below lower band = oversold (mean-rev buy zone). Above upper = overbought (mean-rev sell zone). Band width shows volatility compression/expansion."
         },
         {
           "type": "timeseries",
@@ -2161,8 +2543,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.close as \"Close\", f.ema_fast as \"EMA Fast\", f.ema_slow as \"EMA Slow\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, b.close as \"Close\", f.ema_fast as \"EMA Fast\", f.ema_slow as \"EMA Slow\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, b.close as \"Close\", f.ema_fast as \"EMA Fast\", f.ema_slow as \"EMA Slow\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, b.close as \"Close\", f.ema_fast as \"EMA Fast\", f.ema_slow as \"EMA Slow\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "timeColumns": [
                 "time"
               ]
@@ -2241,8 +2623,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.return_z_score as \"Z-Score\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "timeColumns": [
                 "time"
               ]
@@ -2305,8 +2687,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Relative Volume\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.relative_volume as \"Relative Volume\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.relative_volume as \"Relative Volume\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.relative_volume as \"Relative Volume\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "timeColumns": [
                 "time"
               ]
@@ -2350,7 +2732,7 @@
             },
             "overrides": []
           },
-          "description": "Red (<0.8\u00d7): too quiet \u2014 no strategy should trade. Orange (0.8-1.2\u00d7): momentum OK (min 0.8\u00d7), mean-rev won't fire. Green (1.2-2.0\u00d7): mean-rev confirmed (min 1.2\u00d7). Blue (>2.0\u00d7): unusual activity \u2014 high conviction."
+          "description": "Red (<0.8×): too quiet — no strategy should trade. Orange (0.8-1.2×): momentum OK (min 0.8×), mean-rev won't fire. Green (1.2-2.0×): mean-rev confirmed (min 1.2×). Blue (>2.0×): unusual activity — high conviction."
         },
         {
           "type": "timeseries",
@@ -2369,8 +2751,8 @@
           "id": 74,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_pct_b as \"%B\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_pct_b as \"%B\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.bollinger_pct_b as \"%B\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.bollinger_pct_b as \"%B\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -2431,8 +2813,8 @@
           "id": 75,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.plus_di as \"+DI\", f.minus_di as \"-DI\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.plus_di as \"+DI\", f.minus_di as \"-DI\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.plus_di as \"+DI\", f.minus_di as \"-DI\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.plus_di as \"+DI\", f.minus_di as \"-DI\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -2488,7 +2870,7 @@
         {
           "type": "timeseries",
           "title": "Bollinger Bandwidth (Squeeze Detector)",
-          "description": "Low bandwidth = volatility squeeze (potential breakout). Breakout strategy (currently disabled) needs squeeze_required=true. Narrow bands \u2192 expansion often precedes big moves.",
+          "description": "Low bandwidth = volatility squeeze (potential breakout). Breakout strategy (currently disabled) needs squeeze_required=true. Narrow bands → expansion often precedes big moves.",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -2502,8 +2884,8 @@
           "id": 76,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_bandwidth as \"Bandwidth\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.bollinger_bandwidth as \"Bandwidth\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.bollinger_bandwidth as \"Bandwidth\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.bollinger_bandwidth as \"Bandwidth\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -2527,7 +2909,7 @@
         {
           "type": "timeseries",
           "title": "ATR (Stop Loss Reference)",
-          "description": "Average True Range drives the dynamic stop loss (entry - 2.5\u00d7 ATR). Higher ATR = wider stops = more room but more risk per trade.",
+          "description": "Average True Range drives the dynamic stop loss (entry - 2.5× ATR). Higher ATR = wider stops = more room but more risk per trade.",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -2541,8 +2923,8 @@
           "id": 77,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.atr as \"ATR\", f.atr * 2.5 as \"Stop Distance (2.5\u00d7)\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.atr as \"ATR\", f.atr * 2.5 as \"Stop Distance (2.5\u00d7)\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.atr as \"ATR\", f.atr * 2.5 as \"Stop Distance (2.5×)\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.atr as \"ATR\", f.atr * 2.5 as \"Stop Distance (2.5×)\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -2574,7 +2956,7 @@
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "Stop Distance (2.5\u00d7)"
+                  "options": "Stop Distance (2.5×)"
                 },
                 "properties": [
                   {
@@ -2612,7 +2994,7 @@
         {
           "type": "timeseries",
           "title": "GARCH Vol vs ATR (Stop Loss Inputs)",
-          "description": "GJR-GARCH conditional volatility (converted to price-space: \u03c3 \u00d7 close) compared against ATR. GARCH reacts faster to crashes due to the asymmetry coefficient \u03b3.",
+          "description": "GJR-GARCH conditional volatility (converted to price-space: σ × close) compared against ATR. GARCH reacts faster to crashes due to the asymmetry coefficient γ.",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -2626,8 +3008,8 @@
           "id": 90,
           "targets": [
             {
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.garch_vol * b.close as \"GARCH Vol (\u03c3\u00d7price)\", f.atr as \"ATR\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.garch_vol * b.close as \"GARCH Vol (\u03c3\u00d7price)\", f.atr as \"ATR\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, f.garch_vol * b.close as \"GARCH Vol (σ×price)\", f.atr as \"ATR\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, f.garch_vol * b.close as \"GARCH Vol (σ×price)\", f.atr as \"ATR\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "refId": "A",
               "timeColumns": [
                 "time"
@@ -2644,7 +3026,7 @@
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "GARCH Vol (\u03c3\u00d7price)"
+                  "options": "GARCH Vol (σ×price)"
                 },
                 "properties": [
                   {
@@ -2691,7 +3073,7 @@
           }
         }
       ],
-      "description": "Technical indicators driving signals. Bollinger bands (20-period SMA \u00b1 2\u03c3) drive mean-rev %B. EMA crossover (fast/slow) drives momentum. Z-score > \u00b12 = extreme. Relative volume > 1.2 required for mean-rev entry."
+      "description": "Technical indicators driving signals. Bollinger bands (20-period SMA ± 2σ) drive mean-rev %B. EMA crossover (fast/slow) drives momentum. Z-score > ±2 = extreme. Relative volume > 1.2 required for mean-rev entry."
     },
     {
       "type": "row",
@@ -2701,7 +3083,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 48
       },
       "id": 900,
       "panels": [
@@ -2722,8 +3104,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT (f.fill_price - b.close) / b.close * 10000 AS slippage_bps FROM fills f JOIN bars b ON f.bar_id=b.id",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT (f.fill_price - b.close) / b.close * 10000 AS slippage_bps FROM fills f JOIN bars b ON f.bar_id=b.id"
+              "queryText": "SELECT (f.fill_price - b.close) / b.close * 10000 AS slippage_bps FROM fills f JOIN bars b ON f.bar_id=b.id",
+              "rawQueryText": "SELECT (f.fill_price - b.close) / b.close * 10000 AS slippage_bps FROM fills f JOIN bars b ON f.bar_id=b.id"
             }
           ],
           "options": {
@@ -2738,7 +3120,7 @@
             },
             "overrides": []
           },
-          "description": "Should be centered near 0. Config estimates 5 bps cost. If avg slippage >> 5 bps, the reward/cost ratio (min 3.0\u00d7) is miscalibrated."
+          "description": "Should be centered near 0. Config estimates 5 bps cost. If avg slippage >> 5 bps, the reward/cost ratio (min 3.0×) is miscalibrated."
         },
         {
           "type": "timeseries",
@@ -2757,8 +3139,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, (f.fill_price - b.close) / b.close * 10000 AS \"Slippage (bps)\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, (f.fill_price - b.close) / b.close * 10000 AS \"Slippage (bps)\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "queryText": "SELECT b.timestamp/1000 as time, (f.fill_price - b.close) / b.close * 10000 AS \"Slippage (bps)\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "SELECT b.timestamp/1000 as time, (f.fill_price - b.close) / b.close * 10000 AS \"Slippage (bps)\" FROM fills f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
               "timeColumns": [
                 "time"
               ]
@@ -2796,8 +3178,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT f.symbol, COUNT(*) as fills, ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as avg_bps, ROUND(MAX(ABS((f.fill_price - b.close) / b.close * 10000)), 2) as max_bps FROM fills f JOIN bars b ON f.bar_id=b.id GROUP BY f.symbol ORDER BY avg_bps DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT f.symbol, COUNT(*) as fills, ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as avg_bps, ROUND(MAX(ABS((f.fill_price - b.close) / b.close * 10000)), 2) as max_bps FROM fills f JOIN bars b ON f.bar_id=b.id GROUP BY f.symbol ORDER BY avg_bps DESC"
+              "queryText": "SELECT f.symbol, COUNT(*) as fills, ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as avg_bps, ROUND(MAX(ABS((f.fill_price - b.close) / b.close * 10000)), 2) as max_bps FROM fills f JOIN bars b ON f.bar_id=b.id GROUP BY f.symbol ORDER BY avg_bps DESC",
+              "rawQueryText": "SELECT f.symbol, COUNT(*) as fills, ROUND(AVG((f.fill_price - b.close) / b.close * 10000), 2) as avg_bps, ROUND(MAX(ABS((f.fill_price - b.close) / b.close * 10000)), 2) as max_bps FROM fills f JOIN bars b ON f.bar_id=b.id GROUP BY f.symbol ORDER BY avg_bps DESC"
             }
           ],
           "options": {
@@ -2815,7 +3197,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 49
       },
       "id": 1000,
       "panels": [
@@ -2836,8 +3218,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, d.signal_side, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE strategy != prev_strategy AND prev_strategy IS NOT NULL",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, d.signal_side, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE strategy != prev_strategy AND prev_strategy IS NOT NULL"
+              "queryText": "WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, d.signal_side, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE strategy != prev_strategy AND prev_strategy IS NOT NULL",
+              "rawQueryText": "WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, d.signal_side, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE strategy != prev_strategy AND prev_strategy IS NOT NULL"
             }
           ],
           "options": {
@@ -2861,7 +3243,7 @@
         },
         {
           "type": "stat",
-          "title": "Side Flips (Buy\u2194Sell)",
+          "title": "Side Flips (Buy↔Sell)",
           "datasource": {
             "type": "frser-sqlite-datasource",
             "uid": "${datasource}"
@@ -2876,8 +3258,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, d.signal_side, LAG(d.signal_side) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_side FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE signal_side != prev_side AND prev_side IS NOT NULL",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, d.signal_side, LAG(d.signal_side) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_side FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE signal_side != prev_side AND prev_side IS NOT NULL"
+              "queryText": "WITH sig AS (SELECT b.symbol, b.timestamp, d.signal_side, LAG(d.signal_side) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_side FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE signal_side != prev_side AND prev_side IS NOT NULL",
+              "rawQueryText": "WITH sig AS (SELECT b.symbol, b.timestamp, d.signal_side, LAG(d.signal_side) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS prev_side FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT COUNT(*) as value FROM sig WHERE signal_side != prev_side AND prev_side IS NOT NULL"
             }
           ],
           "options": {
@@ -2916,8 +3298,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
+              "queryText": "SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1",
+              "rawQueryText": "SELECT COUNT(*) as value FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1"
             }
           ],
           "options": {
@@ -2956,8 +3338,8 @@
           "targets": [
             {
               "refId": "A",
-              "queryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS from_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT from_strategy as \"From\", strategy as \"To\", COUNT(*) as count FROM sig WHERE from_strategy IS NOT NULL AND strategy != from_strategy GROUP BY from_strategy, strategy ORDER BY count DESC",
-              "rawQueryText": "PRAGMA busy_timeout = 5000; WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS from_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT from_strategy as \"From\", strategy as \"To\", COUNT(*) as count FROM sig WHERE from_strategy IS NOT NULL AND strategy != from_strategy GROUP BY from_strategy, strategy ORDER BY count DESC"
+              "queryText": "WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS from_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT from_strategy as \"From\", strategy as \"To\", COUNT(*) as count FROM sig WHERE from_strategy IS NOT NULL AND strategy != from_strategy GROUP BY from_strategy, strategy ORDER BY count DESC",
+              "rawQueryText": "WITH sig AS (SELECT b.symbol, b.timestamp, CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END AS strategy, LAG(CASE WHEN d.signal_reason LIKE '%momentum%' THEN 'momentum' WHEN d.signal_reason LIKE '%mean-reversion%' OR d.signal_reason LIKE '%mean_reversion%' THEN 'mean-reversion' WHEN d.signal_reason LIKE '%vwap%' THEN 'vwap-reversion' WHEN d.signal_reason LIKE '%breakout%' THEN 'breakout' ELSE 'other' END) OVER (PARTITION BY b.symbol ORDER BY b.timestamp) AS from_strategy FROM decisions d JOIN bars b ON d.bar_id=b.id WHERE d.signal_fired=1) SELECT from_strategy as \"From\", strategy as \"To\", COUNT(*) as count FROM sig WHERE from_strategy IS NOT NULL AND strategy != from_strategy GROUP BY from_strategy, strategy ORDER BY count DESC"
             }
           ],
           "options": {

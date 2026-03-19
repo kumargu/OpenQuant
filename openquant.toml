@@ -117,9 +117,9 @@ min_strategies = 1
 # position. Higher than min_strategies to prevent churn: one strategy
 # buying and another immediately selling on the next bar.
 # Stop loss / take profit / max hold bypass this (hard exits always fire).
-# Lowered from 2 to 1 — single biggest lever in exp 22 (+$329 swing).
-# Intraday mean-reversion alpha decays in 2-5 min; consensus delays exits.
-min_exit_strategies = 1
+# Reverted to 2 after live session (2026-03-19): single-strategy exits
+# caused premature churn — VWAP reversion killed mean-reversion trades.
+min_exit_strategies = 2
 
 # Strategy weights for score-weighted voting.
 # Higher weight = more influence on the combined signal.
@@ -188,7 +188,9 @@ enabled = true
 buy_z_threshold = -1.8
 
 # VWAP Z-score above which an exit signal fires. Default: 1.5
-sell_z_threshold = 1.2
+# Lowered to 0.5 after live session: exit at partial reversion toward VWAP,
+# not premature cross. Chan recommends exit at z=0 (full reversion).
+sell_z_threshold = 0.5
 
 # Minimum volume relative to rolling average. Default: 1.0
 min_relative_volume = 1.0
@@ -310,10 +312,11 @@ kelly_fraction = 0.5
 kelly_min_size = 0.05
 kelly_max_size = 0.80
 
-# Beta prior parameters for win rate. Beta(2,2) = weakly informative,
-# centered at 50% win rate. Higher values = stronger prior, slower adaptation.
-kelly_prior_wins = 2.0
-kelly_prior_losses = 2.0
+# Beta prior parameters for win rate. Seeded from backtest results (~60%
+# win rate, 20 pseudocounts). Gives non-zero initial Kelly instead of
+# cold-start zero. Higher values = stronger prior, slower adaptation.
+kelly_prior_wins = 12.0
+kelly_prior_losses = 8.0
 
 # Regime-conditional Kelly fractions (override kelly_fraction per regime).
 # LowVol: slightly more aggressive (market is calm, signals cleaner).

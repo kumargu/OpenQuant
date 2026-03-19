@@ -6,4 +6,4 @@ datasources:
     isDefault: true
     editable: true
     jsonData:
-      path: /Users/gulshan/OpenQuant/data/journal/openquant.db
+      path: /Users/gulshan/OpenQuant/data/journal/multi.db

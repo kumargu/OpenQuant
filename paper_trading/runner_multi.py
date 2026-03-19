@@ -21,11 +21,17 @@ from openquant import Engine
 from . import alpaca_client as alpaca
 from .runner import _get_latest_bar
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+_log_fmt = "%(asctime)s %(levelname)s %(message)s"
+_log_datefmt = "%Y-%m-%d %H:%M:%S"
+
+# Log to both console and file
+logging.basicConfig(level=logging.INFO, format=_log_fmt, datefmt=_log_datefmt)
+
+_file_handler = logging.FileHandler("data/journal/runner.log", mode="a")
+_file_handler.setLevel(logging.INFO)
+_file_handler.setFormatter(logging.Formatter(_log_fmt, datefmt=_log_datefmt))
+logging.getLogger().addHandler(_file_handler)
+
 log = logging.getLogger("runner_multi")
 
 _shutdown_requested = False

@@ -14,7 +14,12 @@
 //!
 //! # Exit conditions
 //!
-//! 1. `vwap_z_score > sell_z_threshold` — price reverted past VWAP
+//! 1. `vwap_z_score > sell_z_threshold` — price reverted toward VWAP
+//!    Note: sell_z_threshold should be LOW (e.g. 0.5), not high. We exit at
+//!    partial reversion, not waiting for a full cross. EdgeTools research
+//!    (150K+ tests on ES) found zero edge in VWAP crossover signals — the
+//!    edge is in distance-based mean reversion. Chan (2013) recommends
+//!    exiting at z=0 (full reversion to mean).
 //! 2. Currently holding a position
 //!
 //! # Score formula

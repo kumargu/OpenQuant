@@ -70,8 +70,12 @@ impl Default for RiskConfig {
             kelly_fraction: 0.5,
             kelly_min_size: 0.05,
             kelly_max_size: 0.80,
-            kelly_prior_wins: 2.0,
-            kelly_prior_losses: 2.0,
+            // Seeded from backtest results (~60% win rate). Beta(12,8) gives
+            // non-zero initial Kelly fraction instead of cold-start zero with
+            // Beta(2,2). Live session 2026-03-19 showed qty=1 on $420 GLD
+            // because uninformative prior computed zero edge.
+            kelly_prior_wins: 12.0,
+            kelly_prior_losses: 8.0,
             kelly_fraction_low_vol: 0.6,
             kelly_fraction_high_vol: 0.25,
             kelly_fraction_crisis: 0.10,
@@ -352,7 +356,8 @@ mod tests {
     }
 
     fn default_kelly() -> BayesianKellyState {
-        BayesianKellyState::new(2.0, 2.0)
+        // Matches updated default: Beta(12,8) seeded from backtest ~60% win rate
+        BayesianKellyState::new(12.0, 8.0)
     }
 
     #[test]
@@ -548,11 +553,14 @@ mod tests {
 
     #[test]
     fn kelly_cold_start_is_conservative() {
-        let k = BayesianKellyState::new(2.0, 2.0);
+        // Beta(12,8) seeded from backtest ~60% win rate. Gives small but
+        // non-zero initial fraction (≈0.11) instead of zero with Beta(2,2).
+        // This is intentional — live session 2026-03-19 showed qty=1 on
+        // $420 GLD because uninformative prior computed zero edge.
+        let k = BayesianKellyState::new(12.0, 8.0);
         let f = k.kelly_fraction();
-        // With Beta(2,2) prior and no data, p=0.5, b=1.0, f*=0
-        // (because (0.5*1 - 0.5)/1 = 0 → zero kelly)
-        assert!(f < 0.1, "cold start should be conservative: {f:.4}");
+        assert!(f > 0.0, "backtest-seeded prior should give non-zero fraction: {f:.4}");
+        assert!(f < 0.15, "cold start should still be conservative: {f:.4}");
     }
 
     #[test]
@@ -568,7 +576,7 @@ mod tests {
             ..Default::default()
         };
 
-        // Kelly with no data → min size (cold start)
+        // Kelly with backtest-seeded prior but no live data → small but non-zero
         let qty_cold = check(
             &buy_signal(1.0),
             100.0,
