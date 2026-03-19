@@ -125,6 +125,7 @@ impl Engine {
                 strategy: Box::new(mean_reversion::MeanReversion::new(config.signal.clone())),
                 weight: config.combiner.weight_mean_reversion,
                 name: "mean_reversion",
+                regime_weights: config.combiner.regime_mean_reversion.clone(),
             });
         }
         if config.combiner.weight_momentum > 0.0 {
@@ -132,6 +133,7 @@ impl Engine {
                 strategy: Box::new(momentum::Momentum::new(config.momentum.clone())),
                 weight: config.combiner.weight_momentum,
                 name: "momentum",
+                regime_weights: config.combiner.regime_momentum.clone(),
             });
         }
         if config.vwap_reversion.enabled && config.combiner.weight_vwap_reversion > 0.0 {
@@ -141,6 +143,7 @@ impl Engine {
                 )),
                 weight: config.combiner.weight_vwap_reversion,
                 name: "vwap_reversion",
+                regime_weights: config.combiner.regime_vwap_reversion.clone(),
             });
         }
         if config.breakout.enabled && config.combiner.weight_breakout > 0.0 {
@@ -148,6 +151,7 @@ impl Engine {
                 strategy: Box::new(breakout::Breakout::new(config.breakout.clone())),
                 weight: config.combiner.weight_breakout,
                 name: "breakout",
+                regime_weights: config.combiner.regime_breakout.clone(),
             });
         }
 

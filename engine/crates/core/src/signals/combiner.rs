@@ -42,12 +42,50 @@
 
 use super::{Side, SignalOutput, Strategy};
 use crate::features::FeatureValues;
+use crate::features::regime::MarketRegime;
+
+/// Per-strategy weight multipliers by regime.
+///
+/// Applied on top of the base weight: `effective_weight = base_weight × regime_mult`.
+/// A multiplier of 0.0 fully suppresses the strategy in that regime.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RegimeWeights {
+    pub low_vol: f64,
+    pub normal: f64,
+    pub high_vol: f64,
+    pub crisis: f64,
+}
+
+impl Default for RegimeWeights {
+    fn default() -> Self {
+        Self {
+            low_vol: 1.0,
+            normal: 1.0,
+            high_vol: 1.0,
+            crisis: 1.0,
+        }
+    }
+}
+
+impl RegimeWeights {
+    fn multiplier(&self, regime: MarketRegime) -> f64 {
+        match regime {
+            MarketRegime::LowVol => self.low_vol,
+            MarketRegime::Normal => self.normal,
+            MarketRegime::HighVol => self.high_vol,
+            MarketRegime::Crisis => self.crisis,
+            MarketRegime::Unknown => 1.0,
+        }
+    }
+}
 
 /// A named, weighted strategy entry in the combiner.
 pub struct StrategyEntry {
     pub strategy: Box<dyn Strategy>,
     pub weight: f64,
     pub name: &'static str,
+    pub regime_weights: RegimeWeights,
 }
 
 /// Configuration for the strategy combiner.
@@ -96,6 +134,13 @@ pub struct Config {
     /// When true, BUY signals are blocked unless features.cusum_triggered is set.
     /// Does NOT affect SELL/exit signals — positions can always be closed.
     pub cusum_entry_gate: bool,
+
+    /// Regime-conditional weight multipliers per strategy.
+    /// Applied on top of base weights: effective = base × regime_mult.
+    pub regime_mean_reversion: RegimeWeights,
+    pub regime_momentum: RegimeWeights,
+    pub regime_vwap_reversion: RegimeWeights,
+    pub regime_breakout: RegimeWeights,
 }
 
 impl Default for Config {
@@ -110,6 +155,34 @@ impl Default for Config {
             weight_vwap_reversion: 0.0,
             weight_breakout: 0.0,
             cusum_entry_gate: false,
+            // Mean-reversion: strong in calm markets, suppressed in trends/crisis
+            regime_mean_reversion: RegimeWeights {
+                low_vol: 1.5,
+                normal: 1.0,
+                high_vol: 0.2,
+                crisis: 0.0,
+            },
+            // Momentum: weak in calm, strong in trending, reduced in crisis
+            regime_momentum: RegimeWeights {
+                low_vol: 0.3,
+                normal: 1.0,
+                high_vol: 1.5,
+                crisis: 0.5,
+            },
+            // VWAP reversion: similar to mean-reversion, suppressed in trends
+            regime_vwap_reversion: RegimeWeights {
+                low_vol: 1.3,
+                normal: 1.0,
+                high_vol: 0.5,
+                crisis: 0.0,
+            },
+            // Breakout: moderate everywhere, reduced in crisis
+            regime_breakout: RegimeWeights {
+                low_vol: 0.5,
+                normal: 1.0,
+                high_vol: 1.2,
+                crisis: 0.3,
+            },
         }
     }
 }
@@ -165,9 +238,12 @@ impl Strategy for StrategyCombiner {
         let mut best_sell: Option<(SignalOutput, f64)> = None;
 
         // Single pass: score each strategy, tally votes, track best signals.
+        // Regime multiplier adjusts each strategy's effective weight based on
+        // the current market regime (e.g., suppress mean-reversion in HighVol).
         for entry in &self.strategies {
             if let Some(signal) = entry.strategy.score(features, has_position) {
-                let weighted = entry.weight * signal.score;
+                let regime_mult = entry.regime_weights.multiplier(features.market_regime);
+                let weighted = entry.weight * regime_mult * signal.score;
                 num_voters += 1;
                 let side_label = match signal.side {
                     Side::Buy => "BUY",
@@ -299,6 +375,7 @@ mod tests {
             strategy: Box::new(strategy),
             weight,
             name,
+            regime_weights: RegimeWeights::default(),
         }
     }
 
@@ -799,5 +876,164 @@ mod tests {
         // has_position=true but signal is BUY → exit gate doesn't apply
         let sig = combiner.score(&warmed_features(), true).unwrap();
         assert_eq!(sig.side, Side::Buy);
+    }
+
+    // --- Regime-conditional weight tests ---
+
+    fn regime_features(regime: MarketRegime) -> FeatureValues {
+        FeatureValues {
+            warmed_up: true,
+            market_regime: regime,
+            ..Default::default()
+        }
+    }
+
+    fn regime_entry(
+        strategy: FixedStrategy,
+        weight: f64,
+        name: &'static str,
+        rw: RegimeWeights,
+    ) -> StrategyEntry {
+        StrategyEntry {
+            strategy: Box::new(strategy),
+            weight,
+            name,
+            regime_weights: rw,
+        }
+    }
+
+    #[test]
+    fn mean_reversion_suppressed_in_high_vol() {
+        // Mean-rev has high_vol=0.2, momentum has high_vol=1.5
+        let combiner = StrategyCombiner::new(
+            vec![
+                regime_entry(
+                    FixedStrategy::buy(1.0, SignalReason::MeanReversionBuy),
+                    0.5,
+                    "mr",
+                    RegimeWeights {
+                        low_vol: 1.5,
+                        normal: 1.0,
+                        high_vol: 0.2,
+                        crisis: 0.0,
+                    },
+                ),
+                regime_entry(
+                    FixedStrategy::sell(1.0, SignalReason::MomentumSell),
+                    0.5,
+                    "mom",
+                    RegimeWeights {
+                        low_vol: 0.3,
+                        normal: 1.0,
+                        high_vol: 1.5,
+                        crisis: 0.5,
+                    },
+                ),
+            ],
+            0.2, // realistic threshold
+        )
+        .with_min_exit_strategies(1);
+
+        // In Normal regime: mr_buy=0.5*1.0*1.0=0.5, mom_sell=0.5*1.0*1.0=0.5
+        // net=0 → below threshold 0.2 → no trade (strategies cancel out)
+        assert!(
+            combiner
+                .score(&regime_features(MarketRegime::Normal), false)
+                .is_none()
+        );
+
+        // In HighVol: mr_buy=0.5*0.2*1.0=0.1, mom_sell=0.5*1.5*1.0=0.75
+        // net=-0.65 → |net|=0.65 > 0.2 → SELL (momentum wins decisively)
+        let sig = combiner
+            .score(&regime_features(MarketRegime::HighVol), true)
+            .unwrap();
+        assert_eq!(sig.side, Side::Sell);
+        assert!((sig.score - 0.65).abs() < 1e-10);
+    }
+
+    #[test]
+    fn mean_reversion_boosted_in_low_vol() {
+        let combiner = StrategyCombiner::new(
+            vec![
+                regime_entry(
+                    FixedStrategy::buy(1.0, SignalReason::MeanReversionBuy),
+                    0.5,
+                    "mr",
+                    RegimeWeights {
+                        low_vol: 1.5,
+                        normal: 1.0,
+                        high_vol: 0.2,
+                        crisis: 0.0,
+                    },
+                ),
+                regime_entry(
+                    FixedStrategy::sell(1.0, SignalReason::MomentumSell),
+                    0.5,
+                    "mom",
+                    RegimeWeights {
+                        low_vol: 0.3,
+                        normal: 1.0,
+                        high_vol: 1.5,
+                        crisis: 0.5,
+                    },
+                ),
+            ],
+            0.0,
+        );
+
+        // In LowVol: mr_buy=0.5*1.5*1.0=0.75, mom_sell=0.5*0.3*1.0=0.15 → net=0.60 → BUY
+        let sig = combiner
+            .score(&regime_features(MarketRegime::LowVol), false)
+            .unwrap();
+        assert_eq!(sig.side, Side::Buy);
+    }
+
+    #[test]
+    fn crisis_suppresses_mean_reversion_completely() {
+        let combiner = StrategyCombiner::new(
+            vec![regime_entry(
+                FixedStrategy::buy(2.0, SignalReason::MeanReversionBuy),
+                0.5,
+                "mr",
+                RegimeWeights {
+                    low_vol: 1.5,
+                    normal: 1.0,
+                    high_vol: 0.2,
+                    crisis: 0.0,
+                },
+            )],
+            0.0,
+        );
+
+        // Crisis regime with crisis=0.0 → weight is 0 → no signal
+        assert!(
+            combiner
+                .score(&regime_features(MarketRegime::Crisis), false)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unknown_regime_uses_base_weights() {
+        let combiner = StrategyCombiner::new(
+            vec![regime_entry(
+                FixedStrategy::buy(1.0, SignalReason::MeanReversionBuy),
+                0.5,
+                "mr",
+                RegimeWeights {
+                    low_vol: 2.0,
+                    normal: 1.0,
+                    high_vol: 0.2,
+                    crisis: 0.0,
+                },
+            )],
+            0.0,
+        );
+
+        // Unknown regime → multiplier=1.0 → same as normal
+        let sig = combiner
+            .score(&regime_features(MarketRegime::Unknown), false)
+            .unwrap();
+        assert!((sig.score - 0.5).abs() < 1e-10); // 0.5 * 1.0 * 1.0
     }
 }
