@@ -27,6 +27,7 @@ pub struct ConfigFile {
     pub garch: GarchConfig,
     pub regime: RegimeConfig,
     pub data: DataConfig,
+    pub asset_class: HashMap<String, SymbolOverrides>,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
 }
 
@@ -60,7 +61,21 @@ impl ConfigFile {
     }
 
     /// Convert into an `EngineConfig` ready for the engine.
+    ///
+    /// Resolves asset class inheritance: for each symbol override with an
+    /// `asset_class` reference, fills in None fields from the named class.
     pub fn into_engine_config(self) -> EngineConfig {
+        let mut resolved_overrides = HashMap::new();
+
+        for (symbol, mut ovr) in self.symbol_overrides {
+            if let Some(class_name) = &ovr.asset_class
+                && let Some(class_defaults) = self.asset_class.get(class_name)
+            {
+                ovr = merge_overrides(ovr, class_defaults);
+            }
+            resolved_overrides.insert(symbol, ovr);
+        }
+
         EngineConfig {
             signal: self.signal,
             momentum: self.momentum,
@@ -71,7 +86,7 @@ impl ConfigFile {
             exit: self.exit,
             garch: self.garch,
             regime: self.regime,
-            symbol_overrides: self.symbol_overrides,
+            symbol_overrides: resolved_overrides,
             max_bar_age_ms: self.data.max_bar_age_seconds * 1000,
             metrics_enabled: self.metrics.enabled,
         }
@@ -80,6 +95,26 @@ impl ConfigFile {
     /// Whether metrics collection is enabled.
     pub fn metrics_enabled(&self) -> bool {
         self.metrics.enabled
+    }
+}
+
+/// Merge two SymbolOverrides: `symbol` fields take precedence, `class` fills in Nones.
+fn merge_overrides(symbol: SymbolOverrides, class: &SymbolOverrides) -> SymbolOverrides {
+    SymbolOverrides {
+        asset_class: symbol.asset_class,
+        buy_z_threshold: symbol.buy_z_threshold.or(class.buy_z_threshold),
+        sell_z_threshold: symbol.sell_z_threshold.or(class.sell_z_threshold),
+        min_relative_volume: symbol.min_relative_volume.or(class.min_relative_volume),
+        trend_filter: symbol.trend_filter.or(class.trend_filter),
+        stop_loss_pct: symbol.stop_loss_pct.or(class.stop_loss_pct),
+        stop_loss_atr_mult: symbol.stop_loss_atr_mult.or(class.stop_loss_atr_mult),
+        max_hold_bars: symbol.max_hold_bars.or(class.max_hold_bars),
+        take_profit_pct: symbol.take_profit_pct.or(class.take_profit_pct),
+        min_hold_bars: symbol.min_hold_bars.or(class.min_hold_bars),
+        weight_mean_reversion: symbol.weight_mean_reversion.or(class.weight_mean_reversion),
+        weight_momentum: symbol.weight_momentum.or(class.weight_momentum),
+        weight_vwap_reversion: symbol.weight_vwap_reversion.or(class.weight_vwap_reversion),
+        weight_breakout: symbol.weight_breakout.or(class.weight_breakout),
     }
 }
 
@@ -218,6 +253,302 @@ buy_z_threshold = -1.5
         .unwrap();
         let cfg = ConfigFile::load(tmp.path()).unwrap();
         assert_eq!(cfg.signal.buy_z_threshold, -1.5);
+    }
+
+    #[test]
+    fn asset_class_inheritance() {
+        let toml = r#"
+[asset_class.metals]
+buy_z_threshold = -2.0
+weight_mean_reversion = 0.40
+weight_momentum = 0.25
+
+[asset_class.disabled]
+weight_mean_reversion = 0.0
+weight_momentum = 0.0
+weight_vwap_reversion = 0.0
+
+[symbol_overrides.GLD]
+asset_class = "metals"
+
+[symbol_overrides.SLV]
+asset_class = "metals"
+buy_z_threshold = -2.5
+
+[symbol_overrides.AAPL]
+asset_class = "disabled"
+"#;
+        let cfg: ConfigFile = toml::from_str(toml).unwrap();
+        let ec = cfg.into_engine_config();
+
+        // GLD inherits metals class
+        let gld = &ec.symbol_overrides["GLD"];
+        assert_eq!(gld.buy_z_threshold, Some(-2.0));
+        assert_eq!(gld.weight_mean_reversion, Some(0.40));
+        assert_eq!(gld.weight_momentum, Some(0.25));
+
+        // SLV inherits metals but overrides buy_z
+        let slv = &ec.symbol_overrides["SLV"];
+        assert_eq!(slv.buy_z_threshold, Some(-2.5)); // symbol override wins
+        assert_eq!(slv.weight_mean_reversion, Some(0.40)); // from class
+
+        // AAPL inherits disabled
+        let aapl = &ec.symbol_overrides["AAPL"];
+        assert_eq!(aapl.weight_mean_reversion, Some(0.0));
+        assert_eq!(aapl.weight_momentum, Some(0.0));
+        assert_eq!(aapl.weight_vwap_reversion, Some(0.0));
+    }
+
+    #[test]
+    fn missing_asset_class_ignored() {
+        let toml = r#"
+[symbol_overrides.GLD]
+asset_class = "nonexistent"
+buy_z_threshold = -2.0
+"#;
+        let cfg: ConfigFile = toml::from_str(toml).unwrap();
+        let ec = cfg.into_engine_config();
+        // Symbol override still works, class just doesn't fill in anything
+        let gld = &ec.symbol_overrides["GLD"];
+        assert_eq!(gld.buy_z_threshold, Some(-2.0));
+        assert!(gld.weight_mean_reversion.is_none()); // no class to fill in
+    }
+
+    #[test]
+    fn no_asset_class_works_as_before() {
+        let toml = r#"
+[symbol_overrides.GLD]
+buy_z_threshold = -3.0
+"#;
+        let cfg: ConfigFile = toml::from_str(toml).unwrap();
+        let ec = cfg.into_engine_config();
+        let gld = &ec.symbol_overrides["GLD"];
+        assert_eq!(gld.buy_z_threshold, Some(-3.0));
+        assert!(gld.asset_class.is_none());
+    }
+
+    // --- Asset class reftests: realistic production configs ---
+
+    #[test]
+    fn reftest_full_production_config() {
+        // Mirrors the actual openquant.toml structure
+        let toml = r#"
+[signal]
+buy_z_threshold = -2.2
+sell_z_threshold = 1.8
+min_relative_volume = 1.2
+adaptive_z = true
+adaptive_z_percentile = 0.05
+
+[combiner]
+weight_mean_reversion = 0.30
+weight_momentum = 0.35
+weight_vwap_reversion = 0.35
+
+[asset_class.metals]
+buy_z_threshold = -2.0
+sell_z_threshold = 1.5
+stop_loss_atr_mult = 2.0
+weight_mean_reversion = 0.40
+weight_momentum = 0.25
+weight_vwap_reversion = 0.35
+
+[asset_class.oil_gas]
+buy_z_threshold = -2.5
+weight_mean_reversion = 0.20
+weight_momentum = 0.40
+weight_vwap_reversion = 0.40
+
+[asset_class.disabled]
+weight_mean_reversion = 0.0
+weight_momentum = 0.0
+weight_vwap_reversion = 0.0
+weight_breakout = 0.0
+
+[symbol_overrides.GLD]
+asset_class = "metals"
+
+[symbol_overrides.SLV]
+asset_class = "metals"
+buy_z_threshold = -2.5
+
+[symbol_overrides.CVX]
+asset_class = "oil_gas"
+
+[symbol_overrides.XOM]
+asset_class = "oil_gas"
+weight_mean_reversion = 0.0
+
+[symbol_overrides.AAPL]
+asset_class = "disabled"
+
+[symbol_overrides.MSFT]
+asset_class = "disabled"
+"#;
+        let cfg: ConfigFile = toml::from_str(toml).unwrap();
+        let ec = cfg.into_engine_config();
+
+        // Global combiner weights are set
+        assert_eq!(ec.combiner.weight_mean_reversion, 0.30);
+        assert_eq!(ec.combiner.weight_vwap_reversion, 0.35);
+
+        // GLD: pure metals class
+        let gld = &ec.symbol_overrides["GLD"];
+        assert_eq!(gld.buy_z_threshold, Some(-2.0));
+        assert_eq!(gld.sell_z_threshold, Some(1.5));
+        assert_eq!(gld.stop_loss_atr_mult, Some(2.0));
+        assert_eq!(gld.weight_mean_reversion, Some(0.40));
+        assert_eq!(gld.weight_momentum, Some(0.25));
+        assert_eq!(gld.weight_vwap_reversion, Some(0.35));
+
+        // SLV: metals class + symbol buy_z override
+        let slv = &ec.symbol_overrides["SLV"];
+        assert_eq!(slv.buy_z_threshold, Some(-2.5)); // symbol wins
+        assert_eq!(slv.sell_z_threshold, Some(1.5)); // from class
+        assert_eq!(slv.weight_mean_reversion, Some(0.40)); // from class
+
+        // CVX: pure oil_gas class
+        let cvx = &ec.symbol_overrides["CVX"];
+        assert_eq!(cvx.buy_z_threshold, Some(-2.5));
+        assert_eq!(cvx.weight_mean_reversion, Some(0.20));
+        assert_eq!(cvx.weight_momentum, Some(0.40));
+
+        // XOM: oil_gas class + symbol weight_mean_reversion override
+        let xom = &ec.symbol_overrides["XOM"];
+        assert_eq!(xom.buy_z_threshold, Some(-2.5)); // from class
+        assert_eq!(xom.weight_mean_reversion, Some(0.0)); // symbol override wins
+        assert_eq!(xom.weight_momentum, Some(0.40)); // from class
+
+        // AAPL: disabled — all weights zero
+        let aapl = &ec.symbol_overrides["AAPL"];
+        assert_eq!(aapl.weight_mean_reversion, Some(0.0));
+        assert_eq!(aapl.weight_momentum, Some(0.0));
+        assert_eq!(aapl.weight_vwap_reversion, Some(0.0));
+        assert_eq!(aapl.weight_breakout, Some(0.0));
+        // Signal params NOT set in disabled class → None (falls to global)
+        assert!(aapl.buy_z_threshold.is_none());
+
+        // MSFT: also disabled, same as AAPL
+        let msft = &ec.symbol_overrides["MSFT"];
+        assert_eq!(msft.weight_mean_reversion, Some(0.0));
+    }
+
+    #[test]
+    fn reftest_symbol_override_beats_class_for_every_field() {
+        let toml = r#"
+[asset_class.test]
+buy_z_threshold = -1.0
+sell_z_threshold = 1.0
+min_relative_volume = 1.0
+stop_loss_atr_mult = 1.0
+max_hold_bars = 50
+weight_mean_reversion = 0.10
+weight_momentum = 0.10
+
+[symbol_overrides.TEST]
+asset_class = "test"
+buy_z_threshold = -9.0
+sell_z_threshold = 9.0
+min_relative_volume = 9.0
+stop_loss_atr_mult = 9.0
+max_hold_bars = 999
+weight_mean_reversion = 0.99
+weight_momentum = 0.99
+"#;
+        let cfg: ConfigFile = toml::from_str(toml).unwrap();
+        let ec = cfg.into_engine_config();
+        let t = &ec.symbol_overrides["TEST"];
+
+        // Every field: symbol value wins over class
+        assert_eq!(t.buy_z_threshold, Some(-9.0));
+        assert_eq!(t.sell_z_threshold, Some(9.0));
+        assert_eq!(t.min_relative_volume, Some(9.0));
+        assert_eq!(t.stop_loss_atr_mult, Some(9.0));
+        assert_eq!(t.max_hold_bars, Some(999));
+        assert_eq!(t.weight_mean_reversion, Some(0.99));
+        assert_eq!(t.weight_momentum, Some(0.99));
+    }
+
+    #[test]
+    fn reftest_multiple_symbols_same_class_independent() {
+        // Ensure modifying one symbol doesn't affect another in same class
+        let toml = r#"
+[asset_class.shared]
+weight_mean_reversion = 0.50
+
+[symbol_overrides.A]
+asset_class = "shared"
+buy_z_threshold = -1.0
+
+[symbol_overrides.B]
+asset_class = "shared"
+buy_z_threshold = -2.0
+"#;
+        let cfg: ConfigFile = toml::from_str(toml).unwrap();
+        let ec = cfg.into_engine_config();
+
+        let a = &ec.symbol_overrides["A"];
+        let b = &ec.symbol_overrides["B"];
+
+        // Both share class weight
+        assert_eq!(a.weight_mean_reversion, Some(0.50));
+        assert_eq!(b.weight_mean_reversion, Some(0.50));
+
+        // But have independent buy_z
+        assert_eq!(a.buy_z_threshold, Some(-1.0));
+        assert_eq!(b.buy_z_threshold, Some(-2.0));
+    }
+
+    #[test]
+    fn reftest_empty_class_adds_nothing() {
+        let toml = r#"
+[asset_class.empty]
+
+[symbol_overrides.X]
+asset_class = "empty"
+buy_z_threshold = -3.0
+"#;
+        let cfg: ConfigFile = toml::from_str(toml).unwrap();
+        let ec = cfg.into_engine_config();
+        let x = &ec.symbol_overrides["X"];
+
+        // Symbol field preserved
+        assert_eq!(x.buy_z_threshold, Some(-3.0));
+        // Empty class contributes nothing
+        assert!(x.weight_mean_reversion.is_none());
+        assert!(x.stop_loss_atr_mult.is_none());
+    }
+
+    #[test]
+    fn reftest_load_actual_toml_file() {
+        // Load the real openquant.toml and verify it parses + resolves
+        let repo_toml = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("openquant.toml");
+        if repo_toml.exists() {
+            let cfg = ConfigFile::load(&repo_toml).unwrap();
+            let ec = cfg.into_engine_config();
+
+            // GLD should have metals class resolved
+            if let Some(gld) = ec.symbol_overrides.get("GLD") {
+                assert!(
+                    gld.weight_mean_reversion.is_some(),
+                    "GLD should have weight from metals class"
+                );
+            }
+
+            // AAPL should have disabled class resolved
+            if let Some(aapl) = ec.symbol_overrides.get("AAPL") {
+                assert_eq!(
+                    aapl.weight_mean_reversion,
+                    Some(0.0),
+                    "AAPL should be disabled"
+                );
+            }
+        }
     }
 
     #[test]

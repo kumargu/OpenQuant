@@ -377,88 +377,74 @@ max_bar_age_seconds = 120
 
 
 # ---------------------------------------------------------------------------
-# Per-symbol overrides
+# Asset class defaults — inherited by symbols via asset_class = "name"
 # ---------------------------------------------------------------------------
-# Override any signal/risk/exit parameter for a specific symbol.
-# Any key omitted uses the default from the sections above.
-#
-# Example: tighter entry for volatile stocks
-#
-# [symbol_overrides.TSLA]
-# buy_z_threshold = -2.5      # stricter entry
-# stop_loss_atr_mult = 3.0    # wider stop for volatility
+# Resolution: symbol_overrides > asset_class > global defaults
+# Only set fields you want to differ from global; rest falls through.
 
-# Per-symbol combiner weight overrides — data-driven from #110 baseline.
-# Categories: metals (profitable), oil/gas (mixed), tech/pharma/energy (losing).
-
-# --- Metals: PBO-validated configs (GLD PBO=6.7%, SLV PBO=46.7%) ---
-[symbol_overrides.GLD]
-buy_z_threshold = -2.0          # PBO-optimal (IS=+0.249, OOS=+0.228)
+[asset_class.metals]
+buy_z_threshold = -2.0          # commodities revert well
 sell_z_threshold = 1.5
 stop_loss_atr_mult = 2.0
-weight_mean_reversion = 0.40    # full mean-reversion (works on commodities)
+weight_mean_reversion = 0.40    # full mean-reversion
 weight_momentum = 0.25
 weight_vwap_reversion = 0.35
 
-[symbol_overrides.SLV]
-buy_z_threshold = -2.5          # PBO-optimal (IS=+0.233, OOS=+0.302)
-sell_z_threshold = 2.5
-stop_loss_atr_mult = 2.0
-weight_mean_reversion = 0.40
-weight_momentum = 0.25
-weight_vwap_reversion = 0.35
-
-# --- Oil/Gas: MIXED. CVX +$401, XOM -$220. ---
-[symbol_overrides.CVX]
-buy_z_threshold = -2.5          # moderate mean-reversion
+[asset_class.oil_gas]
+buy_z_threshold = -2.5
 weight_mean_reversion = 0.20
-weight_momentum = 0.40          # momentum works for CVX
+weight_momentum = 0.40
 weight_vwap_reversion = 0.40
 
-[symbol_overrides.XOM]
-weight_mean_reversion = 0.0     # fully suppress (losing)
-weight_momentum = 0.50          # only momentum + VWAP
-weight_vwap_reversion = 0.50
-
-# --- Tech: LOSING (-$936). Zero all weights until equity alpha developed. ---
-[symbol_overrides.AAPL]
+[asset_class.disabled]
 weight_mean_reversion = 0.0
 weight_momentum = 0.0
 weight_vwap_reversion = 0.0
+weight_breakout = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Per-symbol overrides — reference asset class, then override specific fields
+# ---------------------------------------------------------------------------
+
+# Metals — PBO-validated (GLD 6.7%, SLV 46.7%)
+[symbol_overrides.GLD]
+asset_class = "metals"
+
+[symbol_overrides.SLV]
+asset_class = "metals"
+buy_z_threshold = -2.5          # PBO-optimal override (differs from class)
+sell_z_threshold = 2.5
+
+# Oil/Gas
+[symbol_overrides.CVX]
+asset_class = "oil_gas"
+
+[symbol_overrides.XOM]
+asset_class = "oil_gas"
+weight_mean_reversion = 0.0     # XOM loses on mean-rev, override class
+
+# Disabled — no alpha with current signals
+[symbol_overrides.AAPL]
+asset_class = "disabled"
 
 [symbol_overrides.MSFT]
-weight_mean_reversion = 0.0
-weight_momentum = 0.0
-weight_vwap_reversion = 0.0
+asset_class = "disabled"
 
 [symbol_overrides.NVDA]
-weight_mean_reversion = 0.0
-weight_momentum = 0.0
-weight_vwap_reversion = 0.0
+asset_class = "disabled"
 
-# --- Energy: LOSING (-$658). Zero weights. ---
 [symbol_overrides.NEE]
-weight_mean_reversion = 0.0
-weight_momentum = 0.0
-weight_vwap_reversion = 0.0
+asset_class = "disabled"
 
 [symbol_overrides.ENPH]
-weight_mean_reversion = 0.0
-weight_momentum = 0.0
-weight_vwap_reversion = 0.0
+asset_class = "disabled"
 
-# --- Pharma: LOSING (-$817, 33% WR). Zero weights. ---
 [symbol_overrides.JNJ]
-weight_mean_reversion = 0.0
-weight_momentum = 0.0
-weight_vwap_reversion = 0.0
+asset_class = "disabled"
 
 [symbol_overrides.PFE]
-weight_mean_reversion = 0.0
-weight_momentum = 0.0
-weight_vwap_reversion = 0.0
+asset_class = "disabled"
 
 [symbol_overrides.ABBV]
-weight_mean_reversion = 0.0
-weight_momentum = 0.0
-weight_vwap_reversion = 0.0
+asset_class = "disabled"
