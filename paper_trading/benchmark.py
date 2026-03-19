@@ -8,7 +8,6 @@ Symbol universe:
   Energy:  NEE, ENPH
   Metals:  GLD, SLV
   Pharma:  JNJ, PFE, ABBV
-  Crypto:  ETH/USD
 
 Usage:
   python -m paper_trading.benchmark                    # run full benchmark
@@ -38,7 +37,6 @@ CATEGORIES = {
     "energy": ["NEE", "ENPH"],
     "metals": ["GLD", "SLV"],
     "pharma": ["JNJ", "PFE", "ABBV"],
-    "crypto": ["ETH/USD"],
 }
 
 ALL_SYMBOLS = [s for symbols in CATEGORIES.values() for s in symbols]

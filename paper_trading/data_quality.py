@@ -199,7 +199,7 @@ def print_audit(result: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="OpenQuant Data Quality Audit")
-    parser.add_argument("--symbol", "-s", default="BTC/USD")
+    parser.add_argument("--symbol", "-s", default="AAPL")
     parser.add_argument("--days", "-d", type=int, default=7)
     parser.add_argument("--timeframe", "-t", default="1Min")
     parser.add_argument("--all", action="store_true", help="Audit all benchmark symbols")

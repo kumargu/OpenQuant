@@ -9,7 +9,7 @@
 #   3. Rust-side defaults (compiled into the binary)
 #
 # After changing a value, re-run your backtest to see the effect:
-#   python -m paper_trading.benchmark --category crypto --days 7
+#   python -m paper_trading.benchmark --category tech --days 7
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +136,15 @@ weight_breakout = 0.0
 # With ATR-dynamic threshold (1.0×), cuts 39% of trades but also cuts profits.
 # Try atr_multiplier < 0.5 or static threshold ~0.003 for lighter filtering.
 cusum_entry_gate = false
+
+# Meta-labeling derived gates (from #89/#103 feature importances).
+# Block BUY entries when BOCPD regime_change_prob exceeds this threshold.
+# Trades during regime transitions are low quality. 0.0 = disabled.
+max_regime_change_prob = 0.3
+
+# Block BUY entries during specific UTC hours (e.g., [14, 15, 20, 21]).
+# Empty = no hour filter. Requires bar_hour in features (follow-up).
+blocked_hours_utc = []
 
 # Regime-conditional weight multipliers per strategy.
 # Applied on top of base weights: effective = base × regime_mult.
@@ -373,21 +382,11 @@ max_bar_age_seconds = 120
 # Override any signal/risk/exit parameter for a specific symbol.
 # Any key omitted uses the default from the sections above.
 #
-# Example: tighter entry for BTC, wider stop for ETH
+# Example: tighter entry for volatile stocks
 #
-# [symbol_overrides.BTCUSD]
-# buy_z_threshold = -2.5      # stricter entry for BTC
-# stop_loss_atr_mult = 3.0    # wider stop for BTC volatility
-#
-# [symbol_overrides.ETHUSD]
-# min_relative_volume = 1.5   # require more volume confirmation for ETH
-
-# ETH/USD — best validation results (38% configs profitable, mean PnL +$212).
-# Best config from sweep: z=-2.0, sell=1.8, ATR=3.0.
-[symbol_overrides.ETHUSD]
-buy_z_threshold = -2.0        # looser than default -2.2 (ETH reverts faster)
-stop_loss_atr_mult = 3.0      # wider stop for crypto volatility
-min_relative_volume = 1.0     # ETH has lower volume bars, relax filter
+# [symbol_overrides.TSLA]
+# buy_z_threshold = -2.5      # stricter entry
+# stop_loss_atr_mult = 3.0    # wider stop for volatility
 
 # Equity overrides — suppress z-score mean-reversion (0% profitable in sweep),
 # let VWAP reversion and momentum carry the weight instead.
