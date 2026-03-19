@@ -325,7 +325,7 @@ impl Engine {
                 // V5: GARCH
                 dict.set_item("garch_vol", f.garch_vol)?;
                 // V6: Regime
-                dict.set_item("market_regime", format!("{:?}", f.market_regime))?;
+                dict.set_item("market_regime", f.market_regime.to_string())?;
                 dict.set_item("regime_change_prob", f.regime_change_prob)?;
                 dict.set_item("garch_vol_percentile", f.garch_vol_percentile)?;
                 Ok(Some(dict))

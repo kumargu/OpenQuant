@@ -220,6 +220,11 @@ vol_percentile_high = 0.70
 crisis_drawdown = -0.05
 crisis_vol_percentile = 0.90
 
+# BOCPD MAP run-length below this → recent regime change → HighVol.
+# Interacts with bocpd_hazard — lower hazard = longer expected runs,
+# so this threshold should be proportionally smaller.
+regime_change_run_length = 20
+
 
 # ---------------------------------------------------------------------------
 # Risk — position sizing and loss limits

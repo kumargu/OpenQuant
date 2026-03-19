@@ -319,7 +319,7 @@ fn write_bar_record(conn: &Connection, rec: &BarRecord) {
             rec.features.bollinger_pct_b,
             rec.features.bollinger_bandwidth,
             rec.features.garch_vol,
-            format!("{:?}", rec.features.market_regime),
+            rec.features.market_regime.to_string(),
             rec.features.regime_change_prob,
             rec.features.garch_vol_percentile,
         ],

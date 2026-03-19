@@ -26,6 +26,18 @@ pub enum MarketRegime {
     Crisis,
 }
 
+impl std::fmt::Display for MarketRegime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown => write!(f, "Unknown"),
+            Self::LowVol => write!(f, "LowVol"),
+            Self::Normal => write!(f, "Normal"),
+            Self::HighVol => write!(f, "HighVol"),
+            Self::Crisis => write!(f, "Crisis"),
+        }
+    }
+}
+
 /// Regime detection configuration (serializable for TOML).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -42,6 +54,8 @@ pub struct RegimeConfig {
     pub crisis_drawdown: f64,
     /// Vol percentile threshold for Crisis (must exceed both drawdown AND vol).
     pub crisis_vol_percentile: f64,
+    /// MAP run-length below this → recent regime change → defensive (HighVol).
+    pub regime_change_run_length: usize,
 }
 
 impl Default for RegimeConfig {
@@ -53,6 +67,7 @@ impl Default for RegimeConfig {
             vol_percentile_high: 0.70,
             crisis_drawdown: -0.05,
             crisis_vol_percentile: 0.90,
+            regime_change_run_length: 20,
         }
     }
 }
@@ -157,6 +172,7 @@ fn ln_gamma(x: f64) -> f64 {
     }
     // Lanczos approximation (g=7, n=9) for better accuracy at small x
     const G: f64 = 7.0;
+    #[allow(clippy::excessive_precision)]
     const C: [f64; 9] = [
         0.99999999999980993,
         676.5203681218851,
@@ -220,6 +236,7 @@ impl Bocpd {
     }
 
     /// Feed a new observation (log return). Returns changepoint probability.
+    #[allow(clippy::needless_range_loop)] // indexed access clearer for BOCPD multi-array updates
     pub fn update(&mut self, x: f64) -> f64 {
         let h = self.hazard;
         let log_h = h.ln();
@@ -364,7 +381,9 @@ impl VolPercentile {
             return 0.5;
         }
 
-        // Count how many values are below current vol
+        // Count how many values are below current vol.
+        // O(window) per call — fine for 128 elements. For larger windows,
+        // consider an order-statistic tree.
         let below = self.buffer[..count].iter().filter(|&&v| v < vol).count();
         below as f64 / (count - 1) as f64
     }
@@ -390,7 +409,9 @@ pub fn classify_regime(
     }
 
     // Short MAP run-length = recent regime change → be defensive
-    if map_run_length < 20 && vol_percentile > config.vol_percentile_low {
+    if map_run_length < config.regime_change_run_length
+        && vol_percentile > config.vol_percentile_low
+    {
         return MarketRegime::HighVol;
     }
 
