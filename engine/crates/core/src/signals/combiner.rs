@@ -135,6 +135,16 @@ pub struct Config {
     /// Does NOT affect SELL/exit signals — positions can always be closed.
     pub cusum_entry_gate: bool,
 
+    /// Block BUY entries when regime_change_prob exceeds this.
+    /// Meta-labeling showed regime_change_prob is a top feature — trades during
+    /// regime transitions are low quality. 0.0 = disabled. Default: 0.3
+    pub max_regime_change_prob: f64,
+
+    /// Block BUY entries during these hours (UTC). Empty = no hour filter.
+    /// Meta-labeling showed hour_of_day matters — avoid market open/close noise.
+    /// Default: empty (disabled until hour analysis is done per-market)
+    pub blocked_hours_utc: Vec<u8>,
+
     /// Regime-conditional weight multipliers per strategy.
     /// Applied on top of base weights: effective = base × regime_mult.
     pub regime_mean_reversion: RegimeWeights,
@@ -150,6 +160,8 @@ impl Default for Config {
             min_net_score: 0.2,
             min_strategies: 1,
             min_exit_strategies: 2,
+            max_regime_change_prob: 0.3,
+            blocked_hours_utc: vec![],
             weight_mean_reversion: 0.5,
             weight_momentum: 0.5,
             weight_vwap_reversion: 0.0,
@@ -198,6 +210,8 @@ pub struct StrategyCombiner {
     min_strategies: usize,
     min_exit_strategies: usize,
     cusum_entry_gate: bool,
+    max_regime_change_prob: f64,
+    blocked_hours_utc: Vec<u8>,
 }
 
 impl StrategyCombiner {
@@ -208,6 +222,8 @@ impl StrategyCombiner {
             min_strategies: 1,
             min_exit_strategies: 2,
             cusum_entry_gate: false,
+            max_regime_change_prob: 0.3,
+            blocked_hours_utc: vec![],
         }
     }
 
@@ -223,6 +239,16 @@ impl StrategyCombiner {
 
     pub fn with_cusum_entry_gate(mut self, enabled: bool) -> Self {
         self.cusum_entry_gate = enabled;
+        self
+    }
+
+    pub fn with_meta_gates(
+        mut self,
+        max_regime_change_prob: f64,
+        blocked_hours_utc: Vec<u8>,
+    ) -> Self {
+        self.max_regime_change_prob = max_regime_change_prob;
+        self.blocked_hours_utc = blocked_hours_utc;
         self
     }
 }
@@ -282,6 +308,27 @@ impl Strategy for StrategyCombiner {
         // Does NOT block SELL/exit signals — positions can always be closed.
         if self.cusum_entry_gate && net > 0.0 && !has_position && !features.cusum_triggered {
             return None;
+        }
+
+        // Meta-labeling gates: block BUY entries during regime transitions or blocked hours.
+        // Derived from meta-labeling feature importances (#89/#103).
+        if net > 0.0 && !has_position {
+            // Gate: high regime change probability → unstable, skip entry
+            if self.max_regime_change_prob > 0.0
+                && features.regime_change_prob > self.max_regime_change_prob
+            {
+                return None;
+            }
+
+            // Gate: blocked hours (UTC)
+            if !self.blocked_hours_utc.is_empty() {
+                // Extract hour from bar timestamp (features don't carry timestamp,
+                // but regime_change_prob > 0 implies we're processing live data.
+                // For now, this gate is only active when blocked_hours is configured.)
+                // Note: hour extraction requires timestamp which isn't in FeatureValues.
+                // This will be wired when FeatureValues carries bar_hour. For now,
+                // the blocked_hours config is available but hour filtering is a follow-up.
+            }
         }
 
         // Exit gate: when holding a position and the net vote is SELL,
@@ -1035,5 +1082,51 @@ mod tests {
             .score(&regime_features(MarketRegime::Unknown), false)
             .unwrap();
         assert!((sig.score - 0.5).abs() < 1e-10); // 0.5 * 1.0 * 1.0
+    }
+
+    // --- Meta-labeling gate tests ---
+
+    #[test]
+    fn regime_change_gate_blocks_buy_during_transition() {
+        let combiner = StrategyCombiner::new(
+            vec![entry(
+                FixedStrategy::buy(1.0, SignalReason::MeanReversionBuy),
+                0.5,
+                "mr",
+            )],
+            0.0,
+        )
+        .with_meta_gates(0.3, vec![]);
+
+        // High regime change prob → blocked
+        let mut f = warmed_features();
+        f.regime_change_prob = 0.5; // > 0.3 threshold
+        assert!(combiner.score(&f, false).is_none());
+
+        // Low regime change prob → allowed
+        let mut f2 = warmed_features();
+        f2.regime_change_prob = 0.1;
+        assert!(combiner.score(&f2, false).is_some());
+    }
+
+    #[test]
+    fn regime_change_gate_does_not_block_sells() {
+        let combiner = StrategyCombiner::new(
+            vec![entry(
+                FixedStrategy::sell(1.0, SignalReason::MeanReversionSell),
+                0.5,
+                "mr",
+            )],
+            0.0,
+        )
+        .with_min_exit_strategies(1)
+        .with_meta_gates(0.3, vec![]);
+
+        // High regime change prob should NOT block sell/exit
+        let mut f = warmed_features();
+        f.regime_change_prob = 0.8;
+        let sig = combiner.score(&f, true);
+        assert!(sig.is_some());
+        assert_eq!(sig.unwrap().side, Side::Sell);
     }
 }

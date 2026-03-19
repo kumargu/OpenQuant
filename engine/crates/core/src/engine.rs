@@ -160,7 +160,11 @@ impl Engine {
             combiner::StrategyCombiner::new(strategies, config.combiner.min_net_score)
                 .with_min_strategies(config.combiner.min_strategies)
                 .with_min_exit_strategies(config.combiner.min_exit_strategies)
-                .with_cusum_entry_gate(config.combiner.cusum_entry_gate),
+                .with_cusum_entry_gate(config.combiner.cusum_entry_gate)
+                .with_meta_gates(
+                    config.combiner.max_regime_change_prob,
+                    config.combiner.blocked_hours_utc.clone(),
+                ),
         )
     }
 
