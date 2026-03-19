@@ -391,14 +391,20 @@ max_bar_age_seconds = 120
 # Per-symbol combiner weight overrides — data-driven from #110 baseline.
 # Categories: metals (profitable), oil/gas (mixed), tech/pharma/energy (losing).
 
-# --- Metals: PROFITABLE (+$1,233). Restore full mean-reversion. ---
+# --- Metals: PBO-validated configs (GLD PBO=6.7%, SLV PBO=46.7%) ---
 [symbol_overrides.GLD]
+buy_z_threshold = -2.0          # PBO-optimal (IS=+0.249, OOS=+0.228)
+sell_z_threshold = 1.5
+stop_loss_atr_mult = 2.0
 weight_mean_reversion = 0.40    # full mean-reversion (works on commodities)
 weight_momentum = 0.25
 weight_vwap_reversion = 0.35
 
 [symbol_overrides.SLV]
-weight_mean_reversion = 0.40    # SLV was +$1,071 alone
+buy_z_threshold = -2.5          # PBO-optimal (IS=+0.233, OOS=+0.302)
+sell_z_threshold = 2.5
+stop_loss_atr_mult = 2.0
+weight_mean_reversion = 0.40
 weight_momentum = 0.25
 weight_vwap_reversion = 0.35
 
