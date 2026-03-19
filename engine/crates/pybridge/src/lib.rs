@@ -98,6 +98,22 @@ impl Engine {
                             .get_item("min_hold_bars")?
                             .map(|v| v.extract())
                             .transpose()?,
+                        weight_mean_reversion: params
+                            .get_item("weight_mean_reversion")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        weight_momentum: params
+                            .get_item("weight_momentum")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        weight_vwap_reversion: params
+                            .get_item("weight_vwap_reversion")?
+                            .map(|v| v.extract())
+                            .transpose()?,
+                        weight_breakout: params
+                            .get_item("weight_breakout")?
+                            .map(|v| v.extract())
+                            .transpose()?,
                     };
                     map.insert(symbol, ovr);
                 }
@@ -537,6 +553,80 @@ fn backtest<'py>(
     Ok(dict)
 }
 
+/// Run a backtest using the full TOML config (including per-symbol overrides).
+#[pyfunction]
+#[pyo3(signature = (bars, config_path))]
+fn backtest_toml<'py>(
+    py: Python<'py>,
+    bars: Vec<(String, i64, f64, f64, f64, f64, f64)>,
+    config_path: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let core_bars: Vec<Bar> = bars
+        .into_iter()
+        .map(|(symbol, ts, o, h, l, c, v)| Bar {
+            symbol,
+            timestamp: ts,
+            open: o,
+            high: h,
+            low: l,
+            close: c,
+            volume: v,
+        })
+        .collect();
+
+    let cfg_file = openquant_core::config::ConfigFile::load(std::path::Path::new(config_path))
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let mut config = cfg_file.into_engine_config();
+    config.max_bar_age_ms = 0; // disabled for backtesting
+    config.metrics_enabled = false;
+
+    let result = openquant_core::backtest::run(&core_bars, config);
+
+    let dict = PyDict::new(py);
+    dict.set_item("total_bars", result.total_bars)?;
+    dict.set_item("total_trades", result.total_trades)?;
+    dict.set_item("winning_trades", result.winning_trades)?;
+    dict.set_item("losing_trades", result.losing_trades)?;
+    dict.set_item("win_rate", result.win_rate)?;
+    dict.set_item("total_pnl", result.total_pnl)?;
+    dict.set_item("avg_win", result.avg_win)?;
+    dict.set_item("avg_loss", result.avg_loss)?;
+    dict.set_item("profit_factor", result.profit_factor)?;
+    dict.set_item("max_drawdown", result.max_drawdown)?;
+    dict.set_item("max_drawdown_pct", result.max_drawdown_pct)?;
+    dict.set_item("expectancy", result.expectancy)?;
+    dict.set_item("sharpe_approx", result.sharpe_approx)?;
+    dict.set_item("psr", result.psr)?;
+    dict.set_item("dsr", result.dsr)?;
+    dict.set_item("signals_generated", result.signals_generated)?;
+    dict.set_item("equity_curve", result.equity_curve)?;
+
+    let trades_list: Vec<Bound<'py, PyDict>> = result
+        .trades
+        .iter()
+        .map(|t| {
+            let td = PyDict::new(py);
+            td.set_item("symbol", &t.symbol).unwrap();
+            td.set_item("entry_price", t.entry_price).unwrap();
+            td.set_item("exit_price", t.exit_price).unwrap();
+            td.set_item("qty", t.qty).unwrap();
+            td.set_item("entry_time", t.entry_time).unwrap();
+            td.set_item("exit_time", t.exit_time).unwrap();
+            td.set_item("pnl", t.pnl).unwrap();
+            td.set_item("return_pct", t.return_pct).unwrap();
+            td.set_item("entry_reason", t.entry_reason.describe())
+                .unwrap();
+            td.set_item("exit_reason", t.exit_reason.describe())
+                .unwrap();
+            td.set_item("bars_held", t.bars_held).unwrap();
+            td
+        })
+        .collect();
+    dict.set_item("trades", trades_list)?;
+
+    Ok(dict)
+}
+
 /// Validate bar data quality. Returns a dict with quality metrics.
 #[pyfunction]
 #[pyo3(signature = (bars, gap_threshold_minutes = 5))]
@@ -621,6 +711,7 @@ fn load_config(config_path: &str) -> PyResult<String> {
 fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Engine>()?;
     m.add_function(wrap_pyfunction!(backtest, m)?)?;
+    m.add_function(wrap_pyfunction!(backtest_toml, m)?)?;
     m.add_function(wrap_pyfunction!(validate_bars, m)?)?;
     m.add_function(wrap_pyfunction!(deflated_sharpe, m)?)?;
     m.add_function(wrap_pyfunction!(load_config, m)?)?;

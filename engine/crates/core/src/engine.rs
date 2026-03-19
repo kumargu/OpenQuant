@@ -69,6 +69,11 @@ pub struct SymbolOverrides {
     pub max_hold_bars: Option<usize>,
     pub take_profit_pct: Option<f64>,
     pub min_hold_bars: Option<usize>,
+    // Per-symbol combiner weight overrides
+    pub weight_mean_reversion: Option<f64>,
+    pub weight_momentum: Option<f64>,
+    pub weight_vwap_reversion: Option<f64>,
+    pub weight_breakout: Option<f64>,
 }
 
 /// Engine configuration.
@@ -197,9 +202,25 @@ impl Engine {
                 trend_filter: ovr.trend_filter.unwrap_or(config.signal.trend_filter),
                 ..config.signal.clone()
             };
-            // Per-symbol config with overridden mean-reversion settings
+            // Per-symbol config with overridden mean-reversion + combiner weights
+            let sym_combiner = combiner::Config {
+                weight_mean_reversion: ovr
+                    .weight_mean_reversion
+                    .unwrap_or(config.combiner.weight_mean_reversion),
+                weight_momentum: ovr
+                    .weight_momentum
+                    .unwrap_or(config.combiner.weight_momentum),
+                weight_vwap_reversion: ovr
+                    .weight_vwap_reversion
+                    .unwrap_or(config.combiner.weight_vwap_reversion),
+                weight_breakout: ovr
+                    .weight_breakout
+                    .unwrap_or(config.combiner.weight_breakout),
+                ..config.combiner.clone()
+            };
             let sym_config = EngineConfig {
                 signal: sig,
+                combiner: sym_combiner,
                 ..config.clone()
             };
             symbol_strategies.insert(symbol.clone(), Self::build_strategy(&sym_config));

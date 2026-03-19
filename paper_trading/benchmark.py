@@ -131,9 +131,9 @@ def run_benchmark(
     params: dict | None = None,
 ) -> dict:
     """Run backtest across all symbols. Returns per-symbol and aggregated results."""
-    from openquant import backtest, validate_bars
+    from openquant import backtest_toml, validate_bars
 
-    params = params or DEFAULT_PARAMS
+    toml_path = str(Path(__file__).parent.parent / "openquant.toml")
     results = {}
 
     for symbol in symbols:
@@ -154,7 +154,7 @@ def run_benchmark(
         if zvp > 0.5:
             quality_note = f" [!vol:{zvp:.0%}]"
 
-        result = backtest(bars, **params)
+        result = backtest_toml(bars, toml_path)
         results[symbol] = {k: result[k] for k in METRICS_KEYS if k in result}
         results[symbol]["total_bars"] = result["total_bars"]
         results[symbol]["zero_volume_pct"] = zvp
