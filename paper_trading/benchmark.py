@@ -450,6 +450,7 @@ def main():
     parser.add_argument("--category", "-c", help="Run single category")
     parser.add_argument("--save-baseline", action="store_true", help="Save result as baseline")
     parser.add_argument("--compare", action="store_true", help="Compare against baseline")
+    parser.add_argument("--tearsheet", action="store_true", help="Generate quantstats HTML tearsheet")
     args = parser.parse_args()
 
     categories = [args.category] if args.category else None
@@ -473,6 +474,28 @@ def main():
         print("COMPARISON vs BASELINE")
         print(f"{'='*60}")
         print(comparison)
+
+    if args.tearsheet:
+        from paper_trading.tearsheet import (
+            generate_tearsheet,
+            run_backtest_for_tearsheet,
+        )
+        cat_label = args.category or "all"
+        symbols = (
+            CATEGORIES.get(args.category, [])
+            if args.category
+            else ALL_SYMBOLS
+        )
+        print(f"\nGenerating tearsheet ({len(symbols)} symbols)...")
+        returns, summary = run_backtest_for_tearsheet(
+            symbols, args.days, args.timeframe
+        )
+        if not returns.empty:
+            from pathlib import Path
+            output = Path("reports") / f"tearsheet_{cat_label}.html"
+            title = f"OpenQuant — {cat_label} ({args.days}d {args.timeframe})"
+            path = generate_tearsheet(returns, output, title)
+            print(f"Tearsheet saved to: {path}")
 
 
 if __name__ == "__main__":
