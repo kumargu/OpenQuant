@@ -65,9 +65,10 @@ impl GjrGarch {
     /// Create a new GJR-GARCH estimator from config.
     ///
     /// # Panics
-    /// Panics in debug mode if the stationarity constraint is violated.
+    /// # Panics
+    /// Panics if the stationarity constraint α + β + γ/2 < 1 is violated.
     pub fn from_config(config: &GarchConfig) -> Self {
-        debug_assert!(
+        assert!(
             config.is_stationary(),
             "GJR-GARCH not stationary: α + β + γ/2 = {} ≥ 1",
             config.alpha + config.beta + config.gamma / 2.0
@@ -181,9 +182,8 @@ mod tests {
         );
 
         // Should approach long-run vol
-        let long_run_vol = (config.omega
-            / (1.0 - config.alpha - config.beta - config.gamma / 2.0))
-            .sqrt();
+        let long_run_vol =
+            (config.omega / (1.0 - config.alpha - config.beta - config.gamma / 2.0)).sqrt();
         // After 50 calm bars, should be within 2x of long-run
         assert!(
             vol < long_run_vol * 2.0,
@@ -221,8 +221,7 @@ mod tests {
         let config = GarchConfig::default();
         let g = GjrGarch::from_config(&config);
 
-        let long_run_var =
-            config.omega / (1.0 - config.alpha - config.beta - config.gamma / 2.0);
+        let long_run_var = config.omega / (1.0 - config.alpha - config.beta - config.gamma / 2.0);
         assert!(
             (g.variance() - long_run_var).abs() < 1e-12,
             "initial variance should be long-run: {} vs {}",

@@ -2424,6 +2424,87 @@
               "placement": "bottom"
             }
           }
+        },
+        {
+          "type": "timeseries",
+          "title": "GARCH Vol vs ATR (Stop Loss Inputs)",
+          "description": "GJR-GARCH conditional volatility (converted to price-space: \u03c3 \u00d7 close) compared against ATR. GARCH reacts faster to crashes due to the asymmetry coefficient \u03b3.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 65
+          },
+          "id": 90,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.garch_vol * b.close as \"GARCH Vol (\u03c3\u00d7price)\", f.atr as \"ATR\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.garch_vol * b.close as \"GARCH Vol (\u03c3\u00d7price)\", f.atr as \"ATR\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": [
+                "time"
+              ]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "GARCH Vol (\u03c3\u00d7price)"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "purple"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "ATR"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  },
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash",
+                      "dash": [
+                        5,
+                        5
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
         }
       ],
       "description": "Technical indicators driving signals. Bollinger bands (20-period SMA \u00b1 2\u03c3) drive mean-rev %B. EMA crossover (fast/slow) drives momentum. Z-score > \u00b12 = extreme. Relative volume > 1.2 required for mean-rev entry."

@@ -287,8 +287,10 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
-        let feature_state = self.features.entry(bar.symbol.clone())
-                .or_insert_with(|| FeatureState::with_garch(self.garch_config.clone()));
+        let feature_state = self
+            .features
+            .entry(bar.symbol.clone())
+            .or_insert_with(|| FeatureState::with_garch(self.garch_config.clone()));
 
         let features =
             feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
@@ -320,8 +322,14 @@ impl Engine {
         // 2. Check exit rules on open positions (per-symbol exit config)
         let exit_config = self.exit_config_for(&bar.symbol);
         if let Some(pos) = self.open_positions.get(&bar.symbol)
-            && let Some(exit_intent) =
-                exit::check(pos, bar.close, self.bar_counter, features.atr, features.garch_vol, exit_config)
+            && let Some(exit_intent) = exit::check(
+                pos,
+                bar.close,
+                self.bar_counter,
+                features.atr,
+                features.garch_vol,
+                exit_config,
+            )
         {
             if let Some(m) = self.hot_metrics.get(&bar.symbol) {
                 match exit_intent.reason {
@@ -437,8 +445,10 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars)
-        let feature_state = self.features.entry(bar.symbol.clone())
-                .or_insert_with(|| FeatureState::with_garch(self.garch_config.clone()));
+        let feature_state = self
+            .features
+            .entry(bar.symbol.clone())
+            .or_insert_with(|| FeatureState::with_garch(self.garch_config.clone()));
 
         let features =
             feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
@@ -480,8 +490,14 @@ impl Engine {
         // 2. Check exit rules on open positions (per-symbol exit config)
         let exit_config = self.exit_config_for(&bar.symbol);
         if let Some(pos) = self.open_positions.get(&bar.symbol)
-            && let Some(exit_intent) =
-                exit::check(pos, bar.close, self.bar_counter, features.atr, features.garch_vol, exit_config)
+            && let Some(exit_intent) = exit::check(
+                pos,
+                bar.close,
+                self.bar_counter,
+                features.atr,
+                features.garch_vol,
+                exit_config,
+            )
         {
             if let Some(m) = self.hot_metrics.get(&bar.symbol) {
                 match exit_intent.reason {

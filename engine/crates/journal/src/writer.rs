@@ -289,9 +289,10 @@ fn write_bar_record(conn: &Connection, rec: &BarRecord) {
         "INSERT INTO features (bar_id, return_1, return_5, return_20, sma_20, sma_50, atr,
          return_std_20, return_z_score, relative_volume, bar_range, close_location, trend_up, warmed_up,
          ema_fast, ema_slow, ema_fast_above_slow, adx, plus_di, minus_di,
-         bollinger_upper, bollinger_lower, bollinger_pct_b, bollinger_bandwidth)
+         bollinger_upper, bollinger_lower, bollinger_pct_b, bollinger_bandwidth,
+         garch_vol)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                 ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+                 ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         rusqlite::params![
             bar_id,
             rec.features.return_1,
@@ -317,6 +318,7 @@ fn write_bar_record(conn: &Connection, rec: &BarRecord) {
             rec.features.bollinger_lower,
             rec.features.bollinger_pct_b,
             rec.features.bollinger_bandwidth,
+            rec.features.garch_vol,
         ],
     )
     .expect("failed to insert features");

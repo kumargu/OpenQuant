@@ -87,30 +87,28 @@ pub fn check(
     let bars_held = current_bar.saturating_sub(pos.entry_bar);
     let return_pct = (current_price - pos.entry_price) / pos.entry_price;
 
-    // Stop loss — GARCH vol preferred over ATR, then fixed % fallback
-    if config.stop_loss_atr_mult > 0.0 {
-        // GARCH vol is per-bar return std dev; multiply by price for price-space.
-        // ATR is already in price-space.
-        let vol_distance = if garch_vol > 0.0 {
-            garch_vol * current_price
-        } else {
-            atr
-        };
+    // Stop loss — GARCH vol preferred, ATR fallback, then fixed %
+    // GARCH vol is per-bar return std dev; multiply by price for price-space.
+    // ATR is already in price-space.
+    let vol_distance = match (garch_vol > 0.0, atr > 0.0) {
+        (true, _) => garch_vol * current_price,
+        (_, true) => atr,
+        _ => 0.0,
+    };
 
-        if vol_distance > 0.0 {
-            let stop_price = pos.entry_price - (vol_distance * config.stop_loss_atr_mult);
-            if current_price < stop_price {
-                return Some(OrderIntent {
-                    symbol: pos.symbol.clone(),
-                    side: Side::Sell,
-                    qty: pos.qty,
-                    reason: SignalReason::StopLoss,
-                    signal_score: 0.0,
-                    z_score: 0.0,
-                    relative_volume: 0.0,
-                    votes: String::new(),
-                });
-            }
+    if config.stop_loss_atr_mult > 0.0 && vol_distance > 0.0 {
+        let stop_price = pos.entry_price - vol_distance * config.stop_loss_atr_mult;
+        if current_price < stop_price {
+            return Some(OrderIntent {
+                symbol: pos.symbol.clone(),
+                side: Side::Sell,
+                qty: pos.qty,
+                reason: SignalReason::StopLoss,
+                signal_score: 0.0,
+                z_score: 0.0,
+                relative_volume: 0.0,
+                votes: String::new(),
+            });
         }
     } else if config.stop_loss_pct > 0.0 && return_pct < -config.stop_loss_pct {
         // Fallback: fixed percentage stop
