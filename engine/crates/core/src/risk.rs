@@ -17,9 +17,9 @@ pub enum BetSizingMethod {
     /// Fixed sizing: qty = max_notional / price (current behavior).
     #[default]
     Linear,
-    /// Sigmoid scaling: qty = max_notional / price × sigmoid(score).
-    /// Higher conviction signals get larger positions.
-    Sigmoid,
+    /// Bayesian Kelly: posterior-mean Kelly fraction, uncertainty-penalized.
+    /// Starts conservative (prior), grows as trade evidence accumulates.
+    Kelly,
 }
 
 /// Risk configuration.
@@ -34,12 +34,18 @@ pub struct RiskConfig {
     pub min_reward_cost_ratio: f64,
     /// Estimated round-trip cost as fraction of price. Default: 0.001 (10 bps)
     pub estimated_cost_bps: f64,
-    /// Bet sizing method: "linear" (fixed) or "sigmoid" (score-scaled). Default: linear
+    /// Bet sizing method: "linear" or "kelly". Default: linear
     pub bet_sizing: BetSizingMethod,
-    /// Sigmoid steepness — higher = sharper transition. Default: 10.0
-    pub sigmoid_slope: f64,
-    /// Sigmoid center — score at which sizing = 50% of max. Default: 0.5
-    pub sigmoid_center: f64,
+    /// Kelly fraction ceiling (half-Kelly = 0.5). Default: 0.5
+    pub kelly_fraction: f64,
+    /// Minimum Kelly size as fraction of max notional. Default: 0.05
+    pub kelly_min_size: f64,
+    /// Maximum Kelly size as fraction of max notional. Default: 0.80
+    pub kelly_max_size: f64,
+    /// Beta prior wins (α). Higher = stronger prior toward 50% win rate. Default: 2.0
+    pub kelly_prior_wins: f64,
+    /// Beta prior losses (β). Default: 2.0
+    pub kelly_prior_losses: f64,
 }
 
 impl Default for RiskConfig {
@@ -50,16 +56,96 @@ impl Default for RiskConfig {
             min_reward_cost_ratio: 3.0,
             estimated_cost_bps: 0.001,
             bet_sizing: BetSizingMethod::Linear,
-            sigmoid_slope: 10.0,
-            sigmoid_center: 0.5,
+            kelly_fraction: 0.5,
+            kelly_min_size: 0.05,
+            kelly_max_size: 0.80,
+            kelly_prior_wins: 2.0,
+            kelly_prior_losses: 2.0,
         }
     }
 }
 
-/// Sigmoid function mapping score to [0, 1] confidence.
-/// sigmoid(score) = 1 / (1 + exp(-slope * (score - center)))
-fn sigmoid(score: f64, slope: f64, center: f64) -> f64 {
-    1.0 / (1.0 + (-slope * (score - center)).exp())
+/// Bayesian Kelly position sizing state.
+///
+/// Maintains a Beta posterior for win rate and running stats for payoff ratio.
+/// The Kelly fraction is posterior-mean with an uncertainty penalty that
+/// automatically makes sizing conservative when few trades have been observed.
+#[derive(Debug, Clone)]
+pub struct BayesianKellyState {
+    win_alpha: f64,    // Beta posterior: α (prior + wins)
+    win_beta: f64,     // Beta posterior: β (prior + losses)
+    sum_win_pnl: f64,  // sum of winning trade P&L
+    sum_loss_pnl: f64, // sum of losing trade |P&L|
+    n_wins: usize,
+    n_losses: usize,
+}
+
+impl BayesianKellyState {
+    pub fn new(prior_wins: f64, prior_losses: f64) -> Self {
+        Self {
+            win_alpha: prior_wins,
+            win_beta: prior_losses,
+            sum_win_pnl: 0.0,
+            sum_loss_pnl: 0.0,
+            n_wins: 0,
+            n_losses: 0,
+        }
+    }
+
+    /// Observe a completed trade. Positive pnl = win, negative = loss.
+    pub fn observe_trade(&mut self, pnl: f64) {
+        if pnl > 0.0 {
+            self.win_alpha += 1.0;
+            self.sum_win_pnl += pnl;
+            self.n_wins += 1;
+        } else {
+            self.win_beta += 1.0;
+            self.sum_loss_pnl += pnl.abs();
+            self.n_losses += 1;
+        }
+    }
+
+    /// Compute the uncertainty-penalized Kelly fraction (0.0 - 1.0).
+    ///
+    /// Uses posterior mean of win rate and observed payoff ratio.
+    /// Penalizes by posterior standard deviation to be conservative
+    /// when estimates are noisy (few trades).
+    pub fn kelly_fraction(&self) -> f64 {
+        let total = self.win_alpha + self.win_beta;
+        let p = self.win_alpha / total; // posterior mean win rate
+        let q = 1.0 - p;
+
+        // Payoff ratio: average win / average loss
+        let avg_win = if self.n_wins > 0 {
+            self.sum_win_pnl / self.n_wins as f64
+        } else {
+            1.0 // prior: 1:1 payoff
+        };
+        let avg_loss = if self.n_losses > 0 {
+            self.sum_loss_pnl / self.n_losses as f64
+        } else {
+            1.0
+        };
+        let b = avg_win / avg_loss.max(1e-10);
+
+        // Kelly: f* = (p*b - q) / b
+        let kelly = (p * b - q) / b;
+        if kelly <= 0.0 {
+            return 0.0; // negative edge → don't bet
+        }
+
+        // Uncertainty penalty: posterior std of Beta(α, β) = √(αβ / (α+β)²(α+β+1))
+        let posterior_var = (self.win_alpha * self.win_beta) / (total * total * (total + 1.0));
+        let posterior_std = posterior_var.sqrt();
+        // Scale penalty: 4× std (so at prior Beta(2,2), penalty ≈ 0.45 → conservative)
+        let uncertainty_penalty = (1.0 - posterior_std * 4.0).max(0.2);
+
+        (kelly * uncertainty_penalty).clamp(0.0, 1.0)
+    }
+
+    pub fn total_trades(&self) -> usize {
+        self.n_wins + self.n_losses
+    }
 }
 
 /// Mutable risk state that tracks daily P&L.
@@ -110,6 +196,7 @@ pub fn check(
     price: f64,
     current_position_qty: f64,
     risk_state: &RiskState,
+    kelly_state: &BayesianKellyState,
     config: &RiskConfig,
 ) -> Result<f64, Rejection> {
     // Gate 1: Kill switch
@@ -146,8 +233,10 @@ pub fn check(
             // Apply bet sizing method
             let scale = match config.bet_sizing {
                 BetSizingMethod::Linear => 1.0,
-                BetSizingMethod::Sigmoid => {
-                    sigmoid(signal.score, config.sigmoid_slope, config.sigmoid_center)
+                BetSizingMethod::Kelly => {
+                    let raw = kelly_state.kelly_fraction();
+                    let fractional = raw * config.kelly_fraction;
+                    fractional.clamp(config.kelly_min_size, config.kelly_max_size)
                 }
             };
             let scaled_qty = max_qty * scale;
@@ -213,6 +302,10 @@ mod tests {
         }
     }
 
+    fn default_kelly() -> BayesianKellyState {
+        BayesianKellyState::new(2.0, 2.0)
+    }
+
     #[test]
     fn test_kill_switch_blocks() {
         let mut state = RiskState::new();
@@ -220,7 +313,14 @@ mod tests {
         state.record_pnl(-600.0, &config);
         assert!(state.killed);
 
-        let result = check(&buy_signal(1.0), 100.0, 0.0, &state, &config);
+        let result = check(
+            &buy_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &default_kelly(),
+            &config,
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().reason.contains("kill switch"));
     }
@@ -233,7 +333,14 @@ mod tests {
             min_reward_cost_ratio: 0.0,
             ..Default::default()
         };
-        let result = check(&buy_signal(2.0), 100.0, 0.0, &state, &config);
+        let result = check(
+            &buy_signal(2.0),
+            100.0,
+            0.0,
+            &state,
+            &default_kelly(),
+            &config,
+        );
         assert!(result.is_ok());
         let qty = result.unwrap();
         assert!(qty <= 50.0); // 5000 / 100 = 50
@@ -244,7 +351,14 @@ mod tests {
     fn test_sell_uses_position_qty() {
         let state = RiskState::new();
         let config = no_cost_config();
-        let result = check(&sell_signal(1.0), 100.0, 25.0, &state, &config);
+        let result = check(
+            &sell_signal(1.0),
+            100.0,
+            25.0,
+            &state,
+            &default_kelly(),
+            &config,
+        );
         assert_eq!(result.unwrap(), 25.0);
     }
 
@@ -252,7 +366,14 @@ mod tests {
     fn test_sell_rejected_no_position() {
         let state = RiskState::new();
         let config = RiskConfig::default();
-        let result = check(&sell_signal(1.0), 100.0, 0.0, &state, &config);
+        let result = check(
+            &sell_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &default_kelly(),
+            &config,
+        );
         assert!(result.is_err());
     }
 
@@ -268,46 +389,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sigmoid_function() {
-        // At center, sigmoid = 0.5
-        assert!((sigmoid(0.5, 10.0, 0.5) - 0.5).abs() < 1e-10);
-        // Well above center → close to 1.0
-        assert!(sigmoid(1.0, 10.0, 0.5) > 0.99);
-        // Well below center → close to 0.0
-        assert!(sigmoid(0.0, 10.0, 0.5) < 0.01);
-        // Higher slope = sharper transition
-        assert!(sigmoid(0.6, 20.0, 0.5) > sigmoid(0.6, 5.0, 0.5));
-    }
-
-    #[test]
-    fn test_sigmoid_bet_sizing_scales_qty() {
-        let state = RiskState::new();
-        let config = RiskConfig {
-            max_position_notional: 10_000.0,
-            min_reward_cost_ratio: 0.0,
-            bet_sizing: BetSizingMethod::Sigmoid,
-            sigmoid_slope: 10.0,
-            sigmoid_center: 0.5,
-            ..Default::default()
-        };
-
-        // High score → large position
-        let high = check(&buy_signal(1.0), 100.0, 0.0, &state, &config).unwrap();
-        // Low score → small position (but above cost filter since ratio=0)
-        let low = check(&buy_signal(0.1), 100.0, 0.0, &state, &config).unwrap();
-
-        assert!(
-            high > low,
-            "high score ({high}) should get larger position than low score ({low})"
-        );
-        // Full linear qty would be 100 (10_000/100). Sigmoid at 1.0 is ~0.993 → ~99
-        assert!(
-            high > 90.0,
-            "high conviction should be near max, got {high}"
-        );
-    }
-
-    #[test]
     fn test_linear_bet_sizing_ignores_score() {
         let state = RiskState::new();
         let config = RiskConfig {
@@ -317,11 +398,152 @@ mod tests {
             ..Default::default()
         };
 
-        let high = check(&buy_signal(1.0), 100.0, 0.0, &state, &config).unwrap();
-        let low = check(&buy_signal(0.1), 100.0, 0.0, &state, &config).unwrap();
+        let high = check(
+            &buy_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &default_kelly(),
+            &config,
+        )
+        .unwrap();
+        let low = check(
+            &buy_signal(0.1),
+            100.0,
+            0.0,
+            &state,
+            &default_kelly(),
+            &config,
+        )
+        .unwrap();
         assert_eq!(
             high, low,
             "linear sizing should give same qty regardless of score"
+        );
+    }
+
+    // --- Bayesian Kelly tests ---
+
+    #[test]
+    fn kelly_fraction_increases_with_more_wins() {
+        let mut k = BayesianKellyState::new(2.0, 2.0);
+        let f_before = k.kelly_fraction();
+
+        // Observe 20 wins, 5 losses (75% win rate, 2:1 payoff)
+        for _ in 0..20 {
+            k.observe_trade(100.0);
+        }
+        for _ in 0..5 {
+            k.observe_trade(-50.0);
+        }
+        let f_after = k.kelly_fraction();
+
+        assert!(
+            f_after > f_before,
+            "kelly fraction should increase with wins: {f_before:.4} → {f_after:.4}"
+        );
+    }
+
+    #[test]
+    fn kelly_uncertainty_penalty_shrinks_with_more_trades() {
+        // More trades → tighter posterior → less penalty → higher fraction
+        let mut k_few = BayesianKellyState::new(2.0, 2.0);
+        let mut k_many = BayesianKellyState::new(2.0, 2.0);
+
+        // Same win rate (60%), different sample sizes
+        for _ in 0..6 {
+            k_few.observe_trade(100.0);
+        }
+        for _ in 0..4 {
+            k_few.observe_trade(-80.0);
+        }
+
+        for _ in 0..60 {
+            k_many.observe_trade(100.0);
+        }
+        for _ in 0..40 {
+            k_many.observe_trade(-80.0);
+        }
+
+        assert!(
+            k_many.kelly_fraction() > k_few.kelly_fraction(),
+            "more trades should give higher kelly (less uncertainty): few={:.4} many={:.4}",
+            k_few.kelly_fraction(),
+            k_many.kelly_fraction()
+        );
+    }
+
+    #[test]
+    fn kelly_negative_edge_returns_zero() {
+        let mut k = BayesianKellyState::new(2.0, 2.0);
+        // Observe mostly losses
+        for _ in 0..3 {
+            k.observe_trade(50.0);
+        }
+        for _ in 0..20 {
+            k.observe_trade(-100.0);
+        }
+
+        assert_eq!(
+            k.kelly_fraction(),
+            0.0,
+            "negative edge should return zero kelly"
+        );
+    }
+
+    #[test]
+    fn kelly_cold_start_is_conservative() {
+        let k = BayesianKellyState::new(2.0, 2.0);
+        let f = k.kelly_fraction();
+        // With Beta(2,2) prior and no data, p=0.5, b=1.0, f*=0
+        // (because (0.5*1 - 0.5)/1 = 0 → zero kelly)
+        assert!(f < 0.1, "cold start should be conservative: {f:.4}");
+    }
+
+    #[test]
+    fn kelly_sizing_scales_position() {
+        let state = RiskState::new();
+        let config = RiskConfig {
+            max_position_notional: 10_000.0,
+            min_reward_cost_ratio: 0.0,
+            bet_sizing: BetSizingMethod::Kelly,
+            kelly_fraction: 0.5,
+            kelly_min_size: 0.05,
+            kelly_max_size: 0.80,
+            ..Default::default()
+        };
+
+        // Kelly with no data → min size (cold start)
+        let qty_cold = check(
+            &buy_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &default_kelly(),
+            &config,
+        )
+        .unwrap();
+        let max_qty = 10_000.0 / 100.0; // 100
+
+        // Should be at minimum (kelly_min_size × max)
+        assert!(
+            qty_cold <= max_qty * 0.10,
+            "cold start should give small position: {qty_cold}"
+        );
+
+        // Kelly with strong track record
+        let mut k_strong = BayesianKellyState::new(2.0, 2.0);
+        for _ in 0..50 {
+            k_strong.observe_trade(200.0);
+        }
+        for _ in 0..15 {
+            k_strong.observe_trade(-100.0);
+        }
+
+        let qty_strong = check(&buy_signal(1.0), 100.0, 0.0, &state, &k_strong, &config).unwrap();
+        assert!(
+            qty_strong > qty_cold,
+            "strong track record should give larger position: cold={qty_cold} strong={qty_strong}"
         );
     }
 }
