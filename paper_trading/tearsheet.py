@@ -99,7 +99,10 @@ def run_backtest_for_tearsheet(
 
     Returns (returns_series, summary_stats).
     """
-    from openquant import backtest
+    from openquant import backtest, validate_bars
+    from paper_trading.config import engine_kwargs
+
+    params = engine_kwargs()
 
     all_returns = []
     total_trades = 0
@@ -110,26 +113,12 @@ def run_backtest_for_tearsheet(
         if not bars:
             continue
 
-        from openquant import validate_bars
-
         quality = validate_bars(bars)
         if quality["has_critical_issues"]:
             print(f"  {symbol}: SKIPPED — critical data quality issues")
             continue
 
-        result = backtest(
-            bars,
-            max_position_notional=10_000.0,
-            max_daily_loss=500.0,
-            buy_z_threshold=-2.2,
-            sell_z_threshold=1.8,
-            min_relative_volume=1.2,
-            stop_loss_pct=0.0,
-            max_hold_bars=150,
-            take_profit_pct=0.0,
-            trend_filter=True,
-            stop_loss_atr_mult=2.5,
-        )
+        result = backtest(bars, **params)
 
         timestamps = [bar[1] for bar in bars]
         returns = equity_curve_to_returns(
@@ -148,7 +137,9 @@ def run_backtest_for_tearsheet(
     if not all_returns:
         return pd.Series(dtype=float), {}
 
-    # Aggregate: align all series by timestamp, sum returns per bar
+    # Aggregate: align all series by timestamp, sum returns per bar.
+    # Note: summing percentage returns assumes equal capital allocation
+    # across symbols. At equal notional sizing this is a close approximation.
     combined = pd.concat(all_returns, axis=1).fillna(0.0).sum(axis=1)
     combined = combined.sort_index()
 
@@ -167,8 +158,13 @@ def generate_tearsheet(
     returns: pd.Series,
     output_path: str | Path = "reports/tearsheet.html",
     title: str = "OpenQuant Strategy",
+    benchmark: str | None = "SPY",
 ) -> Path:
     """Generate a full quantstats HTML tearsheet.
+
+    Args:
+        benchmark: Ticker for benchmark comparison. Use "SPY" for equity
+            categories, None for crypto-only runs.
 
     Returns the path to the generated HTML file.
     """
@@ -177,7 +173,7 @@ def generate_tearsheet(
 
     qs.reports.html(
         returns,
-        benchmark=None,  # no benchmark comparison (we trade crypto + equities)
+        benchmark=benchmark,
         output=str(output),
         title=title,
         download_filename=output.stem,
@@ -223,8 +219,12 @@ def main():
         print("No returns data — cannot generate tearsheet.")
         return
 
+    # Print headline metrics so you don't have to open the HTML
+    sharpe = qs.stats.sharpe(returns)
+    max_dd = qs.stats.max_drawdown(returns)
     print(f"\nAggregated: {summary['total_trades']} trades, "
           f"${summary['total_pnl']:+,.2f} P&L")
+    print(f"Sharpe: {sharpe:.2f}, Max DD: {max_dd:.1%}")
 
     # Determine output path
     if args.output:
@@ -235,8 +235,10 @@ def main():
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         output_path = REPORTS_DIR / f"tearsheet_{cat_label}_{timestamp}.html"
 
+    # Use SPY benchmark for equity categories, None for crypto
+    benchmark = None if cat_label == "crypto" else "SPY"
     title = f"OpenQuant — {cat_label} ({args.days}d {args.timeframe})"
-    path = generate_tearsheet(returns, output_path, title)
+    path = generate_tearsheet(returns, output_path, title, benchmark=benchmark)
     print(f"\nTearsheet saved to: {path}")
 
 

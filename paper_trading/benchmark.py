@@ -493,8 +493,9 @@ def main():
         if not returns.empty:
             from pathlib import Path
             output = Path("reports") / f"tearsheet_{cat_label}.html"
+            benchmark = None if cat_label == "crypto" else "SPY"
             title = f"OpenQuant — {cat_label} ({args.days}d {args.timeframe})"
-            path = generate_tearsheet(returns, output, title)
+            path = generate_tearsheet(returns, output, title, benchmark=benchmark)
             print(f"Tearsheet saved to: {path}")
 
 
