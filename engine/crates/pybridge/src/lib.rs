@@ -322,6 +322,8 @@ impl Engine {
                 dict.set_item("bollinger_lower", f.bollinger_lower)?;
                 dict.set_item("bollinger_pct_b", f.bollinger_pct_b)?;
                 dict.set_item("bollinger_bandwidth", f.bollinger_bandwidth)?;
+                // V5: GARCH
+                dict.set_item("garch_vol", f.garch_vol)?;
                 Ok(Some(dict))
             }
             None => Ok(None),

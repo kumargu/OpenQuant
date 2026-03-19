@@ -27,13 +27,15 @@
 //!   ├──► RollingStats<32>  ──► close std → Bollinger Bands
 //!   ├──► RollingStats<16>  ──► true range mean → ATR
 //!   ├──► Ema(10), Ema(30)  ──► fast/slow crossover (momentum)
-//!   └──► Adx(14)           ──► trend strength + directional indicators
+//!   ├──► Adx(14)           ──► trend strength + directional indicators
+//!   └──► GjrGarch          ──► conditional volatility (asymmetric)
 //! ```
 
 pub mod adx;
 pub mod cusum;
 pub mod donchian;
 pub mod ema;
+pub mod garch;
 #[cfg(test)]
 mod reftest;
 pub mod ring_buf;
@@ -46,6 +48,7 @@ pub use adx::Adx;
 pub use cusum::CusumDetector;
 pub use donchian::{BandwidthPercentile, Donchian};
 pub use ema::{Ema, WilderEma};
+pub use garch::{GarchConfig, GjrGarch};
 pub use ring_buf::RingBuf;
 pub use rolling_stats::RollingStats;
 pub use sma::Sma;
@@ -103,6 +106,9 @@ pub struct FeatureValues {
 
     // --- V4: CUSUM structural break detection ---
     pub cusum_triggered: bool, // true when cumulative returns exceed threshold
+
+    // --- V5: GJR-GARCH conditional volatility ---
+    pub garch_vol: f64, // conditional volatility σ_t (return-space, per bar)
 }
 
 // ---------------------------------------------------------------------------
@@ -145,16 +151,23 @@ pub struct FeatureState {
     cusum: CusumDetector,
     cusum_dynamic: bool, // use ATR-based dynamic threshold
     cusum_atr_mult: f64, // threshold = (ATR / close) × this multiplier
+
+    // V5 state: GJR-GARCH volatility
+    gjr_garch: GjrGarch,
 }
 
 impl Default for FeatureState {
     fn default() -> Self {
-        Self::new()
+        Self::with_garch(GarchConfig::default())
     }
 }
 
 impl FeatureState {
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_garch(garch_config: GarchConfig) -> Self {
         // Warmup must exceed all indicator requirements:
         // Sma<64> needs 64 bars (binding constraint).
         // EMA(30) needs ~30, ADX(14) needs 28, RollingStats<32> needs 32.
@@ -194,6 +207,8 @@ impl FeatureState {
             cusum: CusumDetector::new(0.005), // 0.5% static threshold
             cusum_dynamic: true,
             cusum_atr_mult: 1.0,
+
+            gjr_garch: GjrGarch::from_config(&garch_config),
         }
     }
 
@@ -326,6 +341,13 @@ impl FeatureState {
         };
         let cusum_triggered = self.cusum.update(return_1, dynamic_thresh);
 
+        // --- V5: GJR-GARCH volatility ---
+        let log_return = match prev_close {
+            Some(pc) if pc > 0.0 && close > 0.0 => (close / pc).ln(),
+            _ => 0.0,
+        };
+        let garch_vol = self.gjr_garch.update(log_return);
+
         FeatureValues {
             return_1,
             return_5,
@@ -361,6 +383,7 @@ impl FeatureState {
             squeeze,
             bandwidth_percentile,
             cusum_triggered,
+            garch_vol,
         }
     }
 }

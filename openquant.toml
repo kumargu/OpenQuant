@@ -182,6 +182,21 @@ min_score = 0.3
 
 
 # ---------------------------------------------------------------------------
+# GJR-GARCH — asymmetric conditional volatility estimator
+# ---------------------------------------------------------------------------
+[garch]
+
+# GJR-GARCH(1,1) parameters. Captures leverage effect: negative shocks
+# inflate volatility more than positive shocks of the same magnitude.
+# σ²_t = ω + (α + γ × I_{r<0}) × r²_{t-1} + β × σ²_{t-1}
+# Stationarity constraint: α + β + γ/2 < 1 (currently 0.98).
+omega = 0.000005
+alpha = 0.06
+beta = 0.87
+gamma = 0.10
+
+
+# ---------------------------------------------------------------------------
 # Risk — position sizing and loss limits
 # ---------------------------------------------------------------------------
 [risk]
