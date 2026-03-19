@@ -38,6 +38,7 @@ pub mod ema;
 pub mod garch;
 #[cfg(test)]
 mod reftest;
+pub mod regime;
 pub mod ring_buf;
 pub mod rolling_stats;
 pub mod sma;
@@ -49,6 +50,7 @@ pub use cusum::CusumDetector;
 pub use donchian::{BandwidthPercentile, Donchian};
 pub use ema::{Ema, WilderEma};
 pub use garch::{GarchConfig, GjrGarch};
+pub use regime::{Bocpd, MarketRegime, RegimeConfig, VolPercentile};
 pub use ring_buf::RingBuf;
 pub use rolling_stats::RollingStats;
 pub use sma::Sma;
@@ -109,6 +111,11 @@ pub struct FeatureValues {
 
     // --- V5: GJR-GARCH conditional volatility ---
     pub garch_vol: f64, // conditional volatility σ_t (return-space, per bar)
+
+    // --- V6: Regime detection (BOCPD + vol percentile) ---
+    pub market_regime: MarketRegime, // classified regime
+    pub regime_change_prob: f64,     // BOCPD changepoint posterior (0.0-1.0)
+    pub garch_vol_percentile: f64,   // rolling percentile of GARCH vol (0.0-1.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -154,11 +161,18 @@ pub struct FeatureState {
 
     // V5 state: GJR-GARCH volatility
     gjr_garch: GjrGarch,
+
+    // V6 state: Regime detection
+    bocpd: Bocpd,
+    vol_pct: VolPercentile,
+    regime_config: RegimeConfig,
+    peak_equity: f64,    // track peak for drawdown calculation
+    current_equity: f64, // track running equity for drawdown
 }
 
 impl Default for FeatureState {
     fn default() -> Self {
-        Self::with_garch(GarchConfig::default())
+        Self::with_config(GarchConfig::default(), RegimeConfig::default())
     }
 }
 
@@ -168,6 +182,10 @@ impl FeatureState {
     }
 
     pub fn with_garch(garch_config: GarchConfig) -> Self {
+        Self::with_config(garch_config, RegimeConfig::default())
+    }
+
+    pub fn with_config(garch_config: GarchConfig, regime_config: RegimeConfig) -> Self {
         // Warmup must exceed all indicator requirements:
         // Sma<64> needs 64 bars (binding constraint).
         // EMA(30) needs ~30, ADX(14) needs 28, RollingStats<32> needs 32.
@@ -209,6 +227,21 @@ impl FeatureState {
             cusum_atr_mult: 1.0,
 
             gjr_garch: GjrGarch::from_config(&garch_config),
+
+            bocpd: Bocpd::from_config(&regime_config),
+            vol_pct: VolPercentile::new(128), // 128-bar rolling window for vol percentile
+            regime_config,
+            peak_equity: 0.0,
+            current_equity: 0.0,
+        }
+    }
+
+    /// Update drawdown tracking for regime classification.
+    /// Call with realized P&L from trades to enable crisis detection.
+    pub fn update_equity(&mut self, pnl: f64) {
+        self.current_equity += pnl;
+        if self.current_equity > self.peak_equity {
+            self.peak_equity = self.current_equity;
         }
     }
 
@@ -348,6 +381,22 @@ impl FeatureState {
         };
         let garch_vol = self.gjr_garch.update(log_return);
 
+        // --- V6: Regime detection ---
+        let regime_change_prob = self.bocpd.update(log_return);
+        let garch_vol_percentile = self.vol_pct.push(garch_vol);
+
+        let drawdown = if self.peak_equity > 0.0 {
+            (self.current_equity - self.peak_equity) / self.peak_equity
+        } else {
+            0.0
+        };
+        let market_regime = regime::classify_regime(
+            garch_vol_percentile,
+            self.bocpd.map_run_length(),
+            drawdown,
+            &self.regime_config,
+        );
+
         FeatureValues {
             return_1,
             return_5,
@@ -384,6 +433,9 @@ impl FeatureState {
             bandwidth_percentile,
             cusum_triggered,
             garch_vol,
+            market_regime,
+            regime_change_prob,
+            garch_vol_percentile,
         }
     }
 }

@@ -82,6 +82,7 @@ pub struct EngineConfig {
     pub risk: RiskConfig,
     pub exit: ExitConfig,
     pub garch: crate::features::GarchConfig,
+    pub regime: crate::features::RegimeConfig,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
     /// Maximum allowed age (in milliseconds) of a bar before it's considered stale.
     /// Stale bars still update features (for warmup) but never generate signals.
@@ -110,6 +111,7 @@ pub struct Engine {
     stale_bars_skipped: HashMap<String, u64>,
     hot_metrics: HotMetrics,
     garch_config: crate::features::GarchConfig,
+    regime_config: crate::features::RegimeConfig,
 }
 
 impl Engine {
@@ -222,6 +224,7 @@ impl Engine {
             stale_bars_skipped: HashMap::new(),
             hot_metrics: HotMetrics::new(config.metrics_enabled),
             garch_config: config.garch,
+            regime_config: config.regime,
         }
     }
 
@@ -287,10 +290,9 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
-        let feature_state = self
-            .features
-            .entry(bar.symbol.clone())
-            .or_insert_with(|| FeatureState::with_garch(self.garch_config.clone()));
+        let feature_state = self.features.entry(bar.symbol.clone()).or_insert_with(|| {
+            FeatureState::with_config(self.garch_config.clone(), self.regime_config.clone())
+        });
 
         let features =
             feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);
@@ -445,10 +447,9 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars)
-        let feature_state = self
-            .features
-            .entry(bar.symbol.clone())
-            .or_insert_with(|| FeatureState::with_garch(self.garch_config.clone()));
+        let feature_state = self.features.entry(bar.symbol.clone()).or_insert_with(|| {
+            FeatureState::with_config(self.garch_config.clone(), self.regime_config.clone())
+        });
 
         let features =
             feature_state.update(bar.close, bar.high, bar.low, bar.volume, bar.timestamp);

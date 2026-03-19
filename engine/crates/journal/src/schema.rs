@@ -120,6 +120,22 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ),
         // V5 migrations: GARCH volatility
         ("features", "garch_vol", "REAL NOT NULL DEFAULT 0.0"),
+        // V6 migrations: regime detection
+        (
+            "features",
+            "market_regime",
+            "TEXT NOT NULL DEFAULT 'Unknown'",
+        ),
+        (
+            "features",
+            "regime_change_prob",
+            "REAL NOT NULL DEFAULT 0.0",
+        ),
+        (
+            "features",
+            "garch_vol_percentile",
+            "REAL NOT NULL DEFAULT 0.5",
+        ),
     ];
 
     for (table, column, col_type) in &new_columns {
