@@ -8,6 +8,7 @@
 //! - Cost filter: reject if signal isn't strong enough relative to costs
 //! - Position sizing: cap notional exposure, allow fractional for expensive assets
 
+use crate::features::MarketRegime;
 use crate::signals::{Side, SignalOutput};
 
 /// Bet sizing method.
@@ -46,6 +47,16 @@ pub struct RiskConfig {
     pub kelly_prior_wins: f64,
     /// Beta prior losses (β). Default: 2.0
     pub kelly_prior_losses: f64,
+    /// Kelly fraction in LowVol regime (slightly more aggressive). Default: 0.6
+    pub kelly_fraction_low_vol: f64,
+    /// Kelly fraction in HighVol regime (reduced). Default: 0.25
+    pub kelly_fraction_high_vol: f64,
+    /// Kelly fraction in Crisis regime (minimal). Default: 0.10
+    pub kelly_fraction_crisis: f64,
+    /// Enable smooth drawdown-based deleveraging. Default: true
+    pub drawdown_deleverage: bool,
+    /// Exponent for deleveraging curve. 2 = concave (faster near max). Default: 2.0
+    pub drawdown_deleverage_curve: f64,
 }
 
 impl Default for RiskConfig {
@@ -61,6 +72,11 @@ impl Default for RiskConfig {
             kelly_max_size: 0.80,
             kelly_prior_wins: 2.0,
             kelly_prior_losses: 2.0,
+            kelly_fraction_low_vol: 0.6,
+            kelly_fraction_high_vol: 0.25,
+            kelly_fraction_crisis: 0.10,
+            drawdown_deleverage: true,
+            drawdown_deleverage_curve: 2.0,
         }
     }
 }
@@ -184,6 +200,19 @@ impl RiskState {
     }
 }
 
+/// Compute smooth deleveraging multiplier based on current drawdown.
+///
+/// Returns 1.0 at no drawdown, approaching 0.0 at max drawdown.
+/// Uses `(1 - dd_ratio)^exponent` — concave curve so deleveraging
+/// accelerates as drawdown deepens.
+pub fn drawdown_multiplier(daily_pnl: f64, max_daily_loss: f64, exponent: f64) -> f64 {
+    if max_daily_loss <= 0.0 || daily_pnl >= 0.0 {
+        return 1.0;
+    }
+    let dd_ratio = (daily_pnl.abs() / max_daily_loss).clamp(0.0, 1.0);
+    (1.0 - dd_ratio).powf(exponent).max(0.0)
+}
+
 /// Reason a trade was rejected.
 #[derive(Debug, Clone)]
 pub struct Rejection {
@@ -197,6 +226,7 @@ pub fn check(
     current_position_qty: f64,
     risk_state: &RiskState,
     kelly_state: &BayesianKellyState,
+    regime: MarketRegime,
     config: &RiskConfig,
 ) -> Result<f64, Rejection> {
     // Gate 1: Kill switch
@@ -230,12 +260,31 @@ pub fn check(
         Side::Buy => {
             let max_qty = config.max_position_notional / price;
 
+            // Drawdown-based deleveraging: smooth reduction as losses accumulate
+            let dd_mult = if config.drawdown_deleverage {
+                drawdown_multiplier(
+                    risk_state.daily_pnl,
+                    config.max_daily_loss,
+                    config.drawdown_deleverage_curve,
+                )
+            } else {
+                1.0
+            };
+
             // Apply bet sizing method
             let scale = match config.bet_sizing {
-                BetSizingMethod::Linear => 1.0,
+                BetSizingMethod::Linear => dd_mult,
                 BetSizingMethod::Kelly => {
+                    // Regime-conditional Kelly ceiling
+                    let regime_kelly = match regime {
+                        MarketRegime::LowVol => config.kelly_fraction_low_vol,
+                        MarketRegime::Normal => config.kelly_fraction,
+                        MarketRegime::HighVol => config.kelly_fraction_high_vol,
+                        MarketRegime::Crisis => config.kelly_fraction_crisis,
+                        MarketRegime::Unknown => config.kelly_fraction,
+                    };
                     let raw = kelly_state.kelly_fraction();
-                    let fractional = raw * config.kelly_fraction;
+                    let fractional = raw * regime_kelly * dd_mult;
                     fractional.clamp(config.kelly_min_size, config.kelly_max_size)
                 }
             };
@@ -319,6 +368,7 @@ mod tests {
             0.0,
             &state,
             &default_kelly(),
+            MarketRegime::Normal,
             &config,
         );
         assert!(result.is_err());
@@ -339,6 +389,7 @@ mod tests {
             0.0,
             &state,
             &default_kelly(),
+            MarketRegime::Normal,
             &config,
         );
         assert!(result.is_ok());
@@ -357,6 +408,7 @@ mod tests {
             25.0,
             &state,
             &default_kelly(),
+            MarketRegime::Normal,
             &config,
         );
         assert_eq!(result.unwrap(), 25.0);
@@ -372,6 +424,7 @@ mod tests {
             0.0,
             &state,
             &default_kelly(),
+            MarketRegime::Normal,
             &config,
         );
         assert!(result.is_err());
@@ -404,6 +457,7 @@ mod tests {
             0.0,
             &state,
             &default_kelly(),
+            MarketRegime::Normal,
             &config,
         )
         .unwrap();
@@ -413,6 +467,7 @@ mod tests {
             0.0,
             &state,
             &default_kelly(),
+            MarketRegime::Normal,
             &config,
         )
         .unwrap();
@@ -520,6 +575,7 @@ mod tests {
             0.0,
             &state,
             &default_kelly(),
+            MarketRegime::Normal,
             &config,
         )
         .unwrap();
@@ -540,10 +596,136 @@ mod tests {
             k_strong.observe_trade(-100.0);
         }
 
-        let qty_strong = check(&buy_signal(1.0), 100.0, 0.0, &state, &k_strong, &config).unwrap();
+        let qty_strong = check(
+            &buy_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &k_strong,
+            MarketRegime::Normal,
+            &config,
+        )
+        .unwrap();
         assert!(
             qty_strong > qty_cold,
             "strong track record should give larger position: cold={qty_cold} strong={qty_strong}"
+        );
+    }
+
+    // --- Drawdown deleveraging tests ---
+
+    #[test]
+    fn drawdown_multiplier_no_loss() {
+        assert_eq!(drawdown_multiplier(0.0, 500.0, 2.0), 1.0);
+        assert_eq!(drawdown_multiplier(100.0, 500.0, 2.0), 1.0); // positive P&L
+    }
+
+    #[test]
+    fn drawdown_multiplier_partial_loss() {
+        // At -250 (50% of 500 max): (1 - 0.5)^2 = 0.25
+        let m = drawdown_multiplier(-250.0, 500.0, 2.0);
+        assert!((m - 0.25).abs() < 1e-10, "50% DD should give 0.25, got {m}");
+    }
+
+    #[test]
+    fn drawdown_multiplier_at_max() {
+        let m = drawdown_multiplier(-500.0, 500.0, 2.0);
+        assert_eq!(m, 0.0, "at max drawdown multiplier should be 0");
+    }
+
+    #[test]
+    fn drawdown_multiplier_beyond_max() {
+        let m = drawdown_multiplier(-600.0, 500.0, 2.0);
+        assert_eq!(m, 0.0, "beyond max drawdown should clamp to 0");
+    }
+
+    #[test]
+    fn drawdown_deleverage_reduces_position() {
+        let mut state = RiskState::new();
+        let config = RiskConfig {
+            max_position_notional: 10_000.0,
+            min_reward_cost_ratio: 0.0,
+            drawdown_deleverage: true,
+            drawdown_deleverage_curve: 2.0,
+            ..Default::default()
+        };
+
+        // Full size at 0 loss
+        let qty_full = check(
+            &buy_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &default_kelly(),
+            MarketRegime::Normal,
+            &config,
+        )
+        .unwrap();
+
+        // Reduced size at -250 loss (50% of max)
+        state.record_pnl(-250.0, &config);
+        let qty_dd = check(
+            &buy_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &default_kelly(),
+            MarketRegime::Normal,
+            &config,
+        )
+        .unwrap();
+
+        assert!(
+            qty_dd < qty_full,
+            "drawdown should reduce position: full={qty_full} dd={qty_dd}"
+        );
+    }
+
+    // --- Regime-conditional Kelly tests ---
+
+    #[test]
+    fn crisis_regime_uses_minimal_kelly() {
+        let state = RiskState::new();
+        let mut k = BayesianKellyState::new(2.0, 2.0);
+        for _ in 0..50 {
+            k.observe_trade(200.0);
+        }
+        for _ in 0..15 {
+            k.observe_trade(-100.0);
+        }
+
+        let config = RiskConfig {
+            max_position_notional: 10_000.0,
+            min_reward_cost_ratio: 0.0,
+            bet_sizing: BetSizingMethod::Kelly,
+            ..Default::default()
+        };
+
+        let qty_normal = check(
+            &buy_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &k,
+            MarketRegime::Normal,
+            &config,
+        )
+        .unwrap();
+
+        let qty_crisis = check(
+            &buy_signal(1.0),
+            100.0,
+            0.0,
+            &state,
+            &k,
+            MarketRegime::Crisis,
+            &config,
+        )
+        .unwrap();
+
+        assert!(
+            qty_crisis < qty_normal,
+            "crisis should give smaller position: normal={qty_normal} crisis={qty_crisis}"
         );
     }
 }
