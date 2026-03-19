@@ -116,6 +116,9 @@ pub struct FeatureValues {
     pub market_regime: MarketRegime, // classified regime
     pub regime_change_prob: f64,     // BOCPD changepoint posterior (0.0-1.0)
     pub garch_vol_percentile: f64,   // rolling percentile of GARCH vol (0.0-1.0)
+
+    // --- V7: Adaptive z-threshold ---
+    pub z_score_percentile: f64, // rolling percentile of return z-scores (0.0-1.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +171,9 @@ pub struct FeatureState {
     regime_config: RegimeConfig,
     peak_equity: f64,    // track peak for drawdown calculation
     current_equity: f64, // track running equity for drawdown
+
+    // V7 state: Adaptive z-threshold
+    z_pct: VolPercentile, // reuse VolPercentile for z-score percentile tracking
 }
 
 impl Default for FeatureState {
@@ -230,6 +236,7 @@ impl FeatureState {
 
             bocpd: Bocpd::from_config(&regime_config),
             vol_pct: VolPercentile::new(128), // 128-bar rolling window for vol percentile
+            z_pct: VolPercentile::new(128),   // 128-bar rolling window for z-score percentile
             regime_config,
             peak_equity: 0.0,
             current_equity: 0.0,
@@ -385,6 +392,9 @@ impl FeatureState {
         let regime_change_prob = self.bocpd.update(log_return);
         let garch_vol_percentile = self.vol_pct.push(garch_vol);
 
+        // --- V7: Adaptive z-threshold ---
+        let z_score_percentile = self.z_pct.push(return_z_score);
+
         let drawdown = if self.peak_equity > 0.0 {
             (self.current_equity - self.peak_equity) / self.peak_equity
         } else {
@@ -436,6 +446,7 @@ impl FeatureState {
             market_regime,
             regime_change_prob,
             garch_vol_percentile,
+            z_score_percentile,
         }
     }
 }

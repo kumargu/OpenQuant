@@ -45,6 +45,12 @@ pub struct Config {
     pub min_score: f64,
     /// When true, block buy signals when close < SMA-50 (downtrend). Default: true
     pub trend_filter: bool,
+    /// When true, use rolling z-score percentile instead of fixed buy_z_threshold.
+    /// Entry fires when z_score_percentile < adaptive_z_percentile (e.g., bottom 5%).
+    /// Removes the fragile fixed threshold parameter. Default: false
+    pub adaptive_z: bool,
+    /// Percentile threshold for adaptive mode (0.0-1.0). Default: 0.05 (bottom 5%)
+    pub adaptive_z_percentile: f64,
 }
 
 impl Default for Config {
@@ -55,6 +61,8 @@ impl Default for Config {
             min_relative_volume: 1.2,
             min_score: 0.5,
             trend_filter: true,
+            adaptive_z: false,
+            adaptive_z_percentile: 0.05,
         }
     }
 }
@@ -76,13 +84,26 @@ impl Strategy for MeanReversion {
             return None;
         }
 
+        // Buy threshold: adaptive (rolling percentile) or fixed
+        let buy_triggered = if self.config.adaptive_z {
+            // Adaptive: fire when z-score is in the bottom N% of recent z-scores
+            features.z_score_percentile < self.config.adaptive_z_percentile
+                && features.return_z_score < 0.0 // must be negative (oversold)
+        } else {
+            features.return_z_score < self.config.buy_z_threshold
+        };
+
         // Buy: oversold + volume confirmation + not already holding + trend filter
-        if features.return_z_score < self.config.buy_z_threshold
+        if buy_triggered
             && features.relative_volume > self.config.min_relative_volume
             && !has_position
             && (!self.config.trend_filter || features.trend_up)
         {
-            let z_strength = (self.config.buy_z_threshold - features.return_z_score).abs();
+            let z_strength = if self.config.adaptive_z {
+                features.return_z_score.abs() // use raw z magnitude
+            } else {
+                (self.config.buy_z_threshold - features.return_z_score).abs()
+            };
             let vol_strength = features.relative_volume - 1.0;
             let score = 0.6 * z_strength + 0.4 * vol_strength;
 
@@ -225,6 +246,7 @@ mod tests {
             min_relative_volume: 0.0,
             min_score: 0.0,
             trend_filter: false,
+            ..Config::default()
         });
         assert!(s.score(&features(-1.5, 0.5), false).is_some());
         assert!(s.score(&features(1.5, 0.5), true).is_some());
@@ -276,6 +298,58 @@ mod tests {
         let mut f = features(-3.0, 1.5);
         f.trend_up = false;
         assert!(s.score(&f, false).is_some());
+    }
+
+    // --- Adaptive z tests ---
+
+    fn adaptive_features(z: f64, z_pct: f64, rel_vol: f64) -> FeatureValues {
+        FeatureValues {
+            return_z_score: z,
+            z_score_percentile: z_pct,
+            relative_volume: rel_vol,
+            warmed_up: true,
+            trend_up: true,
+            ..Default::default()
+        }
+    }
+
+    fn adaptive_strategy() -> MeanReversion {
+        MeanReversion::new(Config {
+            adaptive_z: true,
+            adaptive_z_percentile: 0.05,
+            min_score: 0.0,
+            trend_filter: false,
+            ..Config::default()
+        })
+    }
+
+    #[test]
+    fn adaptive_fires_when_z_in_bottom_percentile() {
+        // z=-2.0, percentile=0.03 (bottom 3% < 5% threshold)
+        let sig = adaptive_strategy().score(&adaptive_features(-2.0, 0.03, 1.5), false);
+        assert!(sig.is_some());
+        assert_eq!(sig.unwrap().side, Side::Buy);
+    }
+
+    #[test]
+    fn adaptive_blocks_when_z_above_percentile() {
+        // z=-1.5, percentile=0.20 (20% > 5% threshold)
+        let sig = adaptive_strategy().score(&adaptive_features(-1.5, 0.20, 1.5), false);
+        assert!(sig.is_none());
+    }
+
+    #[test]
+    fn adaptive_blocks_positive_z_even_if_low_percentile() {
+        // z=0.5 (positive, not oversold), percentile=0.02
+        let sig = adaptive_strategy().score(&adaptive_features(0.5, 0.02, 1.5), false);
+        assert!(sig.is_none());
+    }
+
+    #[test]
+    fn adaptive_ignores_fixed_threshold() {
+        // z=-1.0 is above default fixed threshold (-2.2), but percentile is low
+        let sig = adaptive_strategy().score(&adaptive_features(-1.0, 0.01, 1.5), false);
+        assert!(sig.is_some(), "adaptive should ignore fixed threshold");
     }
 
     #[test]
