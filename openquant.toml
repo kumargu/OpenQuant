@@ -375,16 +375,21 @@ max_bar_age_seconds = 120
 # [symbol_overrides.ETHUSD]
 # min_relative_volume = 1.5   # require more volume confirmation for ETH
 
-# Chronic losers from March 17 experiments — stricter entry criteria
-# to reduce false entries in low-signal symbols.
+# ETH/USD — best validation results (38% configs profitable, mean PnL +$212).
+# Best config from sweep: z=-2.0, sell=1.8, ATR=3.0.
+[symbol_overrides.ETHUSD]
+buy_z_threshold = -2.0        # looser than default -2.2 (ETH reverts faster)
+stop_loss_atr_mult = 3.0      # wider stop for crypto volatility
+min_relative_volume = 1.0     # ETH has lower volume bars, relax filter
 
+# Equity overrides — stricter filters until equity-specific alpha is developed.
 [symbol_overrides.CVX]
 buy_z_threshold = -2.8        # much stricter entry (default: -2.2)
 min_relative_volume = 1.5     # require strong volume confirmation
 
 [symbol_overrides.INTC]
 buy_z_threshold = -2.5        # stricter entry
-max_hold_bars = 80            # shorter leash (default: 100)
+max_hold_bars = 80            # shorter leash
 
 [symbol_overrides.JPM]
 min_relative_volume = 1.5     # require strong volume confirmation
