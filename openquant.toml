@@ -207,7 +207,8 @@ gamma = 0.10
 bocpd_hazard = 250.0
 
 # Max run lengths tracked (truncation for memory/speed).
-bocpd_max_run = 300
+# Most probability mass concentrates in the first ~50 run lengths.
+bocpd_max_run = 50
 
 # Vol percentile thresholds for regime classification.
 # Below vol_percentile_low → LowVol (favor mean-reversion).

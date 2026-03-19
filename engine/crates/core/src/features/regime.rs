@@ -62,7 +62,7 @@ impl Default for RegimeConfig {
     fn default() -> Self {
         Self {
             bocpd_hazard: 250.0,
-            bocpd_max_run: 300,
+            bocpd_max_run: 50,
             vol_percentile_low: 0.30,
             vol_percentile_high: 0.70,
             crisis_drawdown: -0.05,
@@ -104,11 +104,13 @@ impl NormalGammaSS {
     }
 
     /// Predictive log-probability of x under run-length r's posterior.
-    /// The predictive is a Student-t distribution (conjugate result).
+    ///
+    /// For n ≤ 20: exact Student-t predictive (conjugate Normal-Gamma).
+    /// For n > 20: Normal approximation (Student-t converges to Normal for
+    /// large df, avoids expensive ln_gamma calls).
     fn log_predictive(&self, r: usize, x: f64) -> f64 {
         let n = self.n[r];
         let kappa_n = self.kappa0 + n;
-        let alpha_n = self.alpha0 + n / 2.0;
         let mu_n = if n > 0.0 {
             (self.kappa0 * self.mu0 + self.sum_x[r]) / kappa_n
         } else {
@@ -122,13 +124,16 @@ impl NormalGammaSS {
             self.beta0
         };
 
-        // Student-t: df = 2*alpha_n, loc = mu_n, scale = sqrt(beta_n*(kappa_n+1)/(alpha_n*kappa_n))
-        let df = 2.0 * alpha_n;
+        let alpha_n = self.alpha0 + n / 2.0;
         let scale_sq = beta_n * (kappa_n + 1.0) / (alpha_n * kappa_n);
-        let scale = scale_sq.sqrt();
 
-        // Log PDF of Student-t
-        log_student_t_pdf(x, df, mu_n, scale)
+        if n > 20.0 {
+            // Normal approximation: Student-t → Normal for large df
+            log_normal_pdf(x, mu_n, scale_sq.sqrt())
+        } else {
+            let df = 2.0 * alpha_n;
+            log_student_t_pdf(x, df, mu_n, scale_sq.sqrt())
+        }
     }
 
     /// Shift sufficient stats: run-length r inherits from r-1, then add x.
@@ -152,6 +157,13 @@ impl NormalGammaSS {
             self.sum_x2[r] += x * x;
         }
     }
+}
+
+/// Log PDF of Normal distribution (no ln_gamma — fast).
+#[inline]
+fn log_normal_pdf(x: f64, mu: f64, sigma: f64) -> f64 {
+    let z = (x - mu) / sigma;
+    -0.5 * z * z - sigma.ln() - 0.5 * (2.0 * std::f64::consts::PI).ln()
 }
 
 /// Log PDF of Student-t distribution.
