@@ -10,6 +10,9 @@ engine/target/
 # Benchmark data cache
 data/bar_cache/*.json
 
+# Generated tearsheet reports
+reports/
+
 # SQLite databases
 data/journal/*.db
 data/journal/*.db-wal

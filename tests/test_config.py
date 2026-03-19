@@ -16,12 +16,12 @@ def test_load_default_toml():
     """Repo-root openquant.toml loads correctly."""
     kw = engine_kwargs()
     assert kw["buy_z_threshold"] == -2.2
-    assert kw["sell_z_threshold"] == 2.0
+    assert kw["sell_z_threshold"] == 1.8
     assert kw["min_relative_volume"] == 1.2
     assert kw["max_position_notional"] == 10_000.0
     assert kw["max_daily_loss"] == 500.0
     assert kw["stop_loss_atr_mult"] == 2.5
-    assert kw["max_hold_bars"] == 100
+    assert kw["max_hold_bars"] == 150
     assert kw["trend_filter"] is True
     assert kw["metrics_enabled"] is True
     # Rust-internal fields should NOT appear (not exposed via PyO3)
