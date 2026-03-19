@@ -404,6 +404,7 @@ impl Engine {
             position_qty,
             &self.risk_state,
             &self.kelly_state,
+            features.market_regime,
             &self.risk_config,
         );
 
@@ -602,6 +603,7 @@ impl Engine {
             position_qty,
             &self.risk_state,
             &self.kelly_state,
+            features.market_regime,
             &self.risk_config,
         );
 
@@ -671,6 +673,10 @@ impl Engine {
         if realized_pnl != 0.0 {
             self.risk_state.record_pnl(realized_pnl, &self.risk_config);
             self.kelly_state.observe_trade(realized_pnl);
+            // Update equity tracking for crisis regime detection
+            if let Some(fs) = self.features.get_mut(symbol) {
+                fs.update_equity(realized_pnl);
+            }
         }
 
         match side {

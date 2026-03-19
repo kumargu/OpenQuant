@@ -299,6 +299,21 @@ kelly_max_size = 0.80
 kelly_prior_wins = 2.0
 kelly_prior_losses = 2.0
 
+# Regime-conditional Kelly fractions (override kelly_fraction per regime).
+# LowVol: slightly more aggressive (market is calm, signals cleaner).
+kelly_fraction_low_vol = 0.6
+# HighVol: quarter-Kelly (trending/volatile, wider stops eat into sizing).
+kelly_fraction_high_vol = 0.25
+# Crisis: minimal (extreme vol + drawdown, preserve capital).
+kelly_fraction_crisis = 0.10
+
+# Smooth drawdown-based deleveraging. Instead of binary kill switch,
+# gradually reduce position sizes as daily P&L approaches max_daily_loss.
+# At 50% of max DD → multiplier = 0.25. At max DD → 0.0.
+drawdown_deleverage = true
+# Exponent: 2 = concave (faster deleverage near max). 1 = linear.
+drawdown_deleverage_curve = 2.0
+
 
 # ---------------------------------------------------------------------------
 # Exit — stop-loss, take-profit, and time-based exits
