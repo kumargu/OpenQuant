@@ -11,7 +11,7 @@ The meta-model's output is a confidence score [0, 1] that can gate or
 scale position sizing: high confidence = full size, low = skip.
 
 Usage:
-  python -m paper_trading.meta_labeling --symbol BTC/USD --days 30
+  python -m paper_trading.meta_labeling --symbol AAPL --days 30
   python -m paper_trading.meta_labeling --symbol AAPL --days 90 --export rules.json
 """
 
@@ -269,7 +269,7 @@ def main():
     parser = argparse.ArgumentParser(description="Meta-Labeling Training")
     parser.add_argument("--symbol", "-s", default=None, help="Single symbol")
     parser.add_argument(
-        "--category", "-c", default="crypto", help="Category to train on"
+        "--category", "-c", default="tech", help="Category to train on"
     )
     parser.add_argument("--days", "-d", type=int, default=30)
     parser.add_argument("--timeframe", "-t", default="1Min")

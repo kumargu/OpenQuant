@@ -131,7 +131,7 @@ def print_report(symbol, windows):
 
 def main():
     parser = argparse.ArgumentParser(description="Walk-Forward Validation")
-    parser.add_argument("--symbol", "-s", default="BTC/USD")
+    parser.add_argument("--symbol", "-s", default="AAPL")
     parser.add_argument("--days", "-d", type=int, default=30)
     parser.add_argument("--timeframe", "-t", default="1Min")
     parser.add_argument("--train", type=int, default=14, help="Training window in days")
