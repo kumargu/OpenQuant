@@ -57,9 +57,14 @@ pub struct BarOutcome {
 }
 
 /// Per-symbol parameter overrides. None = use default from EngineConfig.
+/// If `asset_class` is set, fields from the named asset class fill in
+/// any None values before falling back to global defaults.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SymbolOverrides {
+    /// Reference to an asset class for default values. Resolved at config load time.
+    #[serde(skip_serializing)]
+    pub asset_class: Option<String>,
     pub buy_z_threshold: Option<f64>,
     pub sell_z_threshold: Option<f64>,
     pub min_relative_volume: Option<f64>,

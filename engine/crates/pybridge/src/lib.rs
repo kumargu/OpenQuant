@@ -62,6 +62,7 @@ impl Engine {
                     let symbol: String = key.extract()?;
                     let params: &Bound<'_, PyDict> = val.downcast()?;
                     let ovr = SymbolOverrides {
+                        asset_class: None,
                         buy_z_threshold: params
                             .get_item("buy_z_threshold")?
                             .map(|v| v.extract())
