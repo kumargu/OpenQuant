@@ -1821,9 +1821,97 @@
             },
             "overrides": []
           }
+        },
+        {
+          "type": "state-timeline",
+          "title": "Market Regime Timeline",
+          "description": "BOCPD + GARCH vol regime classification. LowVol (green) = mean-rev. Normal (blue) = mixed. HighVol (orange) = momentum. Crisis (red) = reduce all.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 5,
+            "w": 24,
+            "x": 0,
+            "y": 40
+          },
+          "id": 92,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.market_regime as \"Regime\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.market_regime as \"Regime\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": ["time"]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "GARCH Vol Percentile + Changepoint Prob",
+          "description": "Vol percentile drives regime classification. Thresholds at 0.30 (LowVol) and 0.70 (HighVol). Changepoint probability spikes when BOCPD detects a regime shift.",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 45
+          },
+          "id": 93,
+          "targets": [
+            {
+              "queryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.garch_vol_percentile as \"Vol Percentile\", f.regime_change_prob as \"Changepoint Prob\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "rawQueryText": "PRAGMA busy_timeout = 5000; SELECT b.timestamp/1000 as time, f.garch_vol_percentile as \"Vol Percentile\", f.regime_change_prob as \"Changepoint Prob\" FROM features f JOIN bars b ON f.bar_id=b.id ORDER BY b.timestamp",
+              "refId": "A",
+              "timeColumns": ["time"]
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2
+              },
+              "min": 0,
+              "max": 1
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "Vol Percentile"},
+                "properties": [
+                  {"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Changepoint Prob"},
+                "properties": [
+                  {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}},
+                  {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [5, 5]}}
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          }
         }
       ],
-      "description": "ADX-based regime classification. Momentum needs ADX > 20 (trending). Mean-reversion works best in ranging (ADX < 15). If momentum fires in ranging or mean-rev in trending, the combiner should downweight."
+      "description": "Market regime detection using BOCPD changepoint detection + GARCH vol percentile. Crisis requires both extreme vol and significant drawdown."
     },
     {
       "type": "row",

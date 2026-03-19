@@ -197,6 +197,37 @@ gamma = 0.10
 
 
 # ---------------------------------------------------------------------------
+# Regime Detection — BOCPD changepoint + vol percentile
+# ---------------------------------------------------------------------------
+[regime]
+
+# Expected bars between regime changes (BOCPD hazard = 1/lambda).
+# Higher = slower to detect changes, fewer false positives.
+# Lower = faster detection but noisier.
+bocpd_hazard = 250.0
+
+# Max run lengths tracked (truncation for memory/speed).
+# Most probability mass concentrates in the first ~50 run lengths.
+bocpd_max_run = 50
+
+# Vol percentile thresholds for regime classification.
+# Below vol_percentile_low → LowVol (favor mean-reversion).
+# Above vol_percentile_high → HighVol (favor momentum).
+vol_percentile_low = 0.30
+vol_percentile_high = 0.70
+
+# Crisis requires BOTH conditions: drawdown < crisis_drawdown AND
+# vol_percentile > crisis_vol_percentile.
+crisis_drawdown = -0.05
+crisis_vol_percentile = 0.90
+
+# BOCPD MAP run-length below this → recent regime change → HighVol.
+# Interacts with bocpd_hazard — lower hazard = longer expected runs,
+# so this threshold should be proportionally smaller.
+regime_change_run_length = 20
+
+
+# ---------------------------------------------------------------------------
 # Risk — position sizing and loss limits
 # ---------------------------------------------------------------------------
 [risk]

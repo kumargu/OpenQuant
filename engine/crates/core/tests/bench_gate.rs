@@ -91,14 +91,15 @@ fn median_ns(iterations: usize, mut f: impl FnMut()) -> f64 {
 // Gate tests — thresholds are 3x the measured baseline
 // ---------------------------------------------------------------------------
 //
-// Baselines (Apple M4, 2026-03-15):
-//   feature_update:   8.9ns  → gate: 2µs
-//   on_bar:           64ns   → gate: 5µs
-//   backtest_1k:      67µs   → gate: 5ms
-//   backtest_10k:     673µs  → gate: 50ms
+// Baselines (Apple M4, 2026-03-19, includes V5 GARCH + V6 BOCPD):
+//   feature_update:   ~6.5µs  → gate: 15µs
+//   on_bar:           ~6.5µs  → gate: 15µs
+//   backtest_1k:      ~6.5ms  → gate: 15ms
+//   backtest_10k:     ~65ms   → gate: 150ms
 //
-// CI Ubuntu runners are ~25x slower than local M4 in debug-like conditions.
-// Gates are set at ~30-50x baseline to prevent flakiness.
+// V5 (GJR-GARCH) and V6 (BOCPD regime detection) added ~6µs per bar.
+// Previous baselines (8.9ns, 64ns) predate these features.
+// Gates set at ~2x measured to catch regressions without flakiness.
 
 #[test]
 #[ignore] // only run via: cargo test --test bench_gate --release -- --ignored
@@ -117,8 +118,8 @@ fn gate_feature_update() {
     });
 
     assert!(
-        ns < 2_000.0,
-        "feature_update took {ns:.0}ns, gate is 2µs (baseline ~8.9ns)"
+        ns < 15_000.0,
+        "feature_update took {ns:.0}ns, gate is 15µs (baseline ~6.5µs incl GARCH+BOCPD)"
     );
 }
 
@@ -140,8 +141,8 @@ fn gate_on_bar() {
     });
 
     assert!(
-        ns < 5_000.0,
-        "on_bar took {ns:.0}ns, gate is 5µs (baseline ~64ns)"
+        ns < 15_000.0,
+        "on_bar took {ns:.0}ns, gate is 15µs (baseline ~6.5µs incl GARCH+BOCPD)"
     );
 }
 
@@ -157,8 +158,8 @@ fn gate_backtest_1k() {
     let us = ns / 1_000.0;
 
     assert!(
-        us < 5_000.0,
-        "backtest_1k took {us:.0}µs, gate is 5ms (baseline ~67µs)"
+        us < 15_000.0,
+        "backtest_1k took {us:.0}µs, gate is 15ms (baseline ~6.5ms incl GARCH+BOCPD)"
     );
 }
 
@@ -174,7 +175,7 @@ fn gate_backtest_10k() {
     let ms = ns / 1_000_000.0;
 
     assert!(
-        ms < 50.0,
-        "backtest_10k took {ms:.1}ms, gate is 50ms (baseline ~0.67ms)"
+        ms < 150.0,
+        "backtest_10k took {ms:.1}ms, gate is 150ms (baseline ~65ms incl GARCH+BOCPD)"
     );
 }
