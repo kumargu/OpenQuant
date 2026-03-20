@@ -43,6 +43,7 @@
 use super::{Side, SignalOutput, Strategy};
 use crate::features::FeatureValues;
 use crate::features::regime::MarketRegime;
+use tracing::{debug, info, warn};
 
 /// Per-strategy weight multipliers by regime.
 ///
@@ -293,20 +294,34 @@ impl Strategy for StrategyCombiner {
             }
         }
 
+        let votes_debug = vote_parts.join("+");
+
         // Gate: require minimum number of strategies to vote
         if num_voters < self.min_strategies {
+            debug!(num_voters, min = self.min_strategies, "combiner: too few voters");
             return None;
         }
 
         let net = vote_buy - vote_sell;
 
         if net.abs() < self.min_net_score {
+            warn!(
+                vote_buy = format!("{:.3}", vote_buy).as_str(),
+                vote_sell = format!("{:.3}", vote_sell).as_str(),
+                net = format!("{:.3}", net).as_str(),
+                min_net_score = format!("{:.3}", self.min_net_score).as_str(),
+                votes = votes_debug.as_str(),
+                regime = format!("{:?}", features.market_regime).as_str(),
+                z_score = format!("{:.2}", features.return_z_score).as_str(),
+                "combiner: DROPPED signal — net score below threshold"
+            );
             return None;
         }
 
         // CUSUM entry gate: block BUY entries unless a structural break was detected.
         // Does NOT block SELL/exit signals — positions can always be closed.
         if self.cusum_entry_gate && net > 0.0 && !has_position && !features.cusum_triggered {
+            warn!("combiner: DROPPED buy — CUSUM gate (no structural break)");
             return None;
         }
 
@@ -317,6 +332,11 @@ impl Strategy for StrategyCombiner {
             if self.max_regime_change_prob > 0.0
                 && features.regime_change_prob > self.max_regime_change_prob
             {
+                warn!(
+                    regime_change_prob = format!("{:.3}", features.regime_change_prob).as_str(),
+                    max = format!("{:.3}", self.max_regime_change_prob).as_str(),
+                    "combiner: DROPPED buy — regime change probability too high"
+                );
                 return None;
             }
 
@@ -336,10 +356,25 @@ impl Strategy for StrategyCombiner {
         // one strategy from immediately unwinding what another opened.
         let num_sell_voters = vote_parts.iter().filter(|v| v.contains("SELL")).count();
         if has_position && net < 0.0 && num_sell_voters < self.min_exit_strategies {
+            warn!(
+                num_sell_voters,
+                min = self.min_exit_strategies,
+                net = format!("{:.3}", net).as_str(),
+                votes = votes_debug.as_str(),
+                "combiner: BLOCKED exit — not enough sell voters"
+            );
             return None;
         }
 
         let votes = vote_parts.join("+");
+
+        info!(
+            side = if net > 0.0 { "BUY" } else { "SELL" },
+            net = format!("{:.3}", net).as_str(),
+            votes = votes.as_str(),
+            regime = format!("{:?}", features.market_regime).as_str(),
+            "combiner: SIGNAL PASSED"
+        );
 
         if net > 0.0 {
             // Net buy — use the strongest buy signal's reason and snapshot

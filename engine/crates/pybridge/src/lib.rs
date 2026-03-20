@@ -710,6 +710,14 @@ fn load_config(config_path: &str) -> PyResult<String> {
 
 #[pymodule]
 fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Initialize tracing subscriber — logs go to stderr, controlled by RUST_LOG env var.
+    // e.g. RUST_LOG=info or RUST_LOG=openquant_core=debug
+    use tracing_subscriber::EnvFilter;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_target(true)
+        .try_init();
+
     m.add_class::<Engine>()?;
     m.add_function(wrap_pyfunction!(backtest, m)?)?;
     m.add_function(wrap_pyfunction!(backtest_toml, m)?)?;

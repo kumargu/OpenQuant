@@ -10,6 +10,7 @@
 
 use crate::features::MarketRegime;
 use crate::signals::{Side, SignalOutput};
+use tracing::{error, info, warn};
 
 /// Bet sizing method.
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -235,6 +236,11 @@ pub fn check(
 ) -> Result<f64, Rejection> {
     // Gate 1: Kill switch
     if risk_state.killed {
+        error!(
+            daily_pnl = format!("{:.2}", risk_state.daily_pnl).as_str(),
+            max_loss = format!("{:.2}", config.max_daily_loss).as_str(),
+            "risk: KILLED — daily loss limit breached"
+        );
         return Err(Rejection {
             reason: format!(
                 "kill switch: daily P&L {:.2} exceeded max loss {:.2}",
@@ -246,14 +252,20 @@ pub fn check(
     // Gate 2: Cost filter — signal must be strong enough relative to cost
     if config.min_reward_cost_ratio > 0.0 {
         let round_trip_cost_pct = config.estimated_cost_bps * 2.0;
+        let min_required = round_trip_cost_pct * config.min_reward_cost_ratio;
         // Signal score roughly proxies expected move magnitude
         // Reject if score isn't meaningfully above the cost drag
-        if signal.score < round_trip_cost_pct * config.min_reward_cost_ratio {
+        if signal.score < min_required {
+            warn!(
+                score = format!("{:.4}", signal.score).as_str(),
+                min_required = format!("{:.4}", min_required).as_str(),
+                cost_bps = format!("{:.4}", config.estimated_cost_bps).as_str(),
+                "risk: REJECTED — cost filter (signal too weak for costs)"
+            );
             return Err(Rejection {
                 reason: format!(
                     "cost filter: score {:.4} < min required {:.4}",
-                    signal.score,
-                    round_trip_cost_pct * config.min_reward_cost_ratio,
+                    signal.score, min_required,
                 ),
             });
         }
@@ -317,6 +329,15 @@ pub fn check(
             current_position_qty
         }
     };
+
+    info!(
+        side = format!("{:?}", signal.side).as_str(),
+        qty = format!("{:.2}", qty).as_str(),
+        price = format!("{:.2}", price).as_str(),
+        notional = format!("{:.0}", qty * price).as_str(),
+        score = format!("{:.3}", signal.score).as_str(),
+        "risk: APPROVED"
+    );
 
     Ok(qty)
 }

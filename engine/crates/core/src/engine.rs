@@ -26,6 +26,7 @@ use crate::risk::{self, RiskConfig, RiskState};
 use crate::signals::{
     Side, SignalReason, Strategy, breakout, combiner, mean_reversion, momentum, vwap_reversion,
 };
+use tracing::{debug, info, warn};
 
 /// An order the engine wants placed.
 #[derive(Debug, Clone)]
@@ -408,6 +409,13 @@ impl Engine {
         {
             let bars_held = self.bar_counter.saturating_sub(pos.entry_bar);
             if bars_held < exit_config.min_hold_bars {
+                warn!(
+                    symbol = bar.symbol.as_str(),
+                    bars_held,
+                    min_hold = exit_config.min_hold_bars,
+                    score = format!("{:.3}", signal.score).as_str(),
+                    "engine: BLOCKED sell — min hold time not reached"
+                );
                 if let Some(s) = start
                     && let Some(m) = self.hot_metrics.get(&bar.symbol)
                 {
