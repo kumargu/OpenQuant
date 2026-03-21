@@ -28,6 +28,31 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use tracing::{debug, info};
+
+/// Configurable prior parameters for Thompson sampling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThompsonConfig {
+    /// Quality-to-mean scaling: prior_mu = quality_score * mu_scale.
+    pub mu_scale: f64,
+    /// Prior precision (pseudo-observations for the mean).
+    pub kappa_0: f64,
+    /// Prior shape (half pseudo-observations for variance).
+    pub alpha_0: f64,
+    /// Prior return variance (bps²). std ~20 bps → variance = 400.
+    pub prior_variance: f64,
+}
+
+impl Default for ThompsonConfig {
+    fn default() -> Self {
+        Self {
+            mu_scale: 10.0,
+            kappa_0: 1.0,
+            alpha_0: 2.0,
+            prior_variance: 400.0,
+        }
+    }
+}
 
 /// Normal-Inverse-Gamma parameters for one pair (bandit arm).
 ///
@@ -56,24 +81,28 @@ impl ArmState {
     /// `quality_score`: the composite score from the validation pipeline [0, 1].
     /// Higher score → more optimistic prior mean, but still uncertain.
     pub fn from_quality_score(quality_score: f64) -> Self {
-        // Prior mean: map quality [0, 1] → expected return [0, 10] bps per trade.
-        // A score of 0.85 (excellent pair) gets ~8.5 bps prior mean.
-        // A score of 0.50 (marginal pair) gets ~5.0 bps prior mean.
-        let mu = quality_score * 10.0;
+        Self::from_quality_score_with_config(quality_score, &ThompsonConfig::default())
+    }
 
-        // κ₀ = 1: weak prior — one pseudo-observation of the mean.
+    /// Create an informative prior with custom configuration.
+    pub fn from_quality_score_with_config(quality_score: f64, config: &ThompsonConfig) -> Self {
+        // Prior mean: map quality [0, 1] → expected return bps per trade.
+        let mu = quality_score * config.mu_scale;
+
+        // κ₀: weak prior — one pseudo-observation of the mean.
         // This means the first real trade will shift the mean significantly.
-        let kappa = 1.0;
+        let kappa = config.kappa_0;
 
-        // α₀ = 2: minimal shape (need α > 1 for finite variance).
+        // α₀: minimal shape (need α > 1 for finite variance).
         // Gives very wide posterior — lots of exploration initially.
-        let alpha = 2.0;
+        let alpha = config.alpha_0;
 
         // β₀: encode prior belief about return variance.
-        // Pairs trading returns typically have std ~15-30 bps per trade.
-        // β₀ = α₀ * prior_variance = 2 * 400 = 800 (std ~20 bps)
-        let prior_variance = 400.0; // (20 bps)²
-        let beta = alpha * prior_variance;
+        // Calibrated from 23-day OOS (issue #117): validated pairs show
+        // per-trade returns of ~8-10 bps edge with win rates 70-76%,
+        // implying absolute returns of roughly 10-30 bps (std ~20 bps).
+        // Conservative default; Thompson sampling self-corrects as data arrives.
+        let beta = alpha * config.prior_variance;
 
         Self {
             mu,
@@ -84,7 +113,7 @@ impl ArmState {
         }
     }
 
-    /// Update posterior with an observed trade return (in bps).
+    /// Update posterior with observed trade returns (in bps).
     ///
     /// NIG conjugate update:
     /// κₙ = κ₀ + n
@@ -170,26 +199,51 @@ impl ThompsonState {
 
     /// Get or create an arm for a pair, using quality_score for the prior.
     pub fn get_or_create(&mut self, pair_id: &str, quality_score: f64) -> &mut ArmState {
-        self.arms
-            .entry(pair_id.to_string())
-            .or_insert_with(|| ArmState::from_quality_score(quality_score))
+        self.arms.entry(pair_id.to_string()).or_insert_with(|| {
+            let arm = ArmState::from_quality_score(quality_score);
+            info!(
+                pair = pair_id,
+                quality_score,
+                prior_mu = arm.mu,
+                prior_kappa = arm.kappa,
+                "Thompson: new arm created"
+            );
+            arm
+        })
     }
 
     /// Update a pair's posterior with observed trade returns (bps).
     pub fn update_pair(&mut self, pair_id: &str, returns: &[f64], quality_score: f64) {
         let arm = self.get_or_create(pair_id, quality_score);
+        let old_mu = arm.mu;
         arm.update(returns);
+        debug!(
+            pair = pair_id,
+            n_new = returns.len(),
+            n_total = arm.n_trades,
+            old_mu = format!("{old_mu:.2}"),
+            new_mu = format!("{:.2}", arm.mu),
+            posterior_std = format!("{:.2}", arm.posterior_std()),
+            "Thompson: posterior updated"
+        );
     }
 
     /// Sample from all arms and return pair_ids ranked by sampled value (descending).
+    ///
+    /// Arms are iterated in sorted key order for deterministic sampling —
+    /// HashMap iteration order is non-deterministic, which would make the
+    /// same seed produce different rankings across runs.
     pub fn rank_pairs(&self, rng_seed: u64) -> Vec<(String, f64)> {
         let mut rng_state = rng_seed;
-        let mut samples: Vec<(String, f64)> = self
-            .arms
+
+        let mut keys: Vec<&String> = self.arms.keys().collect();
+        keys.sort();
+
+        let mut samples: Vec<(String, f64)> = keys
             .iter()
-            .map(|(id, arm)| {
-                let sample = arm.sample(&mut rng_state);
-                (id.clone(), sample)
+            .map(|id| {
+                let sample = self.arms[*id].sample(&mut rng_state);
+                ((*id).clone(), sample)
             })
             .collect();
 
@@ -199,11 +253,18 @@ impl ThompsonState {
 
     /// Select top-K pairs by Thompson sampling.
     pub fn select_top_k(&self, k: usize, rng_seed: u64) -> Vec<String> {
-        self.rank_pairs(rng_seed)
-            .into_iter()
-            .take(k)
-            .map(|(id, _)| id)
-            .collect()
+        let ranking = self.rank_pairs(rng_seed);
+        let selected: Vec<String> = ranking.iter().take(k).map(|(id, _)| id.clone()).collect();
+
+        info!(
+            k,
+            total_arms = self.arms.len(),
+            exploration_rate = format!("{:.0}%", self.exploration_rate() * 100.0),
+            selected = ?selected,
+            "Thompson: top-K pairs selected"
+        );
+
+        selected
     }
 
     /// Load state from disk, or return empty state if file doesn't exist.
@@ -279,9 +340,15 @@ impl TradeHistory {
     }
 }
 
-/// Construct a pair_id string from two symbols (canonical ordering).
+/// Construct a pair_id string from two symbols.
+/// Always alphabetically ordered to prevent arm duplication when
+/// the trading engine records symbols in a different order than the candidate list.
 pub fn pair_id(leg_a: &str, leg_b: &str) -> String {
-    format!("{leg_a}/{leg_b}")
+    if leg_a <= leg_b {
+        format!("{leg_a}/{leg_b}")
+    } else {
+        format!("{leg_b}/{leg_a}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -619,5 +686,43 @@ mod tests {
         arm.update(&[]);
         assert_eq!(arm.mu, mu_before);
         assert_eq!(arm.n_trades, 0);
+    }
+
+    #[test]
+    fn test_pair_id_canonical_ordering() {
+        assert_eq!(pair_id("GS", "MS"), "GS/MS");
+        assert_eq!(pair_id("MS", "GS"), "GS/MS"); // reversed → same
+        assert_eq!(pair_id("C", "JPM"), "C/JPM");
+        assert_eq!(pair_id("JPM", "C"), "C/JPM");
+    }
+
+    #[test]
+    fn test_rank_pairs_deterministic() {
+        let mut state = ThompsonState::new();
+        state.get_or_create("A/B", 0.80);
+        state.get_or_create("C/D", 0.70);
+        state.get_or_create("E/F", 0.60);
+
+        // Same seed should produce same ranking every time
+        let r1 = state.rank_pairs(42);
+        let r2 = state.rank_pairs(42);
+        assert_eq!(
+            r1.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            r2.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_thompson_config_custom() {
+        let config = ThompsonConfig {
+            mu_scale: 20.0,
+            kappa_0: 2.0,
+            alpha_0: 3.0,
+            prior_variance: 100.0,
+        };
+        let arm = ArmState::from_quality_score_with_config(0.50, &config);
+        assert!((arm.mu - 10.0).abs() < 0.01); // 0.50 * 20.0
+        assert_eq!(arm.kappa, 2.0);
+        assert_eq!(arm.alpha, 3.0);
     }
 }
