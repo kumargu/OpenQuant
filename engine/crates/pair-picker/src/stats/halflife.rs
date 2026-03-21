@@ -63,29 +63,12 @@ pub fn is_half_life_valid(hl: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Generate an OU process with known half-life.
-    /// s_t = phi * s_{t-1} + eps, where phi = exp(-ln(2) / half_life)
-    fn ou_process(n: usize, half_life: f64, seed: u64) -> Vec<f64> {
-        let phi = (-f64::ln(2.0) / half_life).exp();
-        let mut series = Vec::with_capacity(n);
-        let mut state = seed;
-        let mut val = 0.0;
-        for _ in 0..n {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let noise = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.1;
-            val = phi * val + noise;
-            series.push(val);
-        }
-        series
-    }
+    use crate::test_utils;
 
     #[test]
     fn test_half_life_recovery() {
         // Generate OU with half_life = 10, check we recover it approximately
-        let series = ou_process(1000, 10.0, 42);
+        let series = test_utils::ou_process(1000, 10.0, 0.1, 42);
         let result = estimate_half_life(&series).unwrap();
 
         assert!(
@@ -98,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_half_life_short() {
-        let series = ou_process(1000, 5.0, 99);
+        let series = test_utils::ou_process(1000, 5.0, 0.1, 99);
         let result = estimate_half_life(&series).unwrap();
         assert!(
             (result.half_life - 5.0).abs() < 2.0,
@@ -109,7 +92,7 @@ mod tests {
 
     #[test]
     fn test_half_life_long() {
-        let series = ou_process(2000, 30.0, 77);
+        let series = test_utils::ou_process(2000, 30.0, 0.1, 77);
         let result = estimate_half_life(&series).unwrap();
         assert!(
             (result.half_life - 30.0).abs() < 15.0,
@@ -120,18 +103,7 @@ mod tests {
 
     #[test]
     fn test_random_walk_no_half_life() {
-        // Random walk: phi ≈ 1.0, should return None or half_life >> 40
-        let mut series = Vec::with_capacity(500);
-        let mut state: u64 = 42;
-        let mut val = 0.0;
-        for _ in 0..500 {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let noise = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.1;
-            val += noise;
-            series.push(val);
-        }
+        let series = test_utils::random_walk(500, 0.1, 42);
         let result = estimate_half_life(&series);
         // Either None (phi >= 1) or half_life outside valid range
         match result {

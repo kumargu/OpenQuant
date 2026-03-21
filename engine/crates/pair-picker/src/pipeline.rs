@@ -5,7 +5,7 @@
 //! 2. OLS regression → beta (hedge ratio)
 //! 3. Engle-Granger cointegration (ADF on spread residuals)
 //! 4. OU half-life estimation
-//! 5. Beta stability (rolling CV + CUSUM)
+//! 5. Beta stability (rolling CV + structural break detection)
 //! 6. Composite scoring
 //!
 //! Reads `pair_candidates.json`, validates each pair against daily price data,
@@ -103,6 +103,24 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     let prices_a = &prices_a[prices_a.len() - n..];
     let prices_b = &prices_b[prices_b.len() - n..];
 
+    // Guard: reject non-positive prices before ln() — data corruption, bad API
+    // response, or stock split artifacts would produce -inf/NaN that silently
+    // propagates through OLS, ADF, and scoring.
+    if prices_a.iter().any(|&p| !p.is_finite() || p <= 0.0) {
+        result.rejection_reasons.push(format!(
+            "{}: non-positive or NaN prices detected",
+            candidate.leg_a
+        ));
+        return result;
+    }
+    if prices_b.iter().any(|&p| !p.is_finite() || p <= 0.0) {
+        result.rejection_reasons.push(format!(
+            "{}: non-positive or NaN prices detected",
+            candidate.leg_b
+        ));
+        return result;
+    }
+
     // Log-prices for regression
     let log_a: Vec<f64> = prices_a.iter().map(|p| p.ln()).collect();
     let log_b: Vec<f64> = prices_b.iter().map(|p| p.ln()).collect();
@@ -122,7 +140,10 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     result.beta_r_squared = Some(ols.r_squared);
 
     // Step 4: Engle-Granger cointegration
-    // Spread residuals = log_a - beta * log_b
+    // Spread = log_a - beta * log_b (intentionally omitting OLS intercept alpha).
+    // The ADF regression includes its own constant term, and the AR(1) half-life
+    // estimation absorbs any level shift, so subtracting alpha here is unnecessary
+    // and would only add noise from the intercept estimate.
     let spread: Vec<f64> = log_a
         .iter()
         .zip(log_b.iter())
@@ -170,15 +191,15 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     match check_beta_stability(&log_a, &log_b) {
         Some(bs) => {
             result.beta_cv = Some(bs.cv);
-            result.cusum_break = bs.cusum_break;
+            result.structural_break = bs.structural_break;
             result.beta_stable = bs.is_stable;
             if !bs.is_stable {
                 let mut reasons = Vec::new();
                 if bs.cv >= 0.20 {
                     reasons.push(format!("Beta CV={:.3} >= 0.20", bs.cv));
                 }
-                if bs.cusum_break {
-                    reasons.push("CUSUM structural break detected".into());
+                if bs.structural_break {
+                    reasons.push("Structural break detected in hedge ratio".into());
                 }
                 result.rejection_reasons.extend(reasons);
             }
@@ -196,7 +217,7 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         result.half_life.unwrap_or(0.0),
         result.beta_cv.unwrap_or(1.0),
         result.beta_r_squared.unwrap_or(0.0),
-        result.cusum_break,
+        result.structural_break,
     );
 
     // Pass criteria: cointegrated + valid half-life + stable beta
@@ -309,61 +330,9 @@ impl std::error::Error for PipelineError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils;
     use crate::types::PairCandidate;
     use tempfile::TempDir;
-
-    /// Generate a cointegrated pair: a = beta * b + stationary_noise
-    fn cointegrated_pair(n: usize, beta: f64, half_life: f64, seed: u64) -> (PriceData, PriceData) {
-        let phi = (-f64::ln(2.0) / half_life).exp();
-        let mut state = seed;
-        let mut next_noise = |scale: f64| -> f64 {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * scale
-        };
-
-        let mut log_b = Vec::with_capacity(n);
-        let mut b_val = 4.0; // ln(~55)
-        for _ in 0..n {
-            b_val += next_noise(0.02);
-            log_b.push(b_val);
-        }
-
-        let mut spread = 0.0;
-        let mut log_a = Vec::with_capacity(n);
-        for i in 0..n {
-            spread = phi * spread + next_noise(0.01);
-            log_a.push(beta * log_b[i] + 1.0 + spread); // alpha = 1.0
-        }
-
-        let prices_a: Vec<f64> = log_a.iter().map(|x| x.exp()).collect();
-        let prices_b: Vec<f64> = log_b.iter().map(|x| x.exp()).collect();
-        (prices_a, prices_b)
-    }
-
-    /// Generate two independent random walks (not cointegrated).
-    fn independent_walks(n: usize, seed: u64) -> (PriceData, PriceData) {
-        let mut state = seed;
-        let mut next_noise = || -> f64 {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.02
-        };
-
-        let mut a = Vec::with_capacity(n);
-        let mut b = Vec::with_capacity(n);
-        let mut va = 4.0;
-        let mut vb = 4.0;
-        for _ in 0..n {
-            va += next_noise();
-            vb += next_noise();
-            a.push(va.exp());
-            b.push(vb.exp());
-        }
-        (a, b)
-    }
 
     fn make_provider(pairs: Vec<(&str, PriceData)>) -> InMemoryPrices {
         InMemoryPrices {
@@ -373,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_cointegrated_pair_passes() {
-        let (pa, pb) = cointegrated_pair(500, 1.5, 10.0, 42);
+        let (pa, pb) = test_utils::cointegrated_pair(500, 1.5, 10.0, 42);
         let provider = make_provider(vec![("A", pa), ("B", pb)]);
         let candidate = PairCandidate {
             leg_a: "A".into(),
@@ -393,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_random_walks_rejected() {
-        let (pa, pb) = independent_walks(500, 42);
+        let (pa, pb) = test_utils::independent_walks(500, 42);
         let provider = make_provider(vec![("X", pa), ("Y", pb)]);
         let candidate = PairCandidate {
             leg_a: "X".into(),
@@ -411,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_etf_component_rejected() {
-        let (pa, pb) = cointegrated_pair(500, 1.5, 10.0, 42);
+        let (pa, pb) = test_utils::cointegrated_pair(500, 1.5, 10.0, 42);
         let provider = make_provider(vec![("XLF", pa), ("JPM", pb)]);
         let candidate = PairCandidate {
             leg_a: "XLF".into(),
@@ -442,8 +411,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let output_path = tmp.path().join("active_pairs.json");
 
-        let (pa, pb) = cointegrated_pair(500, 1.5, 10.0, 42);
-        let (px, py) = independent_walks(500, 99);
+        let (pa, pb) = test_utils::cointegrated_pair(500, 1.5, 10.0, 42);
+        let (px, py) = test_utils::independent_walks(500, 99);
         let provider = make_provider(vec![("A", pa), ("B", pb), ("X", px), ("Y", py)]);
 
         let candidates = vec![
@@ -478,5 +447,44 @@ mod tests {
             assert_eq!(output.pairs[0].leg_a, "A");
             assert_eq!(output.pairs[0].leg_b, "B");
         }
+    }
+
+    #[test]
+    fn test_non_positive_prices_rejected() {
+        // Zero price should be caught before ln()
+        let mut prices_a = vec![100.0; 300];
+        prices_a[150] = 0.0; // corrupt data point
+        let prices_b = vec![100.0; 300];
+        let provider = make_provider(vec![("A", prices_a), ("B", prices_b)]);
+        let candidate = PairCandidate {
+            leg_a: "A".into(),
+            leg_b: "B".into(),
+            economic_rationale: "test".into(),
+        };
+        let result = validate_pair(&candidate, &provider);
+        assert!(!result.passed);
+        assert!(
+            result
+                .rejection_reasons
+                .iter()
+                .any(|r| r.contains("non-positive")),
+            "Expected non-positive price rejection, got: {:?}",
+            result.rejection_reasons
+        );
+    }
+
+    #[test]
+    fn test_nan_prices_rejected() {
+        let mut prices_a = vec![100.0; 300];
+        prices_a[100] = f64::NAN;
+        let prices_b = vec![100.0; 300];
+        let provider = make_provider(vec![("A", prices_a), ("B", prices_b)]);
+        let candidate = PairCandidate {
+            leg_a: "A".into(),
+            leg_b: "B".into(),
+            economic_rationale: "test".into(),
+        };
+        let result = validate_pair(&candidate, &provider);
+        assert!(!result.passed);
     }
 }

@@ -7,7 +7,7 @@ use pair_picker::lockfile;
 use pair_picker::pipeline::{self, InMemoryPrices, PipelineError};
 use pair_picker::types::PairCandidatesFile;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{error, info};
 
 fn main() {
@@ -148,7 +148,7 @@ fn find_data_dir() -> PathBuf {
 
 /// Load price data from a JSON file.
 /// Format: { "SYMBOL": [close1, close2, ...], ... }
-fn load_prices_from_file(path: &PathBuf) -> Result<InMemoryPrices, PipelineError> {
+fn load_prices_from_file(path: &Path) -> Result<InMemoryPrices, PipelineError> {
     let contents = std::fs::read_to_string(path).map_err(PipelineError::Io)?;
     let data: HashMap<String, Vec<f64>> =
         serde_json::from_str(&contents).map_err(PipelineError::Json)?;

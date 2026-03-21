@@ -2,7 +2,7 @@
 //!
 //! Two complementary checks:
 //! 1. **Rolling window**: compute beta over rolling 60-day windows, check std/mean < 0.20
-//! 2. **CUSUM on hedge ratio**: detect structural breaks in the relationship early
+//! 2. **Structural break detection**: max mean-shift test on rolling betas
 
 use super::ols::ols_simple;
 
@@ -19,8 +19,8 @@ pub struct BetaStabilityResult {
     pub cv: f64,
     /// Whether beta is stable (cv < threshold).
     pub is_stable: bool,
-    /// Whether CUSUM detected a structural break.
-    pub cusum_break: bool,
+    /// Whether a structural break was detected in the hedge ratio.
+    pub structural_break: bool,
     /// Number of rolling windows computed.
     pub n_windows: usize,
 }
@@ -31,7 +31,7 @@ pub const MAX_BETA_CV: f64 = 0.20;
 /// Rolling window size for beta estimation.
 pub const ROLLING_WINDOW: usize = 60;
 
-/// Check beta stability using rolling windows and CUSUM.
+/// Check beta stability using rolling windows and structural break detection.
 ///
 /// `log_prices_a` and `log_prices_b` are log-prices of the two legs.
 pub fn check_beta_stability(
@@ -71,7 +71,7 @@ pub fn check_beta_stability(
             .iter()
             .map(|b| (b - rolling_mean).powi(2))
             .sum::<f64>()
-            / rb_n;
+            / (rb_n - 1.0); // sample variance (Bessel's correction)
         var.sqrt()
     };
 
@@ -81,10 +81,9 @@ pub fn check_beta_stability(
         f64::INFINITY
     };
 
-    // CUSUM test on rolling betas for structural break
-    let cusum_break = cusum_test(&rolling_betas);
+    let structural_break = structural_break_test(&rolling_betas);
 
-    let is_stable = cv < MAX_BETA_CV && !cusum_break;
+    let is_stable = cv < MAX_BETA_CV && !structural_break;
 
     Some(BetaStabilityResult {
         beta,
@@ -92,21 +91,33 @@ pub fn check_beta_stability(
         rolling_std,
         cv,
         is_stable,
-        cusum_break,
+        structural_break,
         n_windows: rolling_betas.len(),
     })
 }
 
-/// Structural break detection for hedge ratio via maximum mean shift.
+/// Structural break detection for hedge ratio via maximum mean-shift test.
 ///
-/// Detects whether the beta series has a level shift that is both
-/// statistically and economically significant. We compare the mean
-/// beta in the first half vs the second half and check if the difference
-/// exceeds a fraction of the overall mean (economic significance).
+/// We chose a mean-shift test over classical CUSUM or Chow F-test because
+/// rolling-window betas have strong serial correlation (overlapping windows),
+/// which inflates CUSUM statistics and Chow F-statistics, producing false
+/// positives on stable relationships. A mean-shift test with an *economic*
+/// significance threshold avoids this.
 ///
-/// This avoids false positives from serial correlation in overlapping
-/// rolling window estimates.
-fn cusum_test(series: &[f64]) -> bool {
+/// Algorithm: for each candidate split point k (20%-80% of series), compute
+/// |mean(series[..k]) - mean(series[k..])| / |overall_mean|. If this ratio
+/// exceeds the threshold, the beta has shifted enough to invalidate the pair.
+///
+/// The 15% threshold was chosen empirically:
+/// - A beta shift from 1.5 to 1.3 (13%) is noise in rolling windows
+/// - A beta shift from 1.5 to 1.2 (20%) means the pair relationship changed
+/// - 15% balances sensitivity vs false positives on backtested pairs
+///
+/// A proper Chow F-test would require correcting for autocorrelation in
+/// overlapping windows (Newey-West HAC), adding complexity with minimal
+/// benefit since the economic significance filter already handles the
+/// relevant failure mode (silent regime shifts that lose money).
+fn structural_break_test(series: &[f64]) -> bool {
     let n = series.len();
     if n < 20 {
         return false;
@@ -176,8 +187,8 @@ mod tests {
         let result = check_beta_stability(&log_a, &log_b).unwrap();
         assert!(
             result.is_stable,
-            "cv={}, cusum_break={}",
-            result.cv, result.cusum_break
+            "cv={}, structural_break={}",
+            result.cv, result.structural_break
         );
         assert!((result.beta - 1.5).abs() < 0.1, "beta={}", result.beta);
         assert!(result.cv < MAX_BETA_CV, "cv={}", result.cv);
@@ -212,8 +223,8 @@ mod tests {
         // Should detect instability via either CV or CUSUM
         assert!(
             !result.is_stable,
-            "cv={}, cusum_break={}",
-            result.cv, result.cusum_break
+            "cv={}, structural_break={}",
+            result.cv, result.structural_break
         );
     }
 
@@ -225,17 +236,17 @@ mod tests {
     }
 
     #[test]
-    fn test_cusum_no_break() {
+    fn test_no_structural_break() {
         // Constant series
         let series = vec![1.0; 50];
-        assert!(!cusum_test(&series));
+        assert!(!structural_break_test(&series));
     }
 
     #[test]
-    fn test_cusum_with_break() {
+    fn test_structural_break_detected() {
         // Clear level shift
         let mut series = vec![0.0; 50];
         series.extend(vec![5.0; 50]);
-        assert!(cusum_test(&series));
+        assert!(structural_break_test(&series));
     }
 }

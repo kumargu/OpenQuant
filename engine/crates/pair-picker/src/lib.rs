@@ -23,4 +23,6 @@ pub mod lockfile;
 pub mod pipeline;
 pub mod scorer;
 pub mod stats;
+#[cfg(test)]
+pub mod test_utils;
 pub mod types;

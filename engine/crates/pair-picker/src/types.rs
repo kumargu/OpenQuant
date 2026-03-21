@@ -39,8 +39,8 @@ pub struct ActivePair {
     pub adf_pvalue: f64,
     /// Beta coefficient of variation (rolling 60-day).
     pub beta_cv: f64,
-    /// Whether CUSUM detected a structural break in beta.
-    pub cusum_break: bool,
+    /// Whether a structural break was detected in beta.
+    pub structural_break: bool,
     /// Economic rationale (passed through from candidates).
     pub economic_rationale: String,
     /// Composite score [0, 1] combining all statistical properties.
@@ -76,7 +76,7 @@ pub struct ValidationResult {
 
     // Beta stability
     pub beta_cv: Option<f64>,
-    pub cusum_break: bool,
+    pub structural_break: bool,
     pub beta_stable: bool,
 
     // ETF filter
@@ -102,7 +102,7 @@ impl ValidationResult {
             half_life: None,
             half_life_valid: false,
             beta_cv: None,
-            cusum_break: false,
+            structural_break: false,
             beta_stable: false,
             etf_excluded: false,
             passed: false,
@@ -123,7 +123,7 @@ impl ValidationResult {
             adf_statistic: self.adf_statistic.unwrap_or(0.0),
             adf_pvalue: self.adf_pvalue.unwrap_or(1.0),
             beta_cv: self.beta_cv.unwrap_or(1.0),
-            cusum_break: self.cusum_break,
+            structural_break: self.structural_break,
             economic_rationale: self.economic_rationale.clone(),
             score: self.score,
         })

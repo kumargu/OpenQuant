@@ -14,12 +14,16 @@ pub fn compute_score(
     half_life: f64,
     beta_cv: f64,
     r_squared: f64,
-    cusum_break: bool,
+    structural_break: bool,
 ) -> f64 {
     let coint_score = cointegration_score(adf_pvalue);
     let hl_score = half_life_score(half_life);
-    let stability_score = beta_stability_score(beta_cv, cusum_break);
-    let fit_score = r_squared.clamp(0.0, 1.0);
+    let stability_score = beta_stability_score(beta_cv, structural_break);
+    let fit_score = if r_squared.is_finite() {
+        r_squared.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
 
     // Weighted combination
     const W_COINT: f64 = 0.35;
@@ -69,8 +73,8 @@ fn half_life_score(hl: f64) -> f64 {
 
 /// Beta stability → score.
 /// CV < 0.05 → 1.0, CV = 0.20 → 0.0 (at threshold)
-fn beta_stability_score(cv: f64, cusum_break: bool) -> f64 {
-    if cusum_break {
+fn beta_stability_score(cv: f64, structural_break: bool) -> f64 {
+    if structural_break {
         return 0.0;
     }
     if cv <= 0.05 {
@@ -100,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cusum_break_penalizes() {
+    fn test_structural_break_penalizes() {
         let no_break = compute_score(0.01, 10.0, 0.10, 0.90, false);
         let with_break = compute_score(0.01, 10.0, 0.10, 0.90, true);
         assert!(

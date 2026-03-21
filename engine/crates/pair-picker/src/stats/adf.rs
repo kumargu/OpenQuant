@@ -205,43 +205,11 @@ fn interpolate_p_value(stat: f64, table: &[(f64, f64)]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Generate a stationary AR(1) series: y_t = 0.5 * y_{t-1} + eps
-    fn stationary_series(n: usize, seed: u64) -> Vec<f64> {
-        let mut y = Vec::with_capacity(n);
-        let mut state = seed;
-        let mut val = 0.0;
-        for _ in 0..n {
-            // Simple LCG for deterministic "noise"
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let noise = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.2;
-            val = 0.5 * val + noise;
-            y.push(val);
-        }
-        y
-    }
-
-    /// Generate a random walk (unit root): y_t = y_{t-1} + eps
-    fn random_walk(n: usize, seed: u64) -> Vec<f64> {
-        let mut y = Vec::with_capacity(n);
-        let mut state = seed;
-        let mut val = 0.0;
-        for _ in 0..n {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let noise = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.2;
-            val += noise;
-            y.push(val);
-        }
-        y
-    }
+    use crate::test_utils;
 
     #[test]
     fn test_adf_stationary_series() {
-        let series = stationary_series(500, 42);
+        let series = test_utils::stationary_series(500, 0.5, 0.2, 42);
         let result = adf_test(&series, None, false).unwrap();
         // Stationary series should reject unit root
         assert!(
@@ -254,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_adf_random_walk() {
-        let series = random_walk(500, 42);
+        let series = test_utils::random_walk(500, 0.2, 42);
         let result = adf_test(&series, None, false).unwrap();
         // Random walk should NOT reject unit root
         assert!(
@@ -274,7 +242,7 @@ mod tests {
     #[test]
     fn test_adf_engle_granger_more_conservative() {
         // Same series should have higher p-value with EG critical values
-        let series = stationary_series(200, 99);
+        let series = test_utils::stationary_series(200, 0.5, 0.2, 99);
         let normal = adf_test(&series, None, false).unwrap();
         let eg = adf_test(&series, None, true).unwrap();
         // EG critical values are more stringent, so p-value should be higher (or equal)

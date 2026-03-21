@@ -6,7 +6,7 @@
 //! - **OLS**: Ordinary least squares regression for hedge ratio estimation
 //! - **ADF**: Augmented Dickey-Fuller unit root test (Engle-Granger cointegration)
 //! - **Half-life**: Ornstein-Uhlenbeck mean-reversion speed estimation
-//! - **Beta stability**: Rolling-window CV + CUSUM structural break detection
+//! - **Beta stability**: Rolling-window CV + structural break detection (mean-shift test)
 
 pub mod adf;
 pub mod beta_stability;
