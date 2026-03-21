@@ -191,20 +191,22 @@ impl FeatureState {
         Self::with_config(garch_config, RegimeConfig::default())
     }
 
+    /// Create with custom warmup period. For 1-min bars use 64 (default).
+    /// For wider bars: 5-min → 20, 15-min → 10. The warmup must be at least
+    /// as large as the longest indicator window that matters at that timeframe.
+    pub fn with_warmup(garch_config: GarchConfig, regime_config: RegimeConfig, warmup: usize) -> Self {
+        Self::build(garch_config, regime_config, warmup)
+    }
+
     pub fn with_config(garch_config: GarchConfig, regime_config: RegimeConfig) -> Self {
-        // Warmup must exceed all indicator requirements:
-        // Sma<64> needs 64 bars (binding constraint).
-        // EMA(30) needs ~30, ADX(14) needs 28, RollingStats<32> needs 32.
-        const WARMUP: usize = 64;
-        const EMA_SLOW_PERIOD: usize = 30;
-        const ADX_PERIOD: usize = 14;
-        // Guard: warmup must cover all indicators (compile-time)
-        const {
-            assert!(WARMUP >= 64, "must cover Sma<64>");
-            assert!(WARMUP >= EMA_SLOW_PERIOD, "must cover EMA slow period");
-            assert!(WARMUP >= ADX_PERIOD * 2, "must cover ADX (2×period)");
-            assert!(WARMUP >= 32, "must cover RollingStats<32>");
-        }
+        Self::build(garch_config, regime_config, 64)
+    }
+
+    fn build(garch_config: GarchConfig, regime_config: RegimeConfig, warmup: usize) -> Self {
+        // Minimum warmup: must cover RollingStats<32> at a minimum.
+        // For 1-min bars, 64 covers Sma<64>. For wider bars, caller
+        // can reduce but never below 32.
+        let warmup_period = warmup.max(32);
 
         Self {
             closes: RingBuf::new(),
@@ -215,7 +217,7 @@ impl FeatureState {
             volume_stats: RollingStats::new(),
             prev_close: None,
             bar_count: 0,
-            warmup_period: WARMUP,
+            warmup_period,
 
             ema_fast: Ema::new(10),
             ema_slow: Ema::new(30),

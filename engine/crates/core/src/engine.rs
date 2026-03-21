@@ -101,6 +101,10 @@ pub struct EngineConfig {
     pub max_bar_age_ms: i64,
     /// Enable hot-path metrics instrumentation. Default: false.
     pub metrics_enabled: bool,
+    /// Warmup period in bars. Default: 64 (for 1-min bars).
+    /// For wider bars: 5-min → 32, 15-min → 32.
+    /// Minimum 32 (covers RollingStats<32>).
+    pub warmup_bars: usize,
 }
 
 /// The core engine. Maintains all state, processes bars, emits order intents.
@@ -124,6 +128,7 @@ pub struct Engine {
     hot_metrics: HotMetrics,
     garch_config: crate::features::GarchConfig,
     regime_config: crate::features::RegimeConfig,
+    warmup_bars: usize,
 }
 
 impl Engine {
@@ -265,6 +270,7 @@ impl Engine {
             hot_metrics: HotMetrics::new(config.metrics_enabled),
             garch_config: config.garch,
             regime_config: config.regime,
+            warmup_bars: config.warmup_bars,
         }
     }
 
@@ -330,8 +336,9 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
+        let warmup = self.warmup_bars;
         let feature_state = self.features.entry(bar.symbol.clone()).or_insert_with(|| {
-            FeatureState::with_config(self.garch_config.clone(), self.regime_config.clone())
+            FeatureState::with_warmup(self.garch_config.clone(), self.regime_config.clone(), warmup)
         });
 
         let features =
@@ -496,8 +503,9 @@ impl Engine {
         self.bar_counter += 1;
 
         // 1. Update features (always, even for stale bars)
+        let warmup = self.warmup_bars;
         let feature_state = self.features.entry(bar.symbol.clone()).or_insert_with(|| {
-            FeatureState::with_config(self.garch_config.clone(), self.regime_config.clone())
+            FeatureState::with_warmup(self.garch_config.clone(), self.regime_config.clone(), warmup)
         });
 
         let features =

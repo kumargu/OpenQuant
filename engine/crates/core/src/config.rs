@@ -89,6 +89,7 @@ impl ConfigFile {
             symbol_overrides: resolved_overrides,
             max_bar_age_ms: self.data.max_bar_age_seconds * 1000,
             metrics_enabled: self.metrics.enabled,
+            warmup_bars: 64, // default for 1-min bars; override via Engine kwargs
         }
     }
 

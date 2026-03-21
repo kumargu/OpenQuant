@@ -395,8 +395,8 @@ impl Engine {
     /// Reads the file, parses all sections, and builds the engine.
     /// Optional `journal_path` enables journaling (not in TOML — runtime concern).
     #[staticmethod]
-    #[pyo3(signature = (config_path, journal_path = None))]
-    fn from_toml(config_path: &str, journal_path: Option<String>) -> PyResult<Self> {
+    #[pyo3(signature = (config_path, journal_path = None, warmup_bars = 64))]
+    fn from_toml(config_path: &str, journal_path: Option<String>, warmup_bars: usize) -> PyResult<Self> {
         let cfg_file = openquant_core::config::ConfigFile::load(std::path::Path::new(config_path))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
@@ -404,7 +404,8 @@ impl Engine {
             .unwrap_or("dev")
             .to_string();
 
-        let config = cfg_file.into_engine_config();
+        let mut config = cfg_file.into_engine_config();
+        config.warmup_bars = warmup_bars;
 
         let journal = match journal_path {
             Some(path) => {

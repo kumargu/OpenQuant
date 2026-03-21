@@ -106,7 +106,7 @@ def replay(
     with open(tmp_path, "w") as f:
         toml.dump(cfg, f)
 
-    engine = Engine.from_toml(tmp_path)
+    engine = Engine.from_toml(tmp_path, warmup_bars=warmup_bars)
     all_bars = load_bars(date_str)
 
     # Merge and sort all bars by timestamp
