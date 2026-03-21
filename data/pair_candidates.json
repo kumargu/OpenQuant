@@ -1,0 +1,104 @@
+{
+  "pairs": [
+    {
+      "leg_a": "GS",
+      "leg_b": "MS",
+      "economic_rationale": "Two bulge-bracket investment banks with similar revenue mix (trading, advisory, wealth mgmt). Same regulatory regime (Fed/OCC), correlated M&A and IPO cycle exposure."
+    },
+    {
+      "leg_a": "GLD",
+      "leg_b": "SLV",
+      "economic_rationale": "Precious metals ETFs. Gold and silver are historically correlated via safe-haven demand and real rate sensitivity. Silver has higher beta to gold."
+    },
+    {
+      "leg_a": "C",
+      "leg_b": "JPM",
+      "economic_rationale": "Large-cap money-center banks. Similar interest rate sensitivity, loan book composition, and regulatory capital requirements."
+    },
+    {
+      "leg_a": "XOM",
+      "leg_b": "CVX",
+      "economic_rationale": "Integrated oil majors. Both upstream/downstream, similar geographic exposure, correlated via crude oil prices and refining margins."
+    },
+    {
+      "leg_a": "AMD",
+      "leg_b": "INTC",
+      "economic_rationale": "x86 CPU competitors. Market share shifts between them, correlated via PC/server demand cycles and semiconductor capex."
+    },
+    {
+      "leg_a": "COST",
+      "leg_b": "WMT",
+      "economic_rationale": "Large-format retailers competing for consumer wallet share. Similar traffic patterns, correlated via consumer spending and inflation expectations."
+    },
+    {
+      "leg_a": "HD",
+      "leg_b": "LOW",
+      "economic_rationale": "Home improvement duopoly. Nearly identical business models, correlated via housing market activity, renovation cycles, and lumber prices."
+    },
+    {
+      "leg_a": "V",
+      "leg_b": "MA",
+      "economic_rationale": "Payment network duopoly. Both earn interchange fees on consumer spending. Near-identical business models, correlated via cross-border travel and e-commerce growth."
+    },
+    {
+      "leg_a": "UBER",
+      "leg_b": "LYFT",
+      "economic_rationale": "Ride-sharing competitors in overlapping US markets. Similar driver economics, regulatory exposure, and demand sensitivity to gas prices."
+    },
+    {
+      "leg_a": "DIS",
+      "leg_b": "NFLX",
+      "economic_rationale": "Streaming competitors. Both invest heavily in content, competing for subscriber attention. Correlated via advertising market and consumer entertainment spend."
+    },
+    {
+      "leg_a": "FDX",
+      "leg_b": "UPS",
+      "economic_rationale": "Package delivery duopoly. Similar network economics, correlated via e-commerce volumes, fuel costs, and labor market conditions."
+    },
+    {
+      "leg_a": "DAL",
+      "leg_b": "UAL",
+      "economic_rationale": "Major US airlines with similar hub-and-spoke networks. Correlated via jet fuel prices, travel demand, and pilot labor costs."
+    },
+    {
+      "leg_a": "BAC",
+      "leg_b": "WFC",
+      "economic_rationale": "Consumer-focused money-center banks. Similar loan portfolios (mortgages, credit cards), correlated via interest rates and credit cycle."
+    },
+    {
+      "leg_a": "MU",
+      "leg_b": "TXN",
+      "economic_rationale": "Semiconductor companies (memory vs analog). Both cyclical, correlated via semiconductor capex cycle and end-market demand."
+    },
+    {
+      "leg_a": "COP",
+      "leg_b": "EOG",
+      "economic_rationale": "E&P focused oil companies. Both primarily upstream, correlated via crude oil prices and US shale production economics."
+    },
+    {
+      "leg_a": "XLF",
+      "leg_b": "JPM",
+      "economic_rationale": "Financial sector ETF and its largest component. Should be REJECTED by ETF-component filter."
+    },
+    {
+      "leg_a": "SMH",
+      "leg_b": "NVDA",
+      "economic_rationale": "Semiconductor ETF and its largest holding. Should be REJECTED by ETF-component filter."
+    },
+    {
+      "leg_a": "T",
+      "leg_b": "VZ",
+      "economic_rationale": "Telecom duopoly. Similar subscriber economics, 5G capex cycles, and dividend profiles. Correlated via wireless subscriber growth and spectrum costs."
+    },
+    {
+      "leg_a": "PSX",
+      "leg_b": "VLO",
+      "economic_rationale": "Refiners with similar crack spread exposure. Both primarily downstream, correlated via refining margins and crude-product spreads."
+    },
+    {
+      "leg_a": "SBUX",
+      "leg_b": "MCD",
+      "economic_rationale": "Quick-service restaurant leaders. Both franchise-heavy models, correlated via consumer traffic, food costs, and labor inflation."
+    }
+  ]
+}
