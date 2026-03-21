@@ -119,7 +119,8 @@ Tester agent (worktree)                    Reviewer (main)                     C
 ## Developer best practices
 
 ### Architecture
-- **Rust owns all math and trading logic**: Statistics, signals, risk, scoring — zero Python for anything performance-sensitive or correctness-critical. Python is the data plumbing layer only (Alpaca API, bar fetching, orchestration)
+- **Rust owns all math and trading logic**: Statistics, signals, risk, scoring — zero Python for anything performance-sensitive or correctness-critical. Python is the data plumbing layer only (Alpaca API, bar fetching)
+- **Minimize Python bridge dependency**: The Python↔Rust bridge (pybridge) is the most fragile boundary — methods can be missing, types can mismatch. Prefer standalone Rust binaries that read/write JSON over Python FFI where possible. When the bridge is used, test it explicitly
 - **Separate crates for separate concerns**: Offline analysis tools (e.g., `pair-picker`) are standalone binaries, not linked into the trading engine. Communicate via JSON files, not shared state
 - **Canonical identifiers everywhere**: When two components reference the same entity (a pair, a symbol, a strategy), use a single canonical ID format. Alphabetically ordered, consistent across all producers and consumers. Mismatched IDs cause silent data loss
 - **Config structs with Default**: All tunable parameters in structs with `Default` impls. No magic numbers in function bodies. This makes parameters discoverable, documentable, and overridable without recompilation
@@ -133,6 +134,7 @@ Tester agent (worktree)                    Reviewer (main)                     C
 
 ### Testing
 - **Test module seams, not just modules**: Unit tests per module are necessary but insufficient. When a PR bridges two components, include integration tests that verify the data contract between them (e.g., producer writes field X, consumer reads and uses field X correctly)
+- **Test the bridge first**: If Rust code adds a new method, verify it's exposed in the Python bridge BEFORE merging. 122 Rust tests mean nothing if the method isn't callable from the orchestration layer
 - **Test the rejection path**: Don't just test that good inputs pass — verify bad inputs are correctly rejected (invalid data, stale files, NaN prices, boundary conditions)
 - **Shared test_utils module**: Deterministic data generators (`Lcg`, synthetic series) in a shared `#[cfg(test)]` module. Reuse across all test files to ensure consistent ground truth
 - **Criterion benchmarks for critical paths**: Know your latency budget. Benchmark statistical computations, hot-path signal generation, and any operation that runs per-bar or per-trade
