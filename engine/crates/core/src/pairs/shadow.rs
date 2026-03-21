@@ -113,6 +113,7 @@ impl ShadowState {
 
     /// Check if this pair meets promotion criteria.
     pub fn meets_promotion_criteria(&self) -> bool {
+        // Need at least 10 trades OR 20 bars (De Morgan's: fail only when BOTH are below)
         if self.shadow_trades.len() < MIN_SHADOW_TRADES && self.bars_tracked < MIN_SHADOW_BARS {
             return false;
         }
@@ -144,6 +145,10 @@ impl ShadowState {
     }
 
     /// Check if a live pair should be demoted based on rolling performance.
+    ///
+    /// The caller (PairsEngine) must maintain per-pair live trade returns and pass
+    /// them here. ShadowState only tracks hypothetical trades — live returns are
+    /// owned by the engine to avoid coupling shadow tracking with order execution.
     pub fn should_demote(&self, recent_returns: &[f64]) -> bool {
         if recent_returns.len() < DEMOTION_WINDOW {
             return false;
@@ -189,6 +194,14 @@ impl ShadowState {
         self.mode = PairMode::Demoted;
         self.shadow_trades.clear();
         self.bars_tracked = 0;
+    }
+
+    /// Check if this pair should be removed entirely.
+    /// Demoted pairs with enough shadow trades and negative Sharpe are beyond recovery.
+    pub fn should_remove(&self) -> bool {
+        matches!(self.mode, PairMode::Demoted)
+            && self.shadow_trades.len() >= MIN_SHADOW_TRADES
+            && self.shadow_sharpe() < 0.0
     }
 }
 
@@ -252,13 +265,37 @@ impl ShadowRegistry {
         fs::write(path, json)
     }
 
-    /// Get pairs ready for promotion.
+    /// Get pairs ready for promotion (includes demoted pairs that have recovered).
     pub fn promotable_pairs(&self) -> Vec<&str> {
         self.pairs
             .iter()
-            .filter(|(_, s)| s.mode == PairMode::Shadow && s.meets_promotion_criteria())
+            .filter(|(_, s)| {
+                matches!(s.mode, PairMode::Shadow | PairMode::Demoted)
+                    && s.meets_promotion_criteria()
+            })
             .map(|(id, _)| id.as_str())
             .collect()
+    }
+
+    /// Remove pairs that have degraded beyond recovery.
+    /// Demoted pairs with enough shadow trades and negative Sharpe are removed entirely.
+    pub fn cleanup(&mut self) -> Vec<String> {
+        let removed: Vec<String> = self
+            .pairs
+            .iter()
+            .filter(|(_, s)| s.should_remove())
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in &removed {
+            warn!(
+                pair = id.as_str(),
+                "Removing degraded pair from shadow registry"
+            );
+            self.pairs.remove(id);
+        }
+
+        removed
     }
 }
 
@@ -441,5 +478,72 @@ mod tests {
         let promotable = reg.promotable_pairs();
         assert_eq!(promotable.len(), 1);
         assert_eq!(promotable[0], "GS/MS");
+    }
+
+    #[test]
+    fn test_demoted_pair_can_recover() {
+        let mut reg = ShadowRegistry::new();
+        let state = reg.get_or_create("GS/MS", 0);
+        state.mode = PairMode::Demoted;
+        for i in 0..12 {
+            state.record_shadow_trade(ShadowTrade {
+                entry_bar: i * 10,
+                exit_bar: i * 10 + 5,
+                entry_z: 2.0,
+                exit_z: 0.3,
+                return_bps: 20.0 + (i as f64),
+            });
+        }
+        let promotable = reg.promotable_pairs();
+        assert_eq!(promotable.len(), 1, "Demoted pair should be re-promotable");
+    }
+
+    #[test]
+    fn test_should_remove_degraded_demoted() {
+        let mut state = ShadowState::new("BAD/PAIR".into(), 0);
+        state.mode = PairMode::Demoted;
+        for i in 0..12 {
+            state.record_shadow_trade(ShadowTrade {
+                entry_bar: i * 10,
+                exit_bar: i * 10 + 5,
+                entry_z: 2.0,
+                exit_z: 0.3,
+                return_bps: -20.0,
+            });
+        }
+        assert!(
+            state.should_remove(),
+            "Degraded demoted pair should be removed"
+        );
+    }
+
+    #[test]
+    fn test_shadow_pair_not_removed() {
+        let state = ShadowState::new("GS/MS".into(), 0);
+        assert!(!state.should_remove());
+    }
+
+    #[test]
+    fn test_cleanup_removes_degraded() {
+        let mut reg = ShadowRegistry::new();
+
+        let bad = reg.get_or_create("BAD/PAIR", 0);
+        bad.mode = PairMode::Demoted;
+        for i in 0..12 {
+            bad.record_shadow_trade(ShadowTrade {
+                entry_bar: i * 10,
+                exit_bar: i * 10 + 5,
+                entry_z: 2.0,
+                exit_z: 0.3,
+                return_bps: -20.0,
+            });
+        }
+
+        let _good = reg.get_or_create("GS/MS", 0);
+
+        let removed = reg.cleanup();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0], "BAD/PAIR");
+        assert_eq!(reg.pairs.len(), 1);
     }
 }
