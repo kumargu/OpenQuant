@@ -21,6 +21,7 @@
 pub mod etf_filter;
 pub mod lockfile;
 pub mod pipeline;
+pub mod regime;
 pub mod scorer;
 pub mod stats;
 #[cfg(test)]
