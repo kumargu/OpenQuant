@@ -36,7 +36,7 @@ pub struct OrderIntentRecord {
 }
 
 fn is_zero(v: &f64) -> bool {
-    *v == 0.0
+    (*v).abs() < f64::EPSILON
 }
 
 impl OrderIntentRecord {

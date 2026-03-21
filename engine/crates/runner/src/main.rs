@@ -69,6 +69,7 @@ fn main() {
         }
     };
 
+    // pair_configs() must be called before into_engine_config() which consumes cfg_file.
     let pair_configs = cfg_file.pair_configs();
     let engine_config = cfg_file.into_engine_config();
 
@@ -110,12 +111,28 @@ fn main() {
     let mut all_intents: Vec<OrderIntentRecord> = Vec::new();
     let mut single_intent_count: usize = 0;
     let mut pair_intent_count: usize = 0;
+    let mut prev_day: Option<i64> = None;
+    // Day boundary: 24h in millis. Detect when timestamp jumps by >6h gap.
+    const DAY_GAP_MS: i64 = 6 * 3600 * 1000;
 
     for (i, bar) in all_bars.iter().enumerate() {
         if i == cli.warmup_bars {
             engine.set_warmup_mode(false);
             info!("warmup complete — live signal generation enabled");
         }
+
+        // Detect day boundary and reset daily state
+        if let Some(prev) = prev_day {
+            if bar.timestamp - prev > DAY_GAP_MS {
+                engine.reset_daily();
+                pairs_engine.reset_daily();
+                info!(
+                    timestamp = bar.timestamp,
+                    "day boundary — reset daily state"
+                );
+            }
+        }
+        prev_day = Some(bar.timestamp);
 
         // Single-symbol engine
         let single_intents = engine.on_bar(bar);
