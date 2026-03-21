@@ -2,6 +2,7 @@
 //!
 //! Format: {"SYMBOL": [{"timestamp", "open", "high", "low", "close", "volume"}, ...], ...}
 
+use openquant_core::config::DataConfig;
 use openquant_core::market_data::Bar;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -9,30 +10,24 @@ use std::fs;
 use std::path::Path;
 use tracing::{info, warn};
 
-/// US equity regular trading hours in UTC.
-/// 9:30 ET = 14:30 UTC (EST) or 13:30 UTC (EDT).
-/// We use 13:30 UTC (EDT) as the earliest valid bar — conservative.
-/// 16:00 ET = 21:00 UTC (EST) or 20:00 UTC (EDT).
-/// We use 20:00 UTC (EDT) as the latest valid bar.
-const MARKET_OPEN_UTC_HOUR: u32 = 13;
-const MARKET_OPEN_UTC_MIN: u32 = 30;
-const MARKET_CLOSE_UTC_HOUR: u32 = 20;
-const MARKET_CLOSE_UTC_MIN: u32 = 0;
-
-/// Check if a timestamp falls within US equity regular trading hours.
+/// Check if a timestamp falls within configured trading hours.
 ///
-/// Uses EDT boundaries (13:30-20:00 UTC). During EST (Nov-Mar), this
-/// admits ~30 min of pre-market bars (8:30-9:00 ET). Acceptable since
-/// pre-market bars have low volume and won't trigger entries.
-fn is_regular_hours(timestamp_ms: i64) -> bool {
+/// Converts the timestamp to local time using the configured timezone offset,
+/// then checks against market_open/market_close from TOML.
+fn is_regular_hours(timestamp_ms: i64, data_config: &DataConfig) -> bool {
     debug_assert!(timestamp_ms > 0, "timestamp must be positive");
-    let secs = timestamp_ms / 1000;
-    let time_of_day = (secs % 86400) as u32; // seconds since midnight UTC
+    // Shift to local timezone
+    let local_ms = timestamp_ms + data_config.tz_offset_ms();
+    let secs = local_ms / 1000;
+    let time_of_day = ((secs % 86400 + 86400) % 86400) as u32; // handle negative modulo
     let hour = time_of_day / 3600;
     let min = (time_of_day % 3600) / 60;
 
-    let open = MARKET_OPEN_UTC_HOUR * 60 + MARKET_OPEN_UTC_MIN;
-    let close = MARKET_CLOSE_UTC_HOUR * 60 + MARKET_CLOSE_UTC_MIN;
+    let (open_h, open_m) = data_config.open_hm();
+    let (close_h, close_m) = data_config.close_hm();
+
+    let open = open_h * 60 + open_m;
+    let close = close_h * 60 + close_m;
     let current = hour * 60 + min;
 
     current >= open && current < close
@@ -50,7 +45,8 @@ struct RawBar {
 
 /// Load bars from a single JSON file.
 /// Returns bars sorted by timestamp, interleaved across symbols.
-pub fn load_day(path: &Path) -> Result<Vec<Bar>, String> {
+/// Filters out bars outside configured market hours.
+pub fn load_day(path: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, String> {
     let contents =
         fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
 
@@ -64,7 +60,7 @@ pub fn load_day(path: &Path) -> Result<Vec<Bar>, String> {
             if !rb.open.is_finite() || !rb.close.is_finite() || rb.close <= 0.0 {
                 continue; // skip corrupt bars
             }
-            if !is_regular_hours(rb.timestamp) {
+            if !is_regular_hours(rb.timestamp, data_config) {
                 filtered_count += 1;
                 continue; // skip pre-market / after-hours bars
             }
@@ -102,7 +98,7 @@ pub fn load_day(path: &Path) -> Result<Vec<Bar>, String> {
 
 /// Load bars from all matching files in a directory.
 /// Glob pattern: experiment_bars_*.json (excluding 5min/15min variants).
-pub fn load_days(dir: &Path) -> Result<Vec<Bar>, String> {
+pub fn load_days(dir: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, String> {
     let mut all_bars = Vec::new();
     let mut files: Vec<_> = fs::read_dir(dir)
         .map_err(|e| format!("Failed to read dir {}: {e}", dir.display()))?
@@ -124,7 +120,7 @@ pub fn load_days(dir: &Path) -> Result<Vec<Bar>, String> {
     }
 
     for entry in &files {
-        match load_day(&entry.path()) {
+        match load_day(&entry.path(), data_config) {
             Ok(bars) => all_bars.extend(bars),
             Err(e) => warn!("Skipping {}: {e}", entry.path().display()),
         }

@@ -47,11 +47,57 @@ impl Default for MetricsConfig {
 }
 
 /// Data-level settings.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DataConfig {
     /// Maximum bar age in seconds (0 = disabled).
     pub max_bar_age_seconds: i64,
+    /// UTC offset for the trading timezone in hours (e.g., -5 for US Eastern EST, -4 for EDT).
+    /// Used for VWAP session reset and day boundary detection.
+    pub timezone_offset_hours: i32,
+    /// Market open time as "HH:MM" in local timezone. Bars before this are filtered.
+    pub market_open: String,
+    /// Market close time as "HH:MM" in local timezone. Bars at or after this are filtered.
+    pub market_close: String,
+}
+
+impl Default for DataConfig {
+    fn default() -> Self {
+        Self {
+            max_bar_age_seconds: 0,
+            timezone_offset_hours: -5,
+            market_open: "09:30".into(),
+            market_close: "16:00".into(),
+        }
+    }
+}
+
+impl DataConfig {
+    /// Parse market_open "HH:MM" into (hour, minute).
+    pub fn open_hm(&self) -> (u32, u32) {
+        parse_hm(&self.market_open)
+    }
+
+    /// Parse market_close "HH:MM" into (hour, minute).
+    pub fn close_hm(&self) -> (u32, u32) {
+        parse_hm(&self.market_close)
+    }
+
+    /// Timezone offset in milliseconds.
+    pub fn tz_offset_ms(&self) -> i64 {
+        self.timezone_offset_hours as i64 * 3600 * 1000
+    }
+}
+
+fn parse_hm(s: &str) -> (u32, u32) {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() == 2 {
+        let h = parts[0].parse().unwrap_or(9);
+        let m = parts[1].parse().unwrap_or(30);
+        (h, m)
+    } else {
+        (9, 30)
+    }
 }
 
 impl ConfigFile {
@@ -92,6 +138,7 @@ impl ConfigFile {
             max_bar_age_ms: self.data.max_bar_age_seconds * 1000,
             metrics_enabled: self.metrics.enabled,
             warmup_bars: 64, // default for 1-min bars; override via Engine kwargs
+            timezone_offset_hours: self.data.timezone_offset_hours,
         }
     }
 
