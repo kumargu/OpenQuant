@@ -221,8 +221,8 @@ impl PairState {
 
             // Exit condition: stop loss (spread diverged FURTHER from entry, not reverted past)
             let stopped = match self.position {
-                PairPosition::LongSpread => z < -config.stop_z,   // entered negative, got more negative
-                PairPosition::ShortSpread => z > config.stop_z,    // entered positive, got more positive
+                PairPosition::LongSpread => z < -config.stop_z, // entered negative, got more negative
+                PairPosition::ShortSpread => z > config.stop_z, // entered positive, got more positive
                 PairPosition::Flat => false,
             };
 
@@ -239,7 +239,13 @@ impl PairState {
                 };
 
                 let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
-                let exit_reason = if stopped { "stop" } else if max_held { "max_hold" } else { "reversion" };
+                let exit_reason = if stopped {
+                    "stop"
+                } else if max_held {
+                    "max_hold"
+                } else {
+                    "reversion"
+                };
 
                 // Use error! for stop loss (risk event), warn! for max hold, info! for reversion
                 if stopped {
@@ -284,7 +290,8 @@ impl PairState {
                 z = format!("{:.2}", z).as_str(),
                 spread = format!("{:.6}", spread).as_str(),
                 "pairs: ENTRY long spread (buy {}, sell {})",
-                config.leg_a, config.leg_b,
+                config.leg_a,
+                config.leg_b,
             );
 
             self.position = PairPosition::LongSpread;
@@ -323,7 +330,8 @@ impl PairState {
                 z = format!("{:.2}", z).as_str(),
                 spread = format!("{:.6}", spread).as_str(),
                 "pairs: ENTRY short spread (sell {}, buy {})",
-                config.leg_a, config.leg_b,
+                config.leg_a,
+                config.leg_b,
             );
 
             self.position = PairPosition::ShortSpread;
@@ -476,7 +484,10 @@ mod tests {
         for i in 0..10 {
             let _ = state.on_price("GLD", 420.0 + i as f64 * 0.1, &config);
             let intents = state.on_price("SLV", 64.0 + i as f64 * 0.01, &config);
-            assert!(intents.is_empty(), "should not signal during warmup (bar {i})");
+            assert!(
+                intents.is_empty(),
+                "should not signal during warmup (bar {i})"
+            );
         }
     }
 
@@ -493,7 +504,7 @@ mod tests {
             leg_a: "A".into(),
             leg_b: "B".into(),
             beta: 1.0,
-            entry_z: 1.5,  // easy to trigger
+            entry_z: 1.5, // easy to trigger
             exit_z: 0.3,
             stop_z: 5.0,
             lookback: 32,

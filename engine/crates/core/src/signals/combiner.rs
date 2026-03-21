@@ -298,7 +298,11 @@ impl Strategy for StrategyCombiner {
 
         // Gate: require minimum number of strategies to vote
         if num_voters < self.min_strategies {
-            debug!(num_voters, min = self.min_strategies, "combiner: too few voters");
+            debug!(
+                num_voters,
+                min = self.min_strategies,
+                "combiner: too few voters"
+            );
             return None;
         }
 
