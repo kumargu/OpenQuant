@@ -70,6 +70,7 @@ fn main() {
         }
     };
 
+    let pairs_trading_config = cfg_file.pairs_trading.clone();
     let engine_config = cfg_file.into_engine_config();
 
     // ── Initialize engines ──
@@ -81,10 +82,15 @@ fn main() {
 
     let mut pairs_engine = if active_pairs_path.exists() {
         info!(path = %active_pairs_path.display(), "loading active pairs");
-        PairsEngine::from_active_pairs(&active_pairs_path, &history_path, vec![])
+        PairsEngine::from_active_pairs(
+            &active_pairs_path,
+            &history_path,
+            vec![],
+            pairs_trading_config,
+        )
     } else {
         warn!("no active_pairs.json found — running single-symbol engine only");
-        PairsEngine::new(vec![])
+        PairsEngine::new(vec![], pairs_trading_config)
     };
 
     info!(pairs = pairs_engine.pair_count(), "engines initialized");

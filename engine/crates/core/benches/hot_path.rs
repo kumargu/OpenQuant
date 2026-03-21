@@ -12,7 +12,7 @@ use openquant_core::exit::{ExitConfig, OpenPosition};
 use openquant_core::features::FeatureState;
 use openquant_core::features::regime::MarketRegime;
 use openquant_core::market_data::Bar;
-use openquant_core::pairs::{PairConfig, PairState};
+use openquant_core::pairs::{PairConfig, PairState, PairsTradingConfig};
 use openquant_core::risk::{self, BayesianKellyState, RiskConfig, RiskState};
 use openquant_core::signals::mean_reversion::{Config as SignalConfig, MeanReversion};
 use openquant_core::signals::{Side, SignalOutput, SignalReason, Strategy};
@@ -225,19 +225,14 @@ fn bench_pairs_on_price_no_signal(c: &mut Criterion) {
         leg_b: "B".into(),
         alpha: 0.0,
         beta: 1.0,
-        entry_z: 2.0,
-        exit_z: 0.5,
-        stop_z: 4.0,
-        lookback: 32,
-        max_hold_bars: 150,
-        notional_per_leg: 10_000.0,
     };
+    let trading = PairsTradingConfig::default();
     let mut state = PairState::new();
 
     // Warmup
     for i in 0..40 {
-        state.on_price("A", 100.0 + (i as f64) * 0.01, &config);
-        state.on_price("B", 100.0 + (i as f64) * 0.01, &config);
+        state.on_price("A", 100.0 + (i as f64) * 0.01, &config, &trading, 0);
+        state.on_price("B", 100.0 + (i as f64) * 0.01, &config, &trading, 0);
     }
 
     let mut idx = 0;
@@ -245,8 +240,8 @@ fn bench_pairs_on_price_no_signal(c: &mut Criterion) {
         b.iter(|| {
             // Small price variation — no signal expected
             let offset = (idx % 100) as f64 * 0.001;
-            black_box(state.on_price("A", 100.0 + offset, &config));
-            black_box(state.on_price("B", 100.0 + offset, &config));
+            black_box(state.on_price("A", 100.0 + offset, &config, &trading, 0));
+            black_box(state.on_price("B", 100.0 + offset, &config, &trading, 0));
             idx += 1;
         })
     });
@@ -258,12 +253,13 @@ fn bench_pairs_on_price_with_signal(c: &mut Criterion) {
         leg_b: "B".into(),
         alpha: 0.0,
         beta: 1.0,
+    };
+    let trading = PairsTradingConfig {
         entry_z: 1.5,
         exit_z: 0.3,
         stop_z: 5.0,
-        lookback: 32,
-        max_hold_bars: 150,
-        notional_per_leg: 10_000.0,
+        min_hold_bars: 0,
+        ..PairsTradingConfig::default()
     };
 
     c.bench_function("pairs_on_price_with_signal", |b| {
@@ -271,16 +267,16 @@ fn bench_pairs_on_price_with_signal(c: &mut Criterion) {
             let mut state = PairState::new();
             // Warmup
             for _ in 0..35 {
-                state.on_price("A", 100.0, &config);
-                state.on_price("B", 100.0, &config);
+                state.on_price("A", 100.0, &config, &trading, 0);
+                state.on_price("B", 100.0, &config, &trading, 0);
             }
             // Trigger entry
-            state.on_price("A", 90.0, &config);
-            let entry = state.on_price("B", 100.0, &config);
+            state.on_price("A", 90.0, &config, &trading, 0);
+            let entry = state.on_price("B", 100.0, &config, &trading, 0);
             black_box(&entry);
             // Trigger exit
-            state.on_price("A", 100.0, &config);
-            let exit = state.on_price("B", 100.0, &config);
+            state.on_price("A", 100.0, &config, &trading, 0);
+            let exit = state.on_price("B", 100.0, &config, &trading, 0);
             black_box(&exit);
         })
     });
