@@ -12,6 +12,23 @@ This is mandatory — never create a PR without starting the monitor loop.
 
 Every PR that touches signals, risk, or strategy must include a backtest comparison table in the description. Run `python -m paper_trading.benchmark --compare` to generate it.
 
+## Epic workflow — reviewer ↔ coder chain
+
+Epics use GitHub labels (`epic/<name>`) to chain work between sessions:
+
+### Coder session
+- Poll for open issues with your epic label: `gh issue list --label "epic/<name>" --state open`
+- Pick the next unassigned issue, work it, raise a PR referencing the issue
+- After PR is merged, check for new issues tagged to the epic (reviewer may have filed follow-ups or bugs found during review)
+
+### Reviewer session
+- When filing follow-up issues or bugs found during review, **always tag with the epic label**: `gh issue edit <number> --add-label "epic/<name>"`
+- This ensures the coder session picks them up automatically on its next poll
+- Reference the parent epic issue in the body so context is traceable
+
+### Active epics
+- `epic/pair-discovery` — Pair discovery system (#117). Follow-ups: #129, #134, #136
+
 ## Reviewer mode
 
 When reviewing PRs (e.g., from another Claude session or Codex), enforce these standards:
