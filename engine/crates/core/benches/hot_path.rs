@@ -223,6 +223,7 @@ fn bench_pairs_on_price_no_signal(c: &mut Criterion) {
     let config = PairConfig {
         leg_a: "A".into(),
         leg_b: "B".into(),
+        alpha: 0.0,
         beta: 1.0,
         entry_z: 2.0,
         exit_z: 0.5,
@@ -255,6 +256,7 @@ fn bench_pairs_on_price_with_signal(c: &mut Criterion) {
     let config = PairConfig {
         leg_a: "A".into(),
         leg_b: "B".into(),
+        alpha: 0.0,
         beta: 1.0,
         entry_z: 1.5,
         exit_z: 0.3,

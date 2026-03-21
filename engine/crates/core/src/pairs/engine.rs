@@ -14,6 +14,15 @@ use super::{PairConfig, PairOrderIntent, PairPosition, PairState};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+/// Canonical pair ID — alphabetically ordered to match Thompson sampling's pair_id().
+fn canonical_pair_id(a: &str, b: &str) -> String {
+    if a <= b {
+        format!("{a}/{b}")
+    } else {
+        format!("{b}/{a}")
+    }
+}
+
 /// The pairs trading engine. Manages multiple pair states.
 pub struct PairsEngine {
     /// Each pair has its config and mutable state.
@@ -96,21 +105,34 @@ impl PairsEngine {
 
         let old_count = self.pairs.len();
 
-        // Build set of new pair IDs
-        let new_ids: std::collections::HashSet<String> = new_configs
+        // Build map of new configs by pair_id for O(1) lookup
+        let new_configs_map: std::collections::HashMap<String, &PairConfig> = new_configs
             .iter()
-            .map(|c| format!("{}/{}", c.leg_a, c.leg_b))
+            .map(|c| (canonical_pair_id(&c.leg_a, &c.leg_b), c))
             .collect();
 
-        // Handle removed pairs: tighten stops on open positions
+        // Update existing pairs: refresh beta/alpha, or tighten stops if removed
         for (config, state) in &mut self.pairs {
-            let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
-            if !new_ids.contains(&pair_id) && state.position() != PairPosition::Flat {
+            let pair_id = canonical_pair_id(&config.leg_a, &config.leg_b);
+            if let Some(new_cfg) = new_configs_map.get(&pair_id) {
+                // Pair still active — refresh hedge ratio (daily beta recalibration)
+                if (config.beta - new_cfg.beta).abs() > 1e-6
+                    || (config.alpha - new_cfg.alpha).abs() > 1e-6
+                {
+                    info!(
+                        pair = pair_id.as_str(),
+                        old_beta = format!("{:.4}", config.beta).as_str(),
+                        new_beta = format!("{:.4}", new_cfg.beta).as_str(),
+                        "Refreshed hedge ratio from active_pairs.json"
+                    );
+                    config.alpha = new_cfg.alpha;
+                    config.beta = new_cfg.beta;
+                }
+            } else if state.position() != PairPosition::Flat {
                 info!(
                     pair = pair_id.as_str(),
                     "Pair removed from active list — tightening stops for graceful exit"
                 );
-                // Tighten: close on any z-score reversion, halve stop distance
                 config.exit_z = 0.0;
                 config.stop_z /= 2.0;
             }
@@ -118,8 +140,9 @@ impl PairsEngine {
 
         // Remove pairs that are flat AND not in new configs
         self.pairs.retain(|(config, state)| {
-            let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
-            let keep = new_ids.contains(&pair_id) || state.position() != PairPosition::Flat;
+            let pair_id = canonical_pair_id(&config.leg_a, &config.leg_b);
+            let keep =
+                new_configs_map.contains_key(&pair_id) || state.position() != PairPosition::Flat;
             if !keep {
                 info!(pair = pair_id.as_str(), "Removed flat pair");
             }
@@ -130,11 +153,11 @@ impl PairsEngine {
         let existing_ids: std::collections::HashSet<String> = self
             .pairs
             .iter()
-            .map(|(c, _)| format!("{}/{}", c.leg_a, c.leg_b))
+            .map(|(c, _)| canonical_pair_id(&c.leg_a, &c.leg_b))
             .collect();
 
         for config in new_configs {
-            let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
+            let pair_id = canonical_pair_id(&config.leg_a, &config.leg_b);
             if !existing_ids.contains(&pair_id) {
                 info!(
                     pair = pair_id.as_str(),
@@ -219,6 +242,7 @@ mod tests {
         PairConfig {
             leg_a: "GLD".into(),
             leg_b: "SLV".into(),
+            alpha: 0.0,
             beta: 0.37,
             entry_z: 2.0,
             exit_z: 0.5,
@@ -233,6 +257,7 @@ mod tests {
         PairConfig {
             leg_a: "C".into(),
             leg_b: "JPM".into(),
+            alpha: 0.0,
             beta: 1.39,
             entry_z: 2.0,
             exit_z: 0.5,
