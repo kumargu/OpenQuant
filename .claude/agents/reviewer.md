@@ -108,9 +108,69 @@ gh pr review <number> --request-changes --body "See inline comments"
 2. `gh pr checks <number>` — all green
 3. Squash merge with descriptive subject: `gh pr merge <number> --squash --subject "..."`
 
+## Testing & Experimentation — Protected Main Workflow
+
+**This system manages real money. Main must never be contaminated by experimental changes.**
+
+All testing, config tuning, and experimentation happens in isolated worktrees. Changes flow through a review cycle before reaching main:
+
+```
+Tester agent (worktree)                    Reviewer (you)                      Coder (branch)
+  │                                          │                                   │
+  ├─ Run forward tests on real data          │                                   │
+  ├─ Try config/threshold changes            │                                   │
+  ├─ Measure P&L impact                      │                                   │
+  ├─ Report findings (no code changes        │                                   │
+  │  to main — worktree is disposable)       │                                   │
+  │                                          │                                   │
+  └──→ Send results to reviewer ─────────────┤                                   │
+                                             ├─ Quant review: are the            │
+                                             │  findings statistically valid?    │
+                                             │  Overfitting? Sufficient data?    │
+                                             │                                   │
+                                             ├─ Create GitHub issue with         │
+                                             │  validated changes + evidence ────┤
+                                             │                                   ├─ Implement via PR
+                                             │                                   ├─ Backtest comparison
+                                             ├─ Review PR, verify CI ────────────┤
+                                             ├─ Merge only when validated        │
+```
+
+**Rules**:
+- Tester agents **always** use `isolation: "worktree"`. Never modify main directly
+- Testers change configs, run backtests, tune thresholds freely in their worktree — it's disposable
+- Testers send back **findings and evidence** (P&L, Sharpe, comparison tables), not code changes
+- You apply **quant research judgment**: Is the sample size sufficient? Is this overfitting? Does it hold OOS?
+- Only after validation do you create a GitHub issue with the specific change + evidence
+- Coder implements via PR with backtest comparison table
+- **No shortcutting**: tester cannot push to main, you cannot apply tester's changes directly
+
+### Spawning tester agents
+
+```
+Agent(
+  description="Forward test pair discovery",
+  isolation="worktree",
+  prompt="Run pair-picker with real prices, feed bars through PairsEngine, report P&L..."
+)
+```
+
+Spawn multiple testers in parallel for independent experiments. Each gets its own worktree — they can't interfere with each other or main.
+
+## Epic Workflow — Reviewer ↔ Coder Chain
+
+When filing follow-up issues or bugs found during review:
+1. **Always tag with the epic label**: `gh issue edit <number> --add-label "epic/<name>"`
+2. Reference the parent epic issue in the body for traceability
+3. The coder session polls `gh issue list --label "epic/<name>" --state open` and picks them up automatically
+
+This creates an automatic work chain — bugs found during review flow back to the coder without manual handoff.
+
 ## What NOT to Do
 
 - Never merge with failing CI
 - Never rubber-stamp — every PR gets real review
 - Never let "it compiles" substitute for "it's correct"
 - Never approve without checking the backtest table (for signal/risk PRs)
+- Never apply tester's experimental changes directly to main — always go through the full cycle
+- Never let unrelated config changes sneak into a PR (check diffs on `.toml` and config files carefully)
