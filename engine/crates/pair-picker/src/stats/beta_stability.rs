@@ -1,0 +1,252 @@
+//! Beta (hedge ratio) stability analysis.
+//!
+//! Two complementary checks:
+//! 1. **Rolling window**: compute beta over rolling 60-day windows, check std/mean < 0.20
+//! 2. **Structural break detection**: max mean-shift test on rolling betas
+
+use super::ols::ols_simple;
+
+/// Result of beta stability analysis.
+#[derive(Debug, Clone)]
+pub struct BetaStabilityResult {
+    /// Current beta (from full-sample OLS).
+    pub beta: f64,
+    /// Mean of rolling betas.
+    pub rolling_mean: f64,
+    /// Std of rolling betas.
+    pub rolling_std: f64,
+    /// Coefficient of variation: std / |mean|.
+    pub cv: f64,
+    /// Whether beta is stable (cv < threshold).
+    pub is_stable: bool,
+    /// Whether a structural break was detected in the hedge ratio.
+    pub structural_break: bool,
+    /// Number of rolling windows computed.
+    pub n_windows: usize,
+}
+
+/// Maximum acceptable coefficient of variation for beta.
+pub const MAX_BETA_CV: f64 = 0.20;
+
+/// Rolling window size for beta estimation.
+pub const ROLLING_WINDOW: usize = 60;
+
+/// Check beta stability using rolling windows and structural break detection.
+///
+/// `log_prices_a` and `log_prices_b` are log-prices of the two legs.
+pub fn check_beta_stability(
+    log_prices_a: &[f64],
+    log_prices_b: &[f64],
+) -> Option<BetaStabilityResult> {
+    let n = log_prices_a.len().min(log_prices_b.len());
+    if n < ROLLING_WINDOW + 10 {
+        return None;
+    }
+
+    // Full-sample beta
+    let full_ols = ols_simple(log_prices_b, log_prices_a)?;
+    let beta = full_ols.beta;
+
+    // Rolling betas
+    let n_windows = n - ROLLING_WINDOW + 1;
+    let mut rolling_betas = Vec::with_capacity(n_windows);
+
+    for start in 0..n_windows {
+        let end = start + ROLLING_WINDOW;
+        let x = &log_prices_b[start..end];
+        let y = &log_prices_a[start..end];
+        if let Some(result) = ols_simple(x, y) {
+            rolling_betas.push(result.beta);
+        }
+    }
+
+    if rolling_betas.is_empty() {
+        return None;
+    }
+
+    let rb_n = rolling_betas.len() as f64;
+    let rolling_mean: f64 = rolling_betas.iter().sum::<f64>() / rb_n;
+    let rolling_std = {
+        let var = rolling_betas
+            .iter()
+            .map(|b| (b - rolling_mean).powi(2))
+            .sum::<f64>()
+            / (rb_n - 1.0); // sample variance (Bessel's correction)
+        var.sqrt()
+    };
+
+    let cv = if rolling_mean.abs() > 1e-10 {
+        rolling_std / rolling_mean.abs()
+    } else {
+        f64::INFINITY
+    };
+
+    let structural_break = structural_break_test(&rolling_betas);
+
+    let is_stable = cv < MAX_BETA_CV && !structural_break;
+
+    Some(BetaStabilityResult {
+        beta,
+        rolling_mean,
+        rolling_std,
+        cv,
+        is_stable,
+        structural_break,
+        n_windows: rolling_betas.len(),
+    })
+}
+
+/// Structural break detection for hedge ratio via maximum mean-shift test.
+///
+/// We chose a mean-shift test over classical CUSUM or Chow F-test because
+/// rolling-window betas have strong serial correlation (overlapping windows),
+/// which inflates CUSUM statistics and Chow F-statistics, producing false
+/// positives on stable relationships. A mean-shift test with an *economic*
+/// significance threshold avoids this.
+///
+/// Algorithm: for each candidate split point k (20%-80% of series), compute
+/// |mean(series[..k]) - mean(series[k..])| / |overall_mean|. If this ratio
+/// exceeds the threshold, the beta has shifted enough to invalidate the pair.
+///
+/// The 15% threshold was chosen empirically:
+/// - A beta shift from 1.5 to 1.3 (13%) is noise in rolling windows
+/// - A beta shift from 1.5 to 1.2 (20%) means the pair relationship changed
+/// - 15% balances sensitivity vs false positives on backtested pairs
+///
+/// A proper Chow F-test would require correcting for autocorrelation in
+/// overlapping windows (Newey-West HAC), adding complexity with minimal
+/// benefit since the economic significance filter already handles the
+/// relevant failure mode (silent regime shifts that lose money).
+fn structural_break_test(series: &[f64]) -> bool {
+    let n = series.len();
+    if n < 20 {
+        return false;
+    }
+
+    let n_f = n as f64;
+    let mean: f64 = series.iter().sum::<f64>() / n_f;
+
+    if mean.abs() < 1e-15 {
+        return false;
+    }
+
+    // Check max shift across multiple split points (20%-80%)
+    let start = (n_f * 0.2) as usize;
+    let end = (n_f * 0.8) as usize;
+    let total_sum: f64 = series.iter().sum();
+    let mut max_shift_pct = 0.0_f64;
+
+    let mut prefix_sum = 0.0;
+    for (i, val) in series.iter().enumerate() {
+        prefix_sum += val;
+        if i >= start && i < end {
+            let n1 = (i + 1) as f64;
+            let n2 = (n - i - 1) as f64;
+            let mean1 = prefix_sum / n1;
+            let mean2 = (total_sum - prefix_sum) / n2;
+            // Economic significance: shift as fraction of mean
+            let shift_pct = ((mean1 - mean2) / mean.abs()).abs();
+            max_shift_pct = max_shift_pct.max(shift_pct);
+        }
+    }
+
+    // Break detected if beta shifts by more than 15% of its mean value
+    // This catches genuine regime changes (e.g., beta going from 1.5 to 0.5)
+    // while ignoring tiny statistical fluctuations
+    max_shift_pct > 0.15
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stable_beta() {
+        // Two series with a stable relationship: a = 1.5 * b + noise
+        let n = 200;
+        let mut log_a = Vec::with_capacity(n);
+        let mut log_b = Vec::with_capacity(n);
+        let mut state: u64 = 42;
+        let mut b_val = 4.0; // ln(~55)
+
+        for _ in 0..n {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let noise_b = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.01;
+            b_val += noise_b;
+            log_b.push(b_val);
+
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let noise_a = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.005;
+            log_a.push(1.5 * b_val + noise_a);
+        }
+
+        let result = check_beta_stability(&log_a, &log_b).unwrap();
+        assert!(
+            result.is_stable,
+            "cv={}, structural_break={}",
+            result.cv, result.structural_break
+        );
+        assert!((result.beta - 1.5).abs() < 0.1, "beta={}", result.beta);
+        assert!(result.cv < MAX_BETA_CV, "cv={}", result.cv);
+    }
+
+    #[test]
+    fn test_structural_break() {
+        // Beta changes from 1.5 to 0.5 halfway through
+        let n = 200;
+        let mut log_a = Vec::with_capacity(n);
+        let mut log_b = Vec::with_capacity(n);
+        let mut state: u64 = 42;
+        let mut b_val = 4.0;
+
+        for i in 0..n {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let noise_b = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.01;
+            b_val += noise_b;
+            log_b.push(b_val);
+
+            let beta = if i < n / 2 { 1.5 } else { 0.5 };
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let noise_a = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.005;
+            log_a.push(beta * b_val + noise_a);
+        }
+
+        let result = check_beta_stability(&log_a, &log_b).unwrap();
+        // Should detect instability via either CV or CUSUM
+        assert!(
+            !result.is_stable,
+            "cv={}, structural_break={}",
+            result.cv, result.structural_break
+        );
+    }
+
+    #[test]
+    fn test_too_short() {
+        let a = vec![1.0; 50];
+        let b = vec![1.0; 50];
+        assert!(check_beta_stability(&a, &b).is_none());
+    }
+
+    #[test]
+    fn test_no_structural_break() {
+        // Constant series
+        let series = vec![1.0; 50];
+        assert!(!structural_break_test(&series));
+    }
+
+    #[test]
+    fn test_structural_break_detected() {
+        // Clear level shift
+        let mut series = vec![0.0; 50];
+        series.extend(vec![5.0; 50]);
+        assert!(structural_break_test(&series));
+    }
+}
