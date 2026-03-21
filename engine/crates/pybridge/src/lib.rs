@@ -709,6 +709,70 @@ fn load_config(config_path: &str) -> PyResult<String> {
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("serialize error: {e}")))
 }
 
+/// Python wrapper for the pairs trading engine.
+///
+/// Usage:
+///   pairs = openquant.PairsEngine.from_toml("openquant.toml")
+///   intents = pairs.on_bar("GLD", timestamp, 420.0)
+#[pyclass(name = "PairsEngine")]
+struct PairsEngineWrapper {
+    inner: openquant_core::pairs::engine::PairsEngine,
+}
+
+#[pymethods]
+impl PairsEngineWrapper {
+    /// Create from TOML config file. Reads [[pairs]] sections.
+    #[staticmethod]
+    fn from_toml(config_path: &str) -> PyResult<Self> {
+        let cfg_file = openquant_core::config::ConfigFile::load(std::path::Path::new(config_path))
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let pair_configs = cfg_file.pair_configs();
+
+        if pair_configs.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "No [[pairs]] sections found in config file",
+            ));
+        }
+
+        Ok(Self {
+            inner: openquant_core::pairs::engine::PairsEngine::new(pair_configs),
+        })
+    }
+
+    /// Process a bar. Returns list of order intent dicts (0 or 2 per signal).
+    fn on_bar(&mut self, py: Python<'_>, symbol: &str, timestamp: i64, close: f64) -> PyResult<Vec<PyObject>> {
+        let intents = self.inner.on_bar(symbol, timestamp, close);
+
+        intents
+            .into_iter()
+            .map(|intent| {
+                let dict = PyDict::new(py);
+                dict.set_item("symbol", &intent.symbol)?;
+                dict.set_item("side", match intent.side {
+                    Side::Buy => "buy",
+                    Side::Sell => "sell",
+                })?;
+                dict.set_item("qty", intent.qty)?;
+                dict.set_item("reason", intent.reason.describe())?;
+                dict.set_item("pair_id", &intent.pair_id)?;
+                dict.set_item("z_score", intent.z_score)?;
+                dict.set_item("spread", intent.spread)?;
+                Ok(dict.into())
+            })
+            .collect()
+    }
+
+    /// Number of configured pairs.
+    fn pair_count(&self) -> usize {
+        self.inner.pair_count()
+    }
+
+    /// Reset daily state.
+    fn reset_daily(&mut self) {
+        self.inner.reset_daily();
+    }
+}
+
 #[pymodule]
 fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize tracing — logs to both stderr and data/journal/engine.log.
@@ -729,6 +793,7 @@ fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
         .try_init();
 
     m.add_class::<Engine>()?;
+    m.add_class::<PairsEngineWrapper>()?;
     m.add_function(wrap_pyfunction!(backtest, m)?)?;
     m.add_function(wrap_pyfunction!(backtest_toml, m)?)?;
     m.add_function(wrap_pyfunction!(validate_bars, m)?)?;

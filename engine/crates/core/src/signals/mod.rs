@@ -56,6 +56,8 @@ pub enum SignalReason {
     StopLoss,
     TakeProfit,
     MaxHoldTime,
+    PairsEntry,
+    PairsExit,
 }
 
 impl SignalReason {
@@ -72,6 +74,8 @@ impl SignalReason {
             Self::StopLoss => "stop loss: price dropped below threshold",
             Self::TakeProfit => "take profit: price rose above threshold",
             Self::MaxHoldTime => "max hold time: position held too long",
+            Self::PairsEntry => "pairs entry: spread z-score exceeded threshold",
+            Self::PairsExit => "pairs exit: spread reverted to mean",
         }
     }
 }
