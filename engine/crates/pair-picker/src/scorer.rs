@@ -6,7 +6,28 @@
 //! - Beta stability: lower CV → higher score
 //! - R² of hedge ratio: higher → higher score
 
-/// Compute composite score from validation results.
+/// Configurable scoring weights. Will be superseded by Thompson sampling (#119),
+/// but kept configurable so they can be tuned via CLI or config file in the meantime.
+#[derive(Debug, Clone)]
+pub struct ScoringConfig {
+    pub w_cointegration: f64,
+    pub w_half_life: f64,
+    pub w_stability: f64,
+    pub w_fit: f64,
+}
+
+impl Default for ScoringConfig {
+    fn default() -> Self {
+        Self {
+            w_cointegration: 0.35,
+            w_half_life: 0.25,
+            w_stability: 0.25,
+            w_fit: 0.15,
+        }
+    }
+}
+
+/// Compute composite score from validation results using default weights.
 ///
 /// Returns a score in [0, 1] where higher = better pair.
 pub fn compute_score(
@@ -15,6 +36,25 @@ pub fn compute_score(
     beta_cv: f64,
     r_squared: f64,
     structural_break: bool,
+) -> f64 {
+    compute_score_with_config(
+        adf_pvalue,
+        half_life,
+        beta_cv,
+        r_squared,
+        structural_break,
+        &ScoringConfig::default(),
+    )
+}
+
+/// Compute composite score with custom weights.
+pub fn compute_score_with_config(
+    adf_pvalue: f64,
+    half_life: f64,
+    beta_cv: f64,
+    r_squared: f64,
+    structural_break: bool,
+    config: &ScoringConfig,
 ) -> f64 {
     let coint_score = cointegration_score(adf_pvalue);
     let hl_score = half_life_score(half_life);
@@ -25,16 +65,10 @@ pub fn compute_score(
         0.0
     };
 
-    // Weighted combination
-    const W_COINT: f64 = 0.35;
-    const W_HALFLIFE: f64 = 0.25;
-    const W_STABILITY: f64 = 0.25;
-    const W_FIT: f64 = 0.15;
-
-    let raw = W_COINT * coint_score
-        + W_HALFLIFE * hl_score
-        + W_STABILITY * stability_score
-        + W_FIT * fit_score;
+    let raw = config.w_cointegration * coint_score
+        + config.w_half_life * hl_score
+        + config.w_stability * stability_score
+        + config.w_fit * fit_score;
 
     raw.clamp(0.0, 1.0)
 }
@@ -145,5 +179,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_custom_config() {
+        let config = ScoringConfig {
+            w_cointegration: 1.0,
+            w_half_life: 0.0,
+            w_stability: 0.0,
+            w_fit: 0.0,
+        };
+        let score = compute_score_with_config(0.001, 50.0, 1.0, 0.0, false, &config);
+        // Only cointegration matters, and p=0.001 → 1.0
+        assert!((score - 1.0).abs() < 0.01, "score={score}");
+    }
+
+    #[test]
+    fn test_nan_r_squared() {
+        let score = compute_score(0.01, 10.0, 0.05, f64::NAN, false);
+        assert!(score.is_finite(), "NaN R² should not produce NaN score");
     }
 }

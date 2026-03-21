@@ -130,20 +130,22 @@ fn main() {
 }
 
 fn find_data_dir() -> PathBuf {
-    // Walk up from CWD to find the data/ directory
+    // Walk up from CWD to find the data/ directory (max 5 levels to avoid
+    // walking to filesystem root from unexpected directories).
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    loop {
+    for _ in 0..5 {
         let data = dir.join("data");
         if data.is_dir() {
             return data;
         }
         if !dir.pop() {
-            // Fallback: use CWD/data
-            return std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join("data");
+            break;
         }
     }
+    // Fallback: use CWD/data
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("data")
 }
 
 /// Load price data from a JSON file.

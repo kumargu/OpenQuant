@@ -27,6 +27,9 @@ use tracing::{info, warn};
 /// Minimum number of daily bars required for validation.
 pub const MIN_HISTORY_BARS: usize = 200;
 
+/// Minimum R² for the hedge ratio OLS — below this the beta is meaningless noise.
+pub const MIN_R_SQUARED: f64 = 0.50;
+
 /// Price data for a single symbol: ordered daily close prices.
 pub type PriceData = Vec<f64>;
 
@@ -34,7 +37,8 @@ pub type PriceData = Vec<f64>;
 pub trait PriceProvider {
     /// Get daily close prices for a symbol.
     /// Returns at least `MIN_HISTORY_BARS` prices, ordered oldest-to-newest.
-    fn get_prices(&self, symbol: &str) -> Option<PriceData>;
+    /// Returns a reference to avoid cloning 500+ f64s per pair.
+    fn get_prices(&self, symbol: &str) -> Option<&[f64]>;
 }
 
 /// In-memory price provider for testing.
@@ -43,8 +47,8 @@ pub struct InMemoryPrices {
 }
 
 impl PriceProvider for InMemoryPrices {
-    fn get_prices(&self, symbol: &str) -> Option<PriceData> {
-        self.data.get(symbol).cloned()
+    fn get_prices(&self, symbol: &str) -> Option<&[f64]> {
+        self.data.get(symbol).map(|v| v.as_slice())
     }
 }
 
@@ -136,8 +140,17 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         }
     };
 
+    result.alpha = Some(ols.alpha);
     result.beta = Some(ols.beta);
     result.beta_r_squared = Some(ols.r_squared);
+
+    // Step 3b: Minimum R² — below this the hedge ratio is meaningless noise
+    if ols.r_squared < MIN_R_SQUARED {
+        result.rejection_reasons.push(format!(
+            "R²={:.3} below minimum {MIN_R_SQUARED}",
+            ols.r_squared
+        ));
+    }
 
     // Step 4: Engle-Granger cointegration
     // Spread = log_a - beta * log_b (intentionally omitting OLS intercept alpha).
@@ -220,10 +233,12 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         result.structural_break,
     );
 
-    // Pass criteria: cointegrated + valid half-life + stable beta
+    // Pass criteria: cointegrated + valid half-life + stable beta + adequate R²
+    let r_squared_ok = result.beta_r_squared.unwrap_or(0.0) >= MIN_R_SQUARED;
     result.passed = result.is_cointegrated
         && result.half_life_valid
         && result.beta_stable
+        && r_squared_ok
         && !result.etf_excluded;
 
     result

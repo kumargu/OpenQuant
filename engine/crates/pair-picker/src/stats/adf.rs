@@ -58,9 +58,10 @@ pub fn adf_test(series: &[f64], max_lags: Option<usize>, engle_granger: bool) ->
     });
 
     let mut best_aic = f64::INFINITY;
-    let mut best_lag = 1;
+    let mut best_lag = 0;
 
-    for p in 1..=max_p {
+    // Start from 0 lags (basic Dickey-Fuller) — optimal for clean spreads
+    for p in 0..=max_p {
         if let Some(aic) = adf_aic(series, p) {
             if aic < best_aic {
                 best_aic = aic;

@@ -29,6 +29,9 @@ pub struct PairCandidatesFile {
 pub struct ActivePair {
     pub leg_a: String,
     pub leg_b: String,
+    /// OLS intercept: log_a = alpha + beta * log_b.
+    /// The trading engine needs alpha for correct spread computation.
+    pub alpha: f64,
     /// Hedge ratio from OLS on log-prices.
     pub beta: f64,
     /// OU half-life in days.
@@ -62,6 +65,7 @@ pub struct ValidationResult {
     pub economic_rationale: String,
 
     // OLS
+    pub alpha: Option<f64>,
     pub beta: Option<f64>,
     pub beta_r_squared: Option<f64>,
 
@@ -94,6 +98,7 @@ impl ValidationResult {
             leg_a: candidate.leg_a.clone(),
             leg_b: candidate.leg_b.clone(),
             economic_rationale: candidate.economic_rationale.clone(),
+            alpha: None,
             beta: None,
             beta_r_squared: None,
             adf_statistic: None,
@@ -118,6 +123,7 @@ impl ValidationResult {
         Some(ActivePair {
             leg_a: self.leg_a.clone(),
             leg_b: self.leg_b.clone(),
+            alpha: self.alpha.unwrap_or(0.0),
             beta: self.beta.unwrap_or(0.0),
             half_life_days: self.half_life.unwrap_or(0.0),
             adf_statistic: self.adf_statistic.unwrap_or(0.0),

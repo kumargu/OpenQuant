@@ -35,27 +35,27 @@ pub fn ols_simple(x: &[f64], y: &[f64]) -> Option<OlsResult> {
     }
 
     let n_f = n as f64;
-    let mut sum_x = 0.0;
-    let mut sum_y = 0.0;
-    let mut sum_xx = 0.0;
-    let mut sum_xy = 0.0;
 
+    // Two-pass algorithm for numerical stability: first compute means,
+    // then compute SS_xx and SS_xy from deviations. Avoids catastrophic
+    // cancellation when x values are large and variance is small
+    // (common with log-prices around 4.0).
+    let mean_x: f64 = x[..n].iter().sum::<f64>() / n_f;
+    let mean_y: f64 = y[..n].iter().sum::<f64>() / n_f;
+
+    let mut ss_xx = 0.0;
+    let mut ss_xy = 0.0;
     for i in 0..n {
-        sum_x += x[i];
-        sum_y += y[i];
-        sum_xx += x[i] * x[i];
-        sum_xy += x[i] * y[i];
+        let dx = x[i] - mean_x;
+        let dy = y[i] - mean_y;
+        ss_xx += dx * dx;
+        ss_xy += dx * dy;
     }
-
-    let mean_x = sum_x / n_f;
-    let mean_y = sum_y / n_f;
-    let ss_xx = sum_xx - n_f * mean_x * mean_x;
 
     if ss_xx.abs() < 1e-15 {
         return None; // zero variance in x
     }
 
-    let ss_xy = sum_xy - n_f * mean_x * mean_y;
     let beta = ss_xy / ss_xx;
     let alpha = mean_y - beta * mean_x;
 
