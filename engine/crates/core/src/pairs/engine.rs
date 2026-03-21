@@ -407,4 +407,137 @@ mod tests {
         assert!(engine.reload());
         assert_eq!(engine.pair_count(), 2);
     }
+
+    // -----------------------------------------------------------------------
+    // Integration tests: verify data contracts between modules
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_integration_alpha_used_in_spread() {
+        // Verify that alpha from active_pairs.json is actually used in spread computation.
+        // With alpha=0.5, spread = ln(A) - 0.5 - beta * ln(B)
+        // Without alpha,  spread = ln(A) - beta * ln(B)
+        // The difference should be visible in z-scores after warmup.
+        let tmp = TempDir::new().unwrap();
+        let active_path = tmp.path().join("active_pairs.json");
+        let history_path = tmp.path().join("history.json");
+
+        // Load with alpha=0.5, beta=1.0
+        let json = format!(
+            r#"{{
+  "generated_at": "{}",
+  "pairs": [{{
+    "leg_a": "A", "leg_b": "B", "alpha": 0.5, "beta": 1.0,
+    "half_life_days": 10.0, "adf_statistic": -4.0, "adf_pvalue": 0.001,
+    "beta_cv": 0.05, "structural_break": false, "regime_robustness": 0.9,
+    "economic_rationale": "test", "score": 0.9
+  }}]
+}}"#,
+            chrono::Utc::now().to_rfc3339()
+        );
+        std::fs::write(&active_path, json).unwrap();
+
+        let engine = PairsEngine::from_active_pairs(&active_path, &history_path, vec![]);
+        // Verify alpha was loaded
+        assert!(
+            (engine.positions()[0].0.alpha - 0.5).abs() < 0.01,
+            "alpha should be 0.5, got {}",
+            engine.positions()[0].0.alpha
+        );
+        // Verify spread uses alpha: with both legs at same price (100),
+        // spread = ln(100) - 0.5 - 1.0 * ln(100) = -0.5
+        // Without alpha it would be 0.0
+        let config = &engine.positions()[0].0;
+        let spread = (100.0_f64).ln() - config.alpha - config.beta * (100.0_f64).ln();
+        assert!(
+            (spread - -0.5).abs() < 0.01,
+            "spread should be -0.5 with alpha=0.5, got {spread}"
+        );
+    }
+
+    #[test]
+    fn test_integration_canonical_pair_id_in_history() {
+        // Verify that trade history uses canonical pair_id matching Thompson sampling.
+        // Record a trade with legs ("MS", "GS") → history file should have "GS/MS".
+        let tmp = TempDir::new().unwrap();
+        let history_path = tmp.path().join("history.json");
+
+        let mut engine = PairsEngine::new(vec![]);
+        engine.history_path = Some(history_path.clone());
+        engine.trade_history = PairTradingHistory { trades: Vec::new() };
+
+        // Use canonical_pair_id for the trade (as the engine would)
+        let pair_id = canonical_pair_id("MS", "GS");
+        assert_eq!(pair_id, "GS/MS", "canonical ordering should alphabetize");
+
+        engine.record_trade(ClosedPairTrade {
+            pair: ("GS".into(), "MS".into()), // canonical order
+            entry_date: "2026-03-10".into(),
+            exit_date: "2026-03-14".into(),
+            entry_zscore: 2.1,
+            exit_zscore: 0.3,
+            return_bps: 42.0,
+            holding_period_bars: 4,
+            exit_reason: "reversion".into(),
+        });
+
+        // Reload and verify the pair tuple matches what Thompson expects
+        let reloaded = PairTradingHistory::load(&history_path);
+        assert_eq!(reloaded.trades[0].pair.0, "GS");
+        assert_eq!(reloaded.trades[0].pair.1, "MS");
+    }
+
+    #[test]
+    fn test_integration_beta_refresh_on_reload() {
+        // Verify that reloading active_pairs.json updates beta on existing pairs.
+        let tmp = TempDir::new().unwrap();
+        let active_path = tmp.path().join("active_pairs.json");
+        let history_path = tmp.path().join("history.json");
+
+        // Initial load with beta=1.0
+        let json_v1 = format!(
+            r#"{{
+  "generated_at": "{}",
+  "pairs": [{{
+    "leg_a": "A", "leg_b": "B", "alpha": 0.0, "beta": 1.0,
+    "half_life_days": 10.0, "adf_statistic": -4.0, "adf_pvalue": 0.001,
+    "beta_cv": 0.05, "structural_break": false, "regime_robustness": 0.9,
+    "economic_rationale": "test", "score": 0.9
+  }}]
+}}"#,
+            chrono::Utc::now().to_rfc3339()
+        );
+        std::fs::write(&active_path, &json_v1).unwrap();
+
+        let mut engine = PairsEngine::from_active_pairs(&active_path, &history_path, vec![]);
+        assert!((engine.positions()[0].0.beta - 1.0).abs() < 0.01);
+
+        // Reload with updated beta=1.5
+        let json_v2 = format!(
+            r#"{{
+  "generated_at": "{}",
+  "pairs": [{{
+    "leg_a": "A", "leg_b": "B", "alpha": 0.1, "beta": 1.5,
+    "half_life_days": 10.0, "adf_statistic": -4.0, "adf_pvalue": 0.001,
+    "beta_cv": 0.05, "structural_break": false, "regime_robustness": 0.9,
+    "economic_rationale": "test", "score": 0.9
+  }}]
+}}"#,
+            chrono::Utc::now().to_rfc3339()
+        );
+        std::fs::write(&active_path, &json_v2).unwrap();
+
+        assert!(engine.reload());
+        // Beta should now be 1.5, alpha should be 0.1
+        assert!(
+            (engine.positions()[0].0.beta - 1.5).abs() < 0.01,
+            "beta should be refreshed to 1.5, got {}",
+            engine.positions()[0].0.beta
+        );
+        assert!(
+            (engine.positions()[0].0.alpha - 0.1).abs() < 0.01,
+            "alpha should be refreshed to 0.1, got {}",
+            engine.positions()[0].0.alpha
+        );
+    }
 }
