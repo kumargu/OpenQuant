@@ -743,6 +743,73 @@ impl PairsEngineWrapper {
         })
     }
 
+    /// Create from active_pairs.json (produced by pair-picker binary).
+    ///
+    /// Falls back to TOML pair configs if active_pairs.json is missing/stale.
+    /// Loads trade history from history_path for Thompson sampling feedback.
+    #[staticmethod]
+    #[pyo3(signature = (active_pairs_path, history_path, fallback_toml=None))]
+    fn from_active_pairs(
+        active_pairs_path: &str,
+        history_path: &str,
+        fallback_toml: Option<&str>,
+    ) -> PyResult<Self> {
+        let fallback_configs = if let Some(toml_path) = fallback_toml {
+            let cfg = openquant_core::config::ConfigFile::load(std::path::Path::new(toml_path))
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            cfg.pair_configs()
+        } else {
+            Vec::new()
+        };
+
+        Ok(Self {
+            inner: openquant_core::pairs::engine::PairsEngine::from_active_pairs(
+                std::path::Path::new(active_pairs_path),
+                std::path::Path::new(history_path),
+                fallback_configs,
+            ),
+        })
+    }
+
+    /// Reload pairs from active_pairs.json without restart.
+    /// Returns true if reload succeeded.
+    fn reload(&mut self) -> bool {
+        self.inner.reload()
+    }
+
+    /// Record a closed trade for Thompson sampling feedback.
+    #[allow(clippy::too_many_arguments)]
+    fn record_trade(
+        &mut self,
+        leg_a: &str,
+        leg_b: &str,
+        entry_date: &str,
+        exit_date: &str,
+        entry_z: f64,
+        exit_z: f64,
+        return_bps: f64,
+        holding_bars: usize,
+        exit_reason: &str,
+    ) -> PyResult<()> {
+        use openquant_core::pairs::active_pairs::ClosedPairTrade;
+        self.inner.record_trade(ClosedPairTrade {
+            pair: (leg_a.to_string(), leg_b.to_string()),
+            entry_date: entry_date.to_string(),
+            exit_date: exit_date.to_string(),
+            entry_zscore: entry_z,
+            exit_zscore: exit_z,
+            return_bps,
+            holding_period_bars: holding_bars,
+            exit_reason: exit_reason.to_string(),
+        });
+        Ok(())
+    }
+
+    /// Number of closed trades recorded.
+    fn trade_count(&self) -> usize {
+        self.inner.trade_count()
+    }
+
     /// Process a bar. Returns list of order intent dicts (0 or 2 per signal).
     fn on_bar(
         &mut self,
