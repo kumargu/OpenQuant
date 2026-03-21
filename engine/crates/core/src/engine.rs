@@ -26,7 +26,7 @@ use crate::risk::{self, RiskConfig, RiskState};
 use crate::signals::{
     Side, SignalReason, Strategy, breakout, combiner, mean_reversion, momentum, vwap_reversion,
 };
-use tracing::{debug, info, warn};
+use tracing::warn;
 
 /// An order the engine wants placed.
 #[derive(Debug, Clone)]
@@ -338,7 +338,11 @@ impl Engine {
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
         let warmup = self.warmup_bars;
         let feature_state = self.features.entry(bar.symbol.clone()).or_insert_with(|| {
-            FeatureState::with_warmup(self.garch_config.clone(), self.regime_config.clone(), warmup)
+            FeatureState::with_warmup(
+                self.garch_config.clone(),
+                self.regime_config.clone(),
+                warmup,
+            )
         });
 
         let features =
@@ -505,7 +509,11 @@ impl Engine {
         // 1. Update features (always, even for stale bars)
         let warmup = self.warmup_bars;
         let feature_state = self.features.entry(bar.symbol.clone()).or_insert_with(|| {
-            FeatureState::with_warmup(self.garch_config.clone(), self.regime_config.clone(), warmup)
+            FeatureState::with_warmup(
+                self.garch_config.clone(),
+                self.regime_config.clone(),
+                warmup,
+            )
         });
 
         let features =

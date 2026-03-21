@@ -71,16 +71,32 @@ impl PairConfigToml {
     pub fn into_pair_config(self) -> PairConfig {
         assert!(!self.leg_a.is_empty(), "pairs: leg_a must not be empty");
         assert!(!self.leg_b.is_empty(), "pairs: leg_b must not be empty");
-        assert!(self.leg_a != self.leg_b, "pairs: leg_a and leg_b must differ");
-        assert!(self.entry_z > self.exit_z,
+        assert!(
+            self.leg_a != self.leg_b,
+            "pairs: leg_a and leg_b must differ"
+        );
+        assert!(
+            self.entry_z > self.exit_z,
             "pairs {}/{}: entry_z ({}) must be > exit_z ({})",
-            self.leg_a, self.leg_b, self.entry_z, self.exit_z);
-        assert!(self.stop_z > self.entry_z,
+            self.leg_a,
+            self.leg_b,
+            self.entry_z,
+            self.exit_z
+        );
+        assert!(
+            self.stop_z > self.entry_z,
             "pairs {}/{}: stop_z ({}) must be > entry_z ({})",
-            self.leg_a, self.leg_b, self.stop_z, self.entry_z);
-        assert!(self.notional_per_leg > 0.0,
+            self.leg_a,
+            self.leg_b,
+            self.stop_z,
+            self.entry_z
+        );
+        assert!(
+            self.notional_per_leg > 0.0,
             "pairs {}/{}: notional_per_leg must be > 0",
-            self.leg_a, self.leg_b);
+            self.leg_a,
+            self.leg_b
+        );
 
         PairConfig {
             leg_a: self.leg_a,

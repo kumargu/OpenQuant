@@ -23,10 +23,7 @@ pub struct PairsEngine {
 impl PairsEngine {
     /// Create a new pairs engine from a list of pair configurations.
     pub fn new(configs: Vec<PairConfig>) -> Self {
-        let pairs = configs
-            .into_iter()
-            .map(|c| (c, PairState::new()))
-            .collect();
+        let pairs = configs.into_iter().map(|c| (c, PairState::new())).collect();
 
         Self {
             pairs,

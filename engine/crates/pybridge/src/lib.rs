@@ -396,7 +396,11 @@ impl Engine {
     /// Optional `journal_path` enables journaling (not in TOML — runtime concern).
     #[staticmethod]
     #[pyo3(signature = (config_path, journal_path = None, warmup_bars = 64))]
-    fn from_toml(config_path: &str, journal_path: Option<String>, warmup_bars: usize) -> PyResult<Self> {
+    fn from_toml(
+        config_path: &str,
+        journal_path: Option<String>,
+        warmup_bars: usize,
+    ) -> PyResult<Self> {
         let cfg_file = openquant_core::config::ConfigFile::load(std::path::Path::new(config_path))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
@@ -740,7 +744,13 @@ impl PairsEngineWrapper {
     }
 
     /// Process a bar. Returns list of order intent dicts (0 or 2 per signal).
-    fn on_bar(&mut self, py: Python<'_>, symbol: &str, timestamp: i64, close: f64) -> PyResult<Vec<PyObject>> {
+    fn on_bar(
+        &mut self,
+        py: Python<'_>,
+        symbol: &str,
+        timestamp: i64,
+        close: f64,
+    ) -> PyResult<Vec<PyObject>> {
         let intents = self.inner.on_bar(symbol, timestamp, close);
 
         intents
@@ -748,10 +758,13 @@ impl PairsEngineWrapper {
             .map(|intent| {
                 let dict = PyDict::new(py);
                 dict.set_item("symbol", &intent.symbol)?;
-                dict.set_item("side", match intent.side {
-                    Side::Buy => "buy",
-                    Side::Sell => "sell",
-                })?;
+                dict.set_item(
+                    "side",
+                    match intent.side {
+                        Side::Buy => "buy",
+                        Side::Sell => "sell",
+                    },
+                )?;
                 dict.set_item("qty", intent.qty)?;
                 dict.set_item("reason", intent.reason.describe())?;
                 dict.set_item("pair_id", &intent.pair_id)?;
@@ -789,7 +802,12 @@ fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let _ = tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_target(true).with_writer(std::io::stderr))
-        .with(fmt::layer().with_target(true).with_ansi(false).with_writer(file_writer))
+        .with(
+            fmt::layer()
+                .with_target(true)
+                .with_ansi(false)
+                .with_writer(file_writer),
+        )
         .try_init();
 
     m.add_class::<Engine>()?;

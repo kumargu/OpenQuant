@@ -194,7 +194,11 @@ impl FeatureState {
     /// Create with custom warmup period. For 1-min bars use 64 (default).
     /// For wider bars: 5-min → 20, 15-min → 10. The warmup must be at least
     /// as large as the longest indicator window that matters at that timeframe.
-    pub fn with_warmup(garch_config: GarchConfig, regime_config: RegimeConfig, warmup: usize) -> Self {
+    pub fn with_warmup(
+        garch_config: GarchConfig,
+        regime_config: RegimeConfig,
+        warmup: usize,
+    ) -> Self {
         Self::build(garch_config, regime_config, warmup)
     }
 

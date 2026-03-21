@@ -580,7 +580,10 @@ mod tests {
         // $420 GLD because uninformative prior computed zero edge.
         let k = BayesianKellyState::new(12.0, 8.0);
         let f = k.kelly_fraction();
-        assert!(f > 0.0, "backtest-seeded prior should give non-zero fraction: {f:.4}");
+        assert!(
+            f > 0.0,
+            "backtest-seeded prior should give non-zero fraction: {f:.4}"
+        );
         assert!(f < 0.15, "cold start should still be conservative: {f:.4}");
     }
 
