@@ -121,7 +121,7 @@ fn main() {
     let mut all_intents: Vec<OrderIntentRecord> = Vec::new();
     let mut single_intent_count: usize = 0;
     let mut pair_intent_count: usize = 0;
-    let mut pnl_tracker = pnl::PairPnlTracker::new(6.0); // 6 bps per leg
+    let mut pnl_tracker = pnl::PairPnlTracker::new(3.0); // 3 bps per leg = 12 bps round trip
     let mut prev_day: Option<i64> = None;
     // Day boundary: 24h in millis. Detect when timestamp jumps by >6h gap.
     const DAY_GAP_MS: i64 = 6 * 3600 * 1000;

@@ -145,7 +145,8 @@ pub struct PairState {
     /// Most recent close price for leg B (cleared after spread computation).
     last_price_b: Option<f64>,
     /// Rolling statistics of the spread for z-score computation.
-    spread_stats: RollingStats<32>,
+    /// Window of 256 bars supports lookback up to 256 (configurable via TOML).
+    spread_stats: RollingStats<256>,
     /// Number of spread observations (for warmup detection).
     spread_count: usize,
     /// Current position state.
@@ -237,7 +238,7 @@ impl PairState {
         self.spread_count += 1;
 
         // Need enough spread history for z-score
-        let min_lookback = trading.lookback.min(32); // capped by RollingStats<32>
+        let min_lookback = trading.lookback.min(256); // capped by RollingStats<256>
         if self.spread_count < min_lookback {
             debug!(
                 pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
