@@ -101,6 +101,7 @@ impl PairConfigToml {
         PairConfig {
             leg_a: self.leg_a,
             leg_b: self.leg_b,
+            alpha: 0.0, // TOML configs don't have alpha; default to 0.0 for backward compat
             beta: self.beta,
             entry_z: self.entry_z,
             exit_z: self.exit_z,

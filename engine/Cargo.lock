@@ -605,6 +605,7 @@ dependencies = [
 name = "openquant-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "criterion",
  "metrics",
  "serde",

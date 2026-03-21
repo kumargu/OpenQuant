@@ -32,6 +32,7 @@
 //! | C/JPM     | $86       | 75%      | ~9         |
 //! | GS/MS     | $77       | 76%      | ~9         |
 
+pub mod active_pairs;
 pub mod engine;
 
 use crate::features::rolling_stats::RollingStats;
@@ -45,7 +46,11 @@ pub struct PairConfig {
     pub leg_a: String,
     /// Symbol for leg B (the "short" side when going long the spread).
     pub leg_b: String,
-    /// Hedge ratio: spread = ln(price_A) - beta × ln(price_B).
+    /// OLS intercept: log_a = alpha + beta × log_b.
+    /// Subtracted from spread for correct z-score computation.
+    /// Defaults to 0.0 for backward compatibility with TOML configs.
+    pub alpha: f64,
+    /// Hedge ratio: spread = ln(price_A) - alpha - beta × ln(price_B).
     /// Estimated via OLS regression on historical log-prices.
     pub beta: f64,
     /// Z-score threshold to enter a position. Entry when |z| > entry_z.
@@ -69,6 +74,7 @@ impl Default for PairConfig {
         Self {
             leg_a: String::new(),
             leg_b: String::new(),
+            alpha: 0.0,
             beta: 1.0,
             entry_z: 2.0,
             exit_z: 0.5,
@@ -187,8 +193,9 @@ impl PairState {
         self.last_price_b = None;
         self.bar_count += 1;
 
-        // Compute log-spread
-        let spread = price_a.ln() - config.beta * price_b.ln();
+        // Compute log-spread: spread = ln(price_A) - alpha - beta × ln(price_B)
+        // Alpha from OLS ensures z-scores are centered correctly.
+        let spread = price_a.ln() - config.alpha - config.beta * price_b.ln();
 
         // Feed spread into rolling stats
         self.spread_stats.push(spread);
@@ -463,6 +470,7 @@ mod tests {
         PairConfig {
             leg_a: "GLD".into(),
             leg_b: "SLV".into(),
+            alpha: 0.0,
             beta: 0.37,
             entry_z: 2.0,
             exit_z: 0.5,
@@ -509,6 +517,7 @@ mod tests {
         PairConfig {
             leg_a: "A".into(),
             leg_b: "B".into(),
+            alpha: 0.0,
             beta: 1.0,
             entry_z: 1.5, // easy to trigger
             exit_z: 0.3,
