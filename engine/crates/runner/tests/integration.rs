@@ -53,7 +53,7 @@ fn active_pairs_json() -> String {
 fn synthetic_bars() -> String {
     let mut bars_aaa = Vec::new();
     let mut bars_bbb = Vec::new();
-    let base_ts: i64 = 1_700_000_000_000; // arbitrary start
+    let base_ts: i64 = 1_768_489_200_000; // 2026-01-15 15:00 UTC (10:00 ET, within market hours)
 
     for i in 0..200 {
         let ts = base_ts + i * 60_000; // 1-min bars

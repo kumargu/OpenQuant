@@ -10,7 +10,7 @@
 //! ```
 
 use super::active_pairs::{ClosedPairTrade, PairTradingHistory, load_active_pairs};
-use super::{PairConfig, PairOrderIntent, PairPosition, PairState};
+use super::{PairConfig, PairOrderIntent, PairPosition, PairState, PairsTradingConfig};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -27,6 +27,8 @@ fn canonical_pair_id(a: &str, b: &str) -> String {
 pub struct PairsEngine {
     /// Each pair has its config and mutable state.
     pairs: Vec<(PairConfig, PairState)>,
+    /// Shared trading parameters (from openquant.toml).
+    trading_config: PairsTradingConfig,
     /// Global bar counter (shared across all pairs).
     bar_counter: usize,
     /// Path to active_pairs.json (for reloading).
@@ -39,11 +41,23 @@ pub struct PairsEngine {
 
 impl PairsEngine {
     /// Create a new pairs engine from a list of pair configurations.
-    pub fn new(configs: Vec<PairConfig>) -> Self {
+    pub fn new(configs: Vec<PairConfig>, trading_config: PairsTradingConfig) -> Self {
+        info!(
+            pairs = configs.len(),
+            entry_z = %format_args!("{:.2}", trading_config.entry_z),
+            exit_z = %format_args!("{:.2}", trading_config.exit_z),
+            stop_z = %format_args!("{:.2}", trading_config.stop_z),
+            lookback = trading_config.lookback,
+            max_hold_bars = trading_config.max_hold_bars,
+            min_hold_bars = trading_config.min_hold_bars,
+            notional_per_leg = %format_args!("{:.0}", trading_config.notional_per_leg),
+            "PairsEngine initialized"
+        );
         let pairs = configs.into_iter().map(|c| (c, PairState::new())).collect();
 
         Self {
             pairs,
+            trading_config,
             bar_counter: 0,
             active_pairs_path: None,
             trade_history: PairTradingHistory { trades: Vec::new() },
@@ -58,6 +72,7 @@ impl PairsEngine {
         active_pairs_path: &Path,
         history_path: &Path,
         fallback_configs: Vec<PairConfig>,
+        trading_config: PairsTradingConfig,
     ) -> Self {
         let trade_history = PairTradingHistory::load(history_path);
         info!(
@@ -76,10 +91,21 @@ impl PairsEngine {
             }
         };
 
+        info!(
+            entry_z = %format_args!("{:.2}", trading_config.entry_z),
+            exit_z = %format_args!("{:.2}", trading_config.exit_z),
+            stop_z = %format_args!("{:.2}", trading_config.stop_z),
+            lookback = trading_config.lookback,
+            max_hold_bars = trading_config.max_hold_bars,
+            min_hold_bars = trading_config.min_hold_bars,
+            notional_per_leg = %format_args!("{:.0}", trading_config.notional_per_leg),
+            "PairsEngine initialized"
+        );
         let pairs = configs.into_iter().map(|c| (c, PairState::new())).collect();
 
         Self {
             pairs,
+            trading_config,
             bar_counter: 0,
             active_pairs_path: Some(active_pairs_path.to_path_buf()),
             trade_history,
@@ -133,8 +159,9 @@ impl PairsEngine {
                     pair = pair_id.as_str(),
                     "Pair removed from active list — tightening stops for graceful exit"
                 );
-                config.exit_z = 0.0;
-                config.stop_z /= 2.0;
+                state.exit_z_override = Some(0.0);
+                let current_stop = state.stop_z_override.unwrap_or(self.trading_config.stop_z);
+                state.stop_z_override = Some(current_stop / 2.0);
             }
         }
 
@@ -194,12 +221,12 @@ impl PairsEngine {
     ///
     /// Iterates over all configured pairs and checks if this symbol is a leg.
     /// Returns order intents for any pairs that fire entry/exit signals.
-    pub fn on_bar(&mut self, symbol: &str, _timestamp: i64, close: f64) -> Vec<PairOrderIntent> {
+    pub fn on_bar(&mut self, symbol: &str, timestamp: i64, close: f64) -> Vec<PairOrderIntent> {
         self.bar_counter += 1;
         let mut all_intents = Vec::new();
 
         for (config, state) in &mut self.pairs {
-            let intents = state.on_price(symbol, close, config);
+            let intents = state.on_price(symbol, close, config, &self.trading_config, timestamp);
             if !intents.is_empty() {
                 all_intents.extend(intents);
             }
@@ -238,18 +265,19 @@ mod tests {
     use crate::pairs::PairPosition;
     use tempfile::TempDir;
 
+    fn default_trading() -> PairsTradingConfig {
+        PairsTradingConfig {
+            min_hold_bars: 0,
+            ..PairsTradingConfig::default()
+        }
+    }
+
     fn gld_slv_config() -> PairConfig {
         PairConfig {
             leg_a: "GLD".into(),
             leg_b: "SLV".into(),
             alpha: 0.0,
             beta: 0.37,
-            entry_z: 2.0,
-            exit_z: 0.5,
-            stop_z: 4.0,
-            lookback: 32,
-            max_hold_bars: 150,
-            notional_per_leg: 10_000.0,
         }
     }
 
@@ -259,18 +287,13 @@ mod tests {
             leg_b: "JPM".into(),
             alpha: 0.0,
             beta: 1.39,
-            entry_z: 2.0,
-            exit_z: 0.5,
-            stop_z: 4.0,
-            lookback: 32,
-            max_hold_bars: 150,
-            notional_per_leg: 10_000.0,
         }
     }
 
     #[test]
     fn test_multi_pair_engine() {
-        let mut engine = PairsEngine::new(vec![gld_slv_config(), c_jpm_config()]);
+        let mut engine =
+            PairsEngine::new(vec![gld_slv_config(), c_jpm_config()], default_trading());
         assert_eq!(engine.pair_count(), 2);
 
         let intents = engine.on_bar("GLD", 1000, 420.0);
@@ -282,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_positions_initially_flat() {
-        let engine = PairsEngine::new(vec![gld_slv_config()]);
+        let engine = PairsEngine::new(vec![gld_slv_config()], default_trading());
         let positions = engine.positions();
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0].1, PairPosition::Flat);
@@ -290,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_lifecycle_warmup_entry_exit() {
-        let mut engine = PairsEngine::new(vec![gld_slv_config()]);
+        let mut engine = PairsEngine::new(vec![gld_slv_config()], default_trading());
 
         for _ in 0..35 {
             engine.on_bar("GLD", 1000, 420.0);
@@ -332,7 +355,8 @@ mod tests {
         );
         std::fs::write(&active_path, json).unwrap();
 
-        let engine = PairsEngine::from_active_pairs(&active_path, &history_path, vec![]);
+        let engine =
+            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
         assert_eq!(engine.pair_count(), 1);
         assert_eq!(engine.positions()[0].0.leg_a, "GS");
         assert!((engine.positions()[0].0.beta - 1.23).abs() < 0.01);
@@ -344,8 +368,12 @@ mod tests {
         let active_path = tmp.path().join("nonexistent.json");
         let history_path = tmp.path().join("history.json");
 
-        let engine =
-            PairsEngine::from_active_pairs(&active_path, &history_path, vec![gld_slv_config()]);
+        let engine = PairsEngine::from_active_pairs(
+            &active_path,
+            &history_path,
+            vec![gld_slv_config()],
+            default_trading(),
+        );
         assert_eq!(engine.pair_count(), 1);
         assert_eq!(engine.positions()[0].0.leg_a, "GLD");
     }
@@ -355,7 +383,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let history_path = tmp.path().join("history.json");
 
-        let mut engine = PairsEngine::new(vec![gld_slv_config()]);
+        let mut engine = PairsEngine::new(vec![gld_slv_config()], default_trading());
         engine.history_path = Some(history_path.clone());
         engine.trade_history = PairTradingHistory { trades: Vec::new() };
 
@@ -382,7 +410,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let active_path = tmp.path().join("active_pairs.json");
 
-        let mut engine = PairsEngine::new(vec![gld_slv_config()]);
+        let mut engine = PairsEngine::new(vec![gld_slv_config()], default_trading());
         engine.active_pairs_path = Some(active_path.clone());
 
         // Write file with GLD/SLV + new pair GS/MS
@@ -437,7 +465,8 @@ mod tests {
         );
         std::fs::write(&active_path, json).unwrap();
 
-        let engine = PairsEngine::from_active_pairs(&active_path, &history_path, vec![]);
+        let engine =
+            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
         // Verify alpha was loaded
         assert!(
             (engine.positions()[0].0.alpha - 0.5).abs() < 0.01,
@@ -462,7 +491,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let history_path = tmp.path().join("history.json");
 
-        let mut engine = PairsEngine::new(vec![]);
+        let mut engine = PairsEngine::new(vec![], default_trading());
         engine.history_path = Some(history_path.clone());
         engine.trade_history = PairTradingHistory { trades: Vec::new() };
 
@@ -509,7 +538,8 @@ mod tests {
         );
         std::fs::write(&active_path, &json_v1).unwrap();
 
-        let mut engine = PairsEngine::from_active_pairs(&active_path, &history_path, vec![]);
+        let mut engine =
+            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
         assert!((engine.positions()[0].0.beta - 1.0).abs() < 0.01);
 
         // Reload with updated beta=1.5

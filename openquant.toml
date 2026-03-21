@@ -466,3 +466,34 @@ asset_class = "disabled"
 # Pairs are sourced from data/active_pairs.json (produced by pair-picker).
 # No hardcoded pairs in this file — pair-picker handles discovery, validation,
 # and beta estimation. See: cargo run -p pair-picker -- --help
+#
+# Trading parameters shared by all pairs. Per-pair identity (legs, alpha, beta)
+# comes from active_pairs.json; these control entry/exit thresholds and sizing.
+
+[pairs_trading]
+
+# Z-score threshold to enter a position. Entry when |z| > entry_z.
+# Higher = fewer trades but higher conviction per trade.
+entry_z = 2.0
+
+# Z-score threshold to exit (spread reverted). Exit when |z| < exit_z.
+# Lower = wait for stronger reversion before closing.
+exit_z = 0.5
+
+# Z-score threshold for stop loss (spread diverged further). Exit when |z| > stop_z.
+stop_z = 4.0
+
+# Rolling window size for spread z-score computation.
+# Capped at 32 bars (RollingStats<32>). Higher = smoother z-scores.
+lookback = 32
+
+# Maximum bars to hold before forced exit (0 = no limit).
+# At 1-minute bars, 150 bars = ~2.5 hours.
+max_hold_bars = 150
+
+# Minimum bars to hold before strategy-driven exits (reversion).
+# Stop loss always fires regardless. Prevents churn on brief z-score crosses.
+min_hold_bars = 30
+
+# Dollar notional per leg. Total exposure per trade = 2 x notional_per_leg.
+notional_per_leg = 10000.0

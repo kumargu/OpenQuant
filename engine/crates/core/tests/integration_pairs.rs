@@ -6,9 +6,9 @@
 //! Run with: `cargo test --test integration_pairs`
 //! (They're not #[ignore] since they use synthetic data and run fast.)
 
-use openquant_core::pairs::PairConfig;
 use openquant_core::pairs::active_pairs::{ActivePairEntry, ActivePairsFile};
 use openquant_core::pairs::engine::PairsEngine;
+use openquant_core::pairs::{PairConfig, PairsTradingConfig};
 use tempfile::TempDir;
 
 /// Helper: write an active_pairs.json file.
@@ -55,12 +55,14 @@ fn fallback_config(leg_a: &str, leg_b: &str, beta: f64) -> PairConfig {
         leg_b: leg_b.into(),
         alpha: 0.0,
         beta,
-        entry_z: 2.0,
-        exit_z: 0.5,
-        stop_z: 4.0,
-        lookback: 20,
-        max_hold_bars: 100,
-        notional_per_leg: 5_000.0,
+    }
+}
+
+/// Test-friendly trading config with no min_hold_bars.
+fn test_trading() -> PairsTradingConfig {
+    PairsTradingConfig {
+        min_hold_bars: 0,
+        ..PairsTradingConfig::default()
     }
 }
 
@@ -77,7 +79,8 @@ fn t1_full_pipeline_round_trip() {
     let history_path = write_empty_history(dir.path());
 
     // Load into PairsEngine
-    let mut engine = PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![]);
+    let mut engine =
+        PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![], test_trading());
 
     assert_eq!(engine.pair_count(), 1);
 
@@ -115,14 +118,14 @@ fn t2_alpha_affects_spread() {
     // Engine WITHOUT alpha
     let pairs_no_alpha = write_active_pairs(dir.path(), &[test_pair("AAA", "BBB", 0.0, 1.0)]);
     let mut engine_no_alpha =
-        PairsEngine::from_active_pairs(&pairs_no_alpha, &history_path, vec![]);
+        PairsEngine::from_active_pairs(&pairs_no_alpha, &history_path, vec![], test_trading());
 
     // Engine WITH alpha = 2.0 (large enough to shift spread significantly)
     let dir2 = TempDir::new().unwrap();
     let history_path2 = write_empty_history(dir2.path());
     let pairs_with_alpha = write_active_pairs(dir2.path(), &[test_pair("AAA", "BBB", 2.0, 1.0)]);
     let mut engine_with_alpha =
-        PairsEngine::from_active_pairs(&pairs_with_alpha, &history_path2, vec![]);
+        PairsEngine::from_active_pairs(&pairs_with_alpha, &history_path2, vec![], test_trading());
 
     // Feed identical bars and collect spread values from intents.
     // Alpha shifts the raw spread by a constant. Since z-score subtracts
@@ -182,7 +185,8 @@ fn t3_canonical_pair_id_consistency() {
     let pairs_path = write_active_pairs(dir.path(), &[test_pair("SLV", "GLD", 0.0, 1.0)]);
     let history_path = write_empty_history(dir.path());
 
-    let mut engine = PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![]);
+    let mut engine =
+        PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![], test_trading());
 
     // Feed bars until we get an intent
     for i in 0..200 {
@@ -216,7 +220,8 @@ fn t4_beta_refresh_on_reload() {
     write_active_pairs(dir.path(), &[test_pair("AAA", "BBB", 0.0, 1.0)]);
     let pairs_path = dir.path().join("active_pairs.json");
 
-    let mut engine = PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![]);
+    let mut engine =
+        PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![], test_trading());
 
     // Feed some warmup bars
     for i in 0..30 {
@@ -277,7 +282,8 @@ fn t5_stale_data_falls_back() {
     // Provide fallback configs
     let fallback = vec![fallback_config("GLD", "SLV", 0.37)];
 
-    let engine = PairsEngine::from_active_pairs(&pairs_path, &history_path, fallback);
+    let engine =
+        PairsEngine::from_active_pairs(&pairs_path, &history_path, fallback, test_trading());
 
     // Should use fallback (GLD/SLV), not stale (OLD/STALE)
     assert_eq!(engine.pair_count(), 1);
@@ -315,7 +321,8 @@ fn t11_graceful_pair_transition() {
     );
     let pairs_path = dir.path().join("active_pairs.json");
 
-    let mut engine = PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![]);
+    let mut engine =
+        PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![], test_trading());
 
     assert_eq!(engine.pair_count(), 2);
 
@@ -364,7 +371,8 @@ fn t13_nan_does_not_propagate() {
     let history_path = write_empty_history(dir.path());
     let pairs_path = write_active_pairs(dir.path(), &[test_pair("AAA", "BBB", 0.0, 1.0)]);
 
-    let mut engine = PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![]);
+    let mut engine =
+        PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![], test_trading());
 
     // Feed some valid bars first
     for i in 0..30 {
@@ -406,7 +414,8 @@ fn t14_missing_files_graceful_fallback() {
     let fallback = vec![fallback_config("GLD", "SLV", 0.37)];
 
     // Missing active_pairs.json → uses fallback
-    let engine = PairsEngine::from_active_pairs(&missing_pairs, &missing_history, fallback);
+    let engine =
+        PairsEngine::from_active_pairs(&missing_pairs, &missing_history, fallback, test_trading());
     assert_eq!(engine.pair_count(), 1);
 }
 
@@ -420,7 +429,8 @@ fn t14_empty_active_pairs_graceful_fallback() {
     std::fs::write(&pairs_path, "{}").unwrap();
 
     let fallback = vec![fallback_config("GLD", "SLV", 0.37)];
-    let engine = PairsEngine::from_active_pairs(&pairs_path, &history_path, fallback);
+    let engine =
+        PairsEngine::from_active_pairs(&pairs_path, &history_path, fallback, test_trading());
 
     // Should fall back gracefully
     assert_eq!(engine.pair_count(), 1);
@@ -438,7 +448,8 @@ fn t14_corrupt_active_pairs_graceful_fallback() {
     std::fs::write(&pairs_path, "NOT VALID JSON {{{").unwrap();
 
     let fallback = vec![fallback_config("GLD", "SLV", 0.37)];
-    let engine = PairsEngine::from_active_pairs(&pairs_path, &history_path, fallback);
+    let engine =
+        PairsEngine::from_active_pairs(&pairs_path, &history_path, fallback, test_trading());
 
     assert_eq!(engine.pair_count(), 1);
 }

@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::engine::{EngineConfig, SymbolOverrides};
 use crate::exit::ExitConfig;
 use crate::features::{GarchConfig, RegimeConfig};
+use crate::pairs::PairsTradingConfig;
 use crate::risk::RiskConfig;
 use crate::signals::{breakout, combiner, mean_reversion, momentum, vwap_reversion};
 
@@ -27,6 +28,7 @@ pub struct ConfigFile {
     pub garch: GarchConfig,
     pub regime: RegimeConfig,
     pub data: DataConfig,
+    pub pairs_trading: PairsTradingConfig,
     pub asset_class: HashMap<String, SymbolOverrides>,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
 }

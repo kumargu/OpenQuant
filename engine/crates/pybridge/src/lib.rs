@@ -729,13 +729,26 @@ impl PairsEngineWrapper {
     ///
     /// Loads trade history from history_path for Thompson sampling feedback.
     #[staticmethod]
-    #[pyo3(signature = (active_pairs_path, history_path))]
-    fn from_active_pairs(active_pairs_path: &str, history_path: &str) -> PyResult<Self> {
+    #[pyo3(signature = (active_pairs_path, history_path, config_path = None))]
+    fn from_active_pairs(
+        active_pairs_path: &str,
+        history_path: &str,
+        config_path: Option<&str>,
+    ) -> PyResult<Self> {
+        let trading_config = match config_path {
+            Some(path) => {
+                let cfg = openquant_core::config::ConfigFile::load(std::path::Path::new(path))
+                    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+                cfg.pairs_trading
+            }
+            None => openquant_core::pairs::PairsTradingConfig::default(),
+        };
         Ok(Self {
             inner: openquant_core::pairs::engine::PairsEngine::from_active_pairs(
                 std::path::Path::new(active_pairs_path),
                 std::path::Path::new(history_path),
                 Vec::new(),
+                trading_config,
             ),
         })
     }

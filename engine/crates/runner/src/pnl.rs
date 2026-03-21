@@ -144,6 +144,8 @@ impl PairPnlTracker {
 
                         info!(
                             pair = pair_id.as_str(),
+                            entry_ts = open.entry_ts,
+                            exit_ts = timestamp,
                             gross_bps = format!("{gross_bps:.1}").as_str(),
                             net_bps = format!("{net_bps:.1}").as_str(),
                             bars = open.bars_held,

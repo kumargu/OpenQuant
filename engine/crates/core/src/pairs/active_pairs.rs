@@ -92,8 +92,6 @@ pub fn load_active_pairs(path: &Path) -> Option<(ActivePairsFile, Vec<PairConfig
                 leg_b: p.leg_b.clone(),
                 alpha: p.alpha,
                 beta: p.beta,
-                // Use defaults for trading parameters — these come from openquant.toml
-                ..PairConfig::default()
             }
         })
         .collect();
