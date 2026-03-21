@@ -1,0 +1,19 @@
+{
+    "generated_at": "2026-03-21T00:00:00Z",
+    "pairs": [
+        {
+            "leg_a": "GLD",
+            "leg_b": "SLV",
+            "alpha": 0.0,
+            "beta": 0.37,
+            "half_life_days": 10.0,
+            "adf_statistic": -4.0,
+            "adf_pvalue": 0.005,
+            "beta_cv": 0.05,
+            "structural_break": false,
+            "regime_robustness": 0.9,
+            "economic_rationale": "Gold/silver ratio mean-reversion",
+            "score": 0.95
+        }
+    ]
+}
