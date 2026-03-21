@@ -247,8 +247,13 @@ fn t4_beta_refresh_on_reload() {
         engine.on_bar("BBB", ts, 100.0);
     }
 
-    // The test passes if reload succeeded without panic and engine continues to work.
-    assert_eq!(engine.pair_count(), 1);
+    // Verify beta actually changed: positions()[0].0.beta should be 2.0
+    let positions = engine.positions();
+    assert!(
+        (positions[0].0.beta - 2.0).abs() < 0.01,
+        "beta should be 2.0 after reload, got {}",
+        positions[0].0.beta
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -280,8 +285,15 @@ fn t5_stale_data_falls_back() {
     // Verify it's the fallback pair, not the stale one
     let positions = engine.positions();
     let pair_config = positions[0].0;
-    assert_eq!(pair_config.leg_a, "GLD");
+    assert_eq!(
+        pair_config.leg_a, "GLD",
+        "should use fallback, not stale pair"
+    );
     assert_eq!(pair_config.leg_b, "SLV");
+    assert_ne!(
+        pair_config.leg_a, "OLD",
+        "stale pair OLD/STALE must NOT be loaded"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -334,8 +346,12 @@ fn t11_graceful_pair_transition() {
         engine.on_bar("JPM", ts, 200.0);
     }
 
-    // Engine still works, no panics
-    assert!(engine.pair_count() >= 1);
+    // After removing C/JPM and it being flat, only GLD/SLV should remain
+    assert_eq!(
+        engine.pair_count(),
+        1,
+        "only GLD/SLV should remain after removing flat C/JPM"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -357,20 +373,13 @@ fn t13_nan_does_not_propagate() {
         engine.on_bar("BBB", ts, 100.0);
     }
 
-    // Inject NaN
+    // Inject NaN — should produce zero intents (NaN rejected at boundary)
     let nan_intents = engine.on_bar("AAA", 2_000_000, f64::NAN);
-    // NaN should not produce valid trade intents
-    for intent in &nan_intents {
-        assert!(
-            intent.qty.is_finite() && intent.qty >= 0.0,
-            "NaN leaked into intent qty: {}",
-            intent.qty
-        );
-        assert!(
-            intent.z_score.is_finite() || intent.z_score.is_nan(),
-            "unexpected z_score value"
-        );
-    }
+    assert!(
+        nan_intents.is_empty(),
+        "NaN input should produce no intents, got {}",
+        nan_intents.len()
+    );
 
     // Feed more valid bars — engine should recover
     for i in 30..60 {
