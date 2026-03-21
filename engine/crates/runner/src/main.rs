@@ -9,6 +9,7 @@
 
 mod bars;
 mod intents;
+mod pnl;
 
 use clap::Parser;
 use intents::{write_intents, write_trade_results, OrderIntentRecord};
@@ -111,6 +112,7 @@ fn main() {
     let mut all_intents: Vec<OrderIntentRecord> = Vec::new();
     let mut single_intent_count: usize = 0;
     let mut pair_intent_count: usize = 0;
+    let mut pnl_tracker = pnl::PairPnlTracker::new();
     let mut prev_day: Option<i64> = None;
     // Day boundary: 24h in millis. Detect when timestamp jumps by >6h gap.
     const DAY_GAP_MS: i64 = 6 * 3600 * 1000;
@@ -134,6 +136,9 @@ fn main() {
         }
         prev_day = Some(bar.timestamp);
 
+        // Track prices for P&L computation
+        pnl_tracker.update_price(&bar.symbol, bar.close);
+
         // Single-symbol engine
         let single_intents = engine.on_bar(bar);
         for intent in &single_intents {
@@ -144,10 +149,15 @@ fn main() {
 
         // Pairs engine
         let pair_intents = pairs_engine.on_bar(&bar.symbol, bar.timestamp, bar.close);
-        for intent in &pair_intents {
-            all_intents.push(OrderIntentRecord::from_pair_intent(intent, bar.timestamp));
+        if !pair_intents.is_empty() {
+            pnl_tracker.on_intents(&pair_intents, bar.timestamp);
+            for intent in &pair_intents {
+                all_intents.push(OrderIntentRecord::from_pair_intent(intent, bar.timestamp));
+            }
+            pair_intent_count += pair_intents.len();
         }
-        pair_intent_count += pair_intents.len();
+
+        pnl_tracker.tick_bars();
     }
 
     info!(
@@ -170,9 +180,20 @@ fn main() {
     }
 
     let results_path = output_dir.join("trade_results.json");
-    if let Err(e) = write_trade_results(&[], &results_path) {
+    let closed = pnl_tracker.closed_trades();
+    if let Err(e) = write_trade_results(closed, &results_path) {
         error!("failed to write trade results: {e}");
     }
+
+    let summary = pnl_tracker.summary();
+    info!(
+        total_trades = summary.total_trades,
+        total_pnl_bps = format!("{:.1}", summary.total_pnl_bps).as_str(),
+        win_rate = format!("{:.1}%", summary.win_rate * 100.0).as_str(),
+        avg_win_bps = format!("{:.1}", summary.avg_win_bps).as_str(),
+        avg_loss_bps = format!("{:.1}", summary.avg_loss_bps).as_str(),
+        "P&L summary (Rust-native, single source of truth)"
+    );
 
     info!("openquant-runner complete");
 }
