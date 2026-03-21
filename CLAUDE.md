@@ -12,6 +12,23 @@ This is mandatory — never create a PR without starting the monitor loop.
 
 Every PR that touches signals, risk, or strategy must include a backtest comparison table in the description. Run `python -m paper_trading.benchmark --compare` to generate it.
 
+## Epic workflow — reviewer ↔ coder chain
+
+Epics use GitHub labels (`epic/<name>`) to chain work between sessions:
+
+### Coder session
+- Poll for open issues with your epic label: `gh issue list --label "epic/<name>" --state open`
+- Pick the next unassigned issue, work it, raise a PR referencing the issue
+- After PR is merged, check for new issues tagged to the epic (reviewer may have filed follow-ups or bugs found during review)
+
+### Reviewer session
+- When filing follow-up issues or bugs found during review, **always tag with the epic label**: `gh issue edit <number> --add-label "epic/<name>"`
+- This ensures the coder session picks them up automatically on its next poll
+- Reference the parent epic issue in the body so context is traceable
+
+### Active epics
+- `epic/pair-discovery` — Pair discovery system (#117). Follow-ups: #129, #134, #136
+
 ## Reviewer mode
 
 When reviewing PRs (e.g., from another Claude session or Codex), enforce these standards:
@@ -38,17 +55,23 @@ CI runs: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --workspac
 - **Diagnose CI failures**: If CI is broken on main, diagnose and flag it to the author so they can include the fix
 - **Do independent research**: When an implementation claims to follow a paper (e.g., "NIG conjugate update per Murphy 2007"), verify the formulas yourself. When benchmark results seem off, research why before accepting
 
-### Periodic progress review
-After every 3-4 merged PRs (or at natural milestones), stop and review what was shipped:
-- **Architecture coherence**: Do the shipped components fit together cleanly? Are interfaces consistent across modules?
-- **Integration gaps**: What's missing between shipped components? Are there assumptions in module A that module B doesn't satisfy?
-- **Test coverage**: Are there cross-module integration tests, or only unit tests per module?
-- **Config consistency**: Are config patterns consistent (e.g., all using struct + Default, or a mix of approaches)?
-- **Logging/observability**: Can we trace a pair's journey from candidate → validated → scored → selected → traded?
-- **Performance**: Do benchmarks still meet targets after integration?
-- **Research alignment**: Does what we shipped match the original design in the parent issue? Did we drift?
+### Mid-sprint review (after every 3-4 merged PRs)
+Stop, pull main, and verify everything actually works — don't just review diffs.
 
-Post a summary comment on the parent issue with findings and flag any concerns before continuing.
+**Use agent team mode** — spawn parallel agents in worktrees to avoid conflicting with other active branches:
+- **Test runner agent** (worktree): Pull main, run `cargo fmt --check`, `cargo clippy`, `cargo test --workspace`, run binaries end-to-end, verify output files
+- **Data checker agent**: Inventory available data, check date ranges, assess what needs backfilling for forward testing
+- **Forward test agent** (worktree): If data is available, run the full pipeline end-to-end with real historical data (pair-picker → active_pairs.json → PairsEngine → trade history)
+
+**Analyze what was shipped**:
+- **Architecture coherence**: Do shipped components fit together? Are interfaces consistent?
+- **Integration gaps**: Functions defined but never called? Assumptions in module A that module B doesn't satisfy?
+- **Test coverage**: Cross-module integration tests, or only unit tests per module?
+- **Config separation**: Each subsystem owns its own config files. Don't mix unrelated params (e.g., shadow trading config should NOT be in `openquant.toml`)
+- **Logging/observability**: Can we trace an entity's full lifecycle through logs?
+- **Data readiness**: Do we have enough historical data to run the system with real prices?
+
+Post a summary comment on the parent issue with findings and flag concerns before continuing.
 
 ### Merge protocol
 1. All review comments addressed
