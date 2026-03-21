@@ -1,21 +1,45 @@
-//! OpenQuant Runner — standalone trading engine binary.
+//! openquant-runner — standalone trading engine binary.
 //!
 //! Reads bars from JSON files, runs both Engine (single-symbol) and
-//! PairsEngine (pairs), writes order intents to JSON.
+//! PairsEngine (pairs), writes order intents and trade results to JSON.
 //!
 //! No Python bridge needed. Communication is filesystem-based:
-//! - Input: data/experiment_bars_*.json, openquant.toml, data/active_pairs.json
+//! - Input:  data/experiment_bars_*.json, openquant.toml, data/active_pairs.json
 //! - Output: data/order_intents.json, data/trade_results.json
 
 mod bars;
 mod intents;
 
-use intents::{write_intents, OrderIntentRecord};
+use clap::Parser;
+use intents::{write_intents, write_trade_results, OrderIntentRecord};
 use openquant_core::config::ConfigFile;
 use openquant_core::engine::Engine;
 use openquant_core::pairs::engine::PairsEngine;
 use std::path::PathBuf;
 use tracing::{error, info, warn};
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "openquant-runner",
+    about = "Standalone OpenQuant trading engine"
+)]
+struct Cli {
+    /// Path to openquant.toml config file.
+    #[arg(long, default_value = "openquant.toml")]
+    config: PathBuf,
+
+    /// Directory containing experiment_bars_*.json files.
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+
+    /// Directory for output files. Defaults to data_dir.
+    #[arg(long)]
+    output_dir: Option<PathBuf>,
+
+    /// Number of warmup bars before signal generation begins.
+    #[arg(long, default_value = "64")]
+    warmup_bars: usize,
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -25,39 +49,22 @@ fn main() {
         )
         .init();
 
-    let args: Vec<String> = std::env::args().collect();
+    let cli = Cli::parse();
+    let output_dir = cli.output_dir.as_ref().unwrap_or(&cli.data_dir);
 
-    let config_path = args
-        .iter()
-        .position(|a| a == "--config")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("openquant.toml"));
-
-    let data_dir = args
-        .iter()
-        .position(|a| a == "--data-dir")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("data"));
-
-    let output_dir = args
-        .iter()
-        .position(|a| a == "--output-dir")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| data_dir.clone());
-
-    info!("OpenQuant Runner starting");
-    info!("  config:     {}", config_path.display());
-    info!("  data_dir:   {}", data_dir.display());
-    info!("  output_dir: {}", output_dir.display());
+    info!(
+        config = %cli.config.display(),
+        data_dir = %cli.data_dir.display(),
+        output_dir = %output_dir.display(),
+        warmup_bars = cli.warmup_bars,
+        "openquant-runner starting"
+    );
 
     // ── Load config ──
-    let cfg_file = match ConfigFile::load(&config_path) {
+    let cfg_file = match ConfigFile::load(&cli.config) {
         Ok(c) => c,
         Err(e) => {
-            error!("Failed to load config: {e}");
+            error!("failed to load config: {e}");
             std::process::exit(1);
         }
     };
@@ -69,51 +76,53 @@ fn main() {
     let mut engine = Engine::new(engine_config);
     engine.set_warmup_mode(true);
 
-    let active_pairs_path = data_dir.join("active_pairs.json");
-    let history_path = data_dir.join("pair_trading_history.json");
+    let active_pairs_path = cli.data_dir.join("active_pairs.json");
+    let history_path = cli.data_dir.join("pair_trading_history.json");
 
     let mut pairs_engine = if active_pairs_path.exists() {
-        info!("Loading pairs from active_pairs.json");
+        info!(path = %active_pairs_path.display(), "loading active pairs");
         PairsEngine::from_active_pairs(&active_pairs_path, &history_path, pair_configs)
     } else if !pair_configs.is_empty() {
-        info!("Loading {} pairs from TOML config", pair_configs.len());
+        info!(count = pair_configs.len(), "loading pairs from TOML config");
         PairsEngine::new(pair_configs)
     } else {
-        warn!("No pairs configured — running single-symbol engine only");
+        warn!("no pairs configured — running single-symbol engine only");
         PairsEngine::new(vec![])
     };
 
-    info!("Engines initialized: pairs={}", pairs_engine.pair_count());
+    info!(pairs = pairs_engine.pair_count(), "engines initialized");
 
     // ── Load bars ──
-    let all_bars = match bars::load_days(&data_dir) {
+    let all_bars = match bars::load_days(&cli.data_dir) {
         Ok(b) => b,
         Err(e) => {
-            error!("Failed to load bars: {e}");
+            error!("failed to load bars: {e}");
             std::process::exit(1);
         }
     };
 
     if all_bars.is_empty() {
-        error!("No bars loaded — nothing to process");
+        error!("no bars loaded — nothing to process");
         std::process::exit(1);
     }
 
     // ── Process bars ──
-    let warmup_bars = 64;
-    let mut all_intents = Vec::new();
-    let mut pair_intent_count = 0;
-    let mut single_intent_count = 0;
+    let mut all_intents: Vec<OrderIntentRecord> = Vec::new();
+    let mut single_intent_count: usize = 0;
+    let mut pair_intent_count: usize = 0;
 
     for (i, bar) in all_bars.iter().enumerate() {
-        // Switch off warmup after initial period
-        if i == warmup_bars {
+        if i == cli.warmup_bars {
             engine.set_warmup_mode(false);
-            info!("Warmup complete — live signal generation enabled");
+            info!("warmup complete — live signal generation enabled");
         }
 
         // Single-symbol engine
         let single_intents = engine.on_bar(bar);
+        for intent in &single_intents {
+            all_intents.push(OrderIntentRecord::from_engine_intent(intent, bar.timestamp));
+            engine.on_fill(&intent.symbol, intent.side, intent.qty, bar.close);
+        }
         single_intent_count += single_intents.len();
 
         // Pairs engine
@@ -125,17 +134,28 @@ fn main() {
     }
 
     info!(
-        "Processing complete: {} bars, {} pair intents, {} single intents",
-        all_bars.len(),
-        pair_intent_count,
-        single_intent_count,
+        bars = all_bars.len(),
+        single_intents = single_intent_count,
+        pair_intents = pair_intent_count,
+        total_intents = all_intents.len(),
+        "processing complete"
     );
 
     // ── Write outputs ──
+    std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
+        error!("cannot create output dir: {e}");
+        std::process::exit(1);
+    });
+
     let intents_path = output_dir.join("order_intents.json");
     if let Err(e) = write_intents(&all_intents, &intents_path) {
-        error!("Failed to write intents: {e}");
+        error!("failed to write order intents: {e}");
     }
 
-    info!("Runner complete");
+    let results_path = output_dir.join("trade_results.json");
+    if let Err(e) = write_trade_results(&[], &results_path) {
+        error!("failed to write trade results: {e}");
+    }
+
+    info!("openquant-runner complete");
 }

@@ -93,10 +93,7 @@ pub fn write_intents(intents: &[OrderIntentRecord], path: &Path) -> std::io::Res
 }
 
 /// Write trade results to JSON file (appends to existing file).
-pub fn write_trade_results(
-    new_results: &[TradeResultRecord],
-    path: &Path,
-) -> std::io::Result<()> {
+pub fn write_trade_results(new_results: &[TradeResultRecord], path: &Path) -> std::io::Result<()> {
     if new_results.is_empty() {
         return Ok(());
     }
