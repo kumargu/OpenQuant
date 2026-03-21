@@ -37,8 +37,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
 
-      - name: Run tests
+      - name: Run unit tests
         run: cargo test --workspace
+
+      - name: Integration tests (cross-module contracts)
+        run: cargo test -p openquant-core -- pairs::engine::tests::test_integration
 
       - name: Performance gate (engine)
         run: cargo test --test bench_gate --release -p openquant-core -- --ignored
