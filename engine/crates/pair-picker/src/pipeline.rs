@@ -12,6 +12,7 @@
 //! writes `active_pairs.json` with passing pairs sorted by score.
 
 use crate::etf_filter::is_etf_component_pair;
+use crate::regime::compute_regime_robustness;
 use crate::scorer::compute_score;
 use crate::stats::adf::adf_test;
 use crate::stats::beta_stability::check_beta_stability;
@@ -224,7 +225,19 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         }
     }
 
-    // Step 7: Compute score and determine pass/fail
+    // Step 7: Regime robustness — test cointegration across calm/volatile sub-periods
+    if let Some(beta) = result.beta {
+        let robustness = compute_regime_robustness(prices_a, prices_b, beta);
+        result.regime_robustness = Some(robustness.score);
+        if robustness.sufficient_data && robustness.score < 0.3 {
+            result.rejection_reasons.push(format!(
+                "Regime-fragile: robustness={:.2} (cointegration breaks in volatile periods)",
+                robustness.score
+            ));
+        }
+    }
+
+    // Step 8: Compute score and determine pass/fail
     result.score = compute_score(
         result.adf_pvalue.unwrap_or(1.0),
         result.half_life.unwrap_or(0.0),

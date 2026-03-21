@@ -44,6 +44,8 @@ pub struct ActivePair {
     pub beta_cv: f64,
     /// Whether a structural break was detected in beta.
     pub structural_break: bool,
+    /// Regime robustness score [0, 1]: 1.0 = cointegrated in both calm and volatile periods.
+    pub regime_robustness: f64,
     /// Economic rationale (passed through from candidates).
     pub economic_rationale: String,
     /// Composite score [0, 1] combining all statistical properties.
@@ -83,6 +85,9 @@ pub struct ValidationResult {
     pub structural_break: bool,
     pub beta_stable: bool,
 
+    // Regime
+    pub regime_robustness: Option<f64>,
+
     // ETF filter
     pub etf_excluded: bool,
 
@@ -109,6 +114,7 @@ impl ValidationResult {
             beta_cv: None,
             structural_break: false,
             beta_stable: false,
+            regime_robustness: None,
             etf_excluded: false,
             passed: false,
             score: 0.0,
@@ -130,6 +136,7 @@ impl ValidationResult {
             adf_pvalue: self.adf_pvalue.unwrap_or(1.0),
             beta_cv: self.beta_cv.unwrap_or(1.0),
             structural_break: self.structural_break,
+            regime_robustness: self.regime_robustness.unwrap_or(0.5),
             economic_rationale: self.economic_rationale.clone(),
             score: self.score,
         })
