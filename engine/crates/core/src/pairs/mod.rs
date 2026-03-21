@@ -36,7 +36,7 @@ pub mod engine;
 
 use crate::features::rolling_stats::RollingStats;
 use crate::signals::{Side, SignalReason};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Configuration for a single pair. Parsed from `[[pairs]]` in openquant.toml.
 #[derive(Debug, Clone)]
@@ -240,6 +240,16 @@ impl PairState {
 
                 let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
                 let exit_reason = if stopped { "stop" } else if max_held { "max_hold" } else { "reversion" };
+
+                // Use error! for stop loss (risk event), warn! for max hold, info! for reversion
+                if stopped {
+                    error!(
+                        pair = pair_id.as_str(),
+                        z = %format_args!("{z:.2}"),
+                        bars_held,
+                        "pairs: STOP LOSS — spread diverged further"
+                    );
+                }
                 info!(
                     pair = pair_id.as_str(),
                     z = format!("{:.2}", z).as_str(),
@@ -253,6 +263,15 @@ impl PairState {
                 return intents;
             }
 
+            // Position held — log z-score for spread tracking
+            debug!(
+                pair_a = config.leg_a.as_str(),
+                pair_b = config.leg_b.as_str(),
+                z = %format_args!("{z:.2}"),
+                bars_held,
+                pos = ?self.position,
+                "pairs: HOLDING"
+            );
             return vec![];
         }
 
@@ -337,6 +356,14 @@ impl PairState {
             ];
         }
 
+        // No signal — z-score within thresholds
+        debug!(
+            pair_a = config.leg_a.as_str(),
+            pair_b = config.leg_b.as_str(),
+            z = %format_args!("{z:.2}"),
+            entry_z = %format_args!("{:.2}", config.entry_z),
+            "pairs: FLAT — z within thresholds"
+        );
         vec![]
     }
 
