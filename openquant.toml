@@ -105,10 +105,11 @@ enabled = true
 # Higher = require stronger consensus, fewer trades, higher quality.
 # Lower = allow single-strategy signals through more easily.
 # At 0.0, any signal fires. At 0.5, strategies must agree strongly.
-# Raised from 0.2 to 0.5 after 8-day replay analysis (#115): low-conviction
-# entries were the primary P&L drag, not exit timing. Cuts 75% of trades
-# but preserves winners. Profitable 5/7 active days vs 2/8 at 0.2.
-min_net_score = 0.5
+# 0.3 is the sweet spot: 49-day sim showed $110/day vs $39/day at 0.5.
+# At 0.5 we were killing 96% of signals (found via Rust tracing).
+# 0.3 lets single-strategy high-conviction signals through while still
+# filtering noise (51% WR, 29/46 green days, +$5,045 total).
+min_net_score = 0.3
 
 # Minimum number of strategies that must vote before the combiner acts.
 # Set to 2 to require consensus — prevents a single strategy from

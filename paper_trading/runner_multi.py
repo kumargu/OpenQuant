@@ -21,17 +21,13 @@ from openquant import Engine
 from . import alpaca_client as alpaca
 from .runner import _get_latest_bar
 
-_log_fmt = "%(asctime)s %(levelname)s %(message)s"
-_log_datefmt = "%Y-%m-%d %H:%M:%S"
-
-# Log to both console and file
-logging.basicConfig(level=logging.INFO, format=_log_fmt, datefmt=_log_datefmt)
-
-_file_handler = logging.FileHandler("data/journal/runner.log", mode="a")
-_file_handler.setLevel(logging.INFO)
-_file_handler.setFormatter(logging.Formatter(_log_fmt, datefmt=_log_datefmt))
-logging.getLogger().addHandler(_file_handler)
-
+# Console-only logging — Rust engine handles file logging via tracing
+# (data/journal/engine.log). Set RUST_LOG=warn or RUST_LOG=info.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 log = logging.getLogger("runner_multi")
 
 _shutdown_requested = False

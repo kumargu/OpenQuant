@@ -710,12 +710,21 @@ fn load_config(config_path: &str) -> PyResult<String> {
 
 #[pymodule]
 fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Initialize tracing subscriber — logs go to stderr, controlled by RUST_LOG env var.
-    // e.g. RUST_LOG=info or RUST_LOG=openquant_core=debug
-    use tracing_subscriber::EnvFilter;
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_target(true)
+    // Initialize tracing — logs to both stderr and data/journal/engine.log.
+    // Controlled by RUST_LOG env var (e.g. RUST_LOG=warn or RUST_LOG=info).
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+    let filter = EnvFilter::from_default_env();
+    // Use cwd-relative path; the runner always runs from the repo root.
+    let journal_dir = std::path::PathBuf::from("data/journal");
+    std::fs::create_dir_all(&journal_dir).ok();
+    let file_appender = tracing_appender::rolling::daily(journal_dir, "engine.log");
+    let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
+    // Leak the guard so it lives for the process lifetime
+    std::mem::forget(_guard);
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_target(true).with_writer(std::io::stderr))
+        .with(fmt::layer().with_target(true).with_ansi(false).with_writer(file_writer))
         .try_init();
 
     m.add_class::<Engine>()?;
