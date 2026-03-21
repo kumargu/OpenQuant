@@ -19,6 +19,7 @@
 //! ```
 
 pub mod etf_filter;
+pub mod graph;
 pub mod lockfile;
 pub mod pipeline;
 pub mod regime;

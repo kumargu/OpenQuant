@@ -1,0 +1,94 @@
+{
+  "nodes": [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "ORCL", "CRM", "ADBE", "NOW",
+    "AMD", "AVGO", "INTC", "QCOM", "TXN", "MU", "MRVL", "LRCX", "AMAT", "KLAC", "ON", "TSM",
+    "JPM", "BAC", "GS", "MS", "C", "WFC", "USB", "PNC", "SCHW", "BLK", "AXP",
+    "XOM", "CVX", "COP", "SLB", "EOG", "PSX", "VLO", "MPC", "HAL",
+    "WMT", "COST", "HD", "LOW", "MCD", "SBUX", "NKE", "TGT", "YUM", "DG",
+    "V", "MA", "PYPL", "SQ",
+    "UBER", "LYFT",
+    "DAL", "UAL", "LUV", "AAL",
+    "T", "VZ", "TMUS",
+    "DIS", "NFLX", "WBD",
+    "FDX", "UPS",
+    "GLD", "SLV",
+    "COIN", "PLTR"
+  ],
+  "edges": [
+    {"a": "GS", "b": "MS", "type": "competitor", "sector": "financials", "note": "Bulge-bracket investment banks, similar trading/advisory/AM revenue mix"},
+    {"a": "JPM", "b": "BAC", "type": "competitor", "sector": "financials", "note": "Money-center banks, similar loan book and rate sensitivity"},
+    {"a": "JPM", "b": "C", "type": "competitor", "sector": "financials", "note": "Large-cap universal banks, shared Fed/OCC regulation"},
+    {"a": "JPM", "b": "GS", "type": "competitor", "sector": "financials", "note": "Trading and investment banking overlap"},
+    {"a": "BAC", "b": "WFC", "type": "competitor", "sector": "financials", "note": "Consumer-focused banks, similar mortgage and credit card exposure"},
+    {"a": "BAC", "b": "C", "type": "competitor", "sector": "financials", "note": "Money-center banks with global operations"},
+    {"a": "C", "b": "WFC", "type": "competitor", "sector": "financials", "note": "Large consumer banks, shared interest rate sensitivity"},
+    {"a": "USB", "b": "PNC", "type": "competitor", "sector": "financials", "note": "Regional banks with similar geographic footprint"},
+    {"a": "SCHW", "b": "BLK", "type": "competitor", "sector": "financials", "note": "Asset/wealth management, both benefit from rising AUM"},
+    {"a": "JPM", "b": "MS", "type": "same_regulator", "sector": "financials", "note": "Both Fed-supervised SIFI banks"},
+    {"a": "GS", "b": "C", "type": "same_regulator", "sector": "financials", "note": "Both subject to Fed stress tests and Basel III"},
+
+    {"a": "NVDA", "b": "AMD", "type": "competitor", "sector": "semis", "note": "GPU competitors (gaming, datacenter, AI training)"},
+    {"a": "NVDA", "b": "TSM", "type": "supply_chain", "sector": "semis", "note": "TSM fabricates NVDA chips — foundry dependency"},
+    {"a": "AMD", "b": "INTC", "type": "competitor", "sector": "semis", "note": "x86 CPU competitors, PC/server market share shifts"},
+    {"a": "AMD", "b": "TSM", "type": "supply_chain", "sector": "semis", "note": "TSM fabricates AMD chips"},
+    {"a": "AVGO", "b": "QCOM", "type": "competitor", "sector": "semis", "note": "Mobile/wireless chip suppliers"},
+    {"a": "QCOM", "b": "TXN", "type": "same_factor", "sector": "semis", "note": "Both cyclical semis correlated via capex cycle"},
+    {"a": "MU", "b": "TXN", "type": "same_factor", "sector": "semis", "note": "Memory vs analog, correlated via semiconductor demand cycle"},
+    {"a": "LRCX", "b": "AMAT", "type": "competitor", "sector": "semis", "note": "Semiconductor equipment makers, correlated via fab capex"},
+    {"a": "LRCX", "b": "KLAC", "type": "competitor", "sector": "semis", "note": "Wafer fab equipment competitors"},
+    {"a": "MRVL", "b": "AVGO", "type": "competitor", "sector": "semis", "note": "Data infrastructure chip competitors"},
+    {"a": "AAPL", "b": "TSM", "type": "supply_chain", "sector": "tech", "note": "TSM manufactures Apple's A/M-series chips"},
+
+    {"a": "XOM", "b": "CVX", "type": "competitor", "sector": "energy", "note": "Integrated oil majors, similar upstream/downstream mix"},
+    {"a": "COP", "b": "EOG", "type": "competitor", "sector": "energy", "note": "E&P focused, correlated via US shale economics and crude prices"},
+    {"a": "PSX", "b": "VLO", "type": "competitor", "sector": "energy", "note": "Refiners with similar crack spread exposure"},
+    {"a": "PSX", "b": "MPC", "type": "competitor", "sector": "energy", "note": "US refiners, correlated via refining margins"},
+    {"a": "VLO", "b": "MPC", "type": "competitor", "sector": "energy", "note": "Independent refiners, both primarily downstream"},
+    {"a": "SLB", "b": "HAL", "type": "competitor", "sector": "energy", "note": "Oilfield services, correlated via drilling activity"},
+    {"a": "XOM", "b": "COP", "type": "same_factor", "sector": "energy", "note": "Both driven by crude oil prices"},
+    {"a": "CVX", "b": "COP", "type": "same_factor", "sector": "energy", "note": "Upstream exposure to oil prices"},
+
+    {"a": "AAPL", "b": "MSFT", "type": "competitor", "sector": "tech", "note": "OS/ecosystem competitors (iOS/macOS vs Windows)"},
+    {"a": "GOOGL", "b": "META", "type": "competitor", "sector": "tech", "note": "Digital advertising duopoly, shared ad market sensitivity"},
+    {"a": "MSFT", "b": "ORCL", "type": "competitor", "sector": "tech", "note": "Enterprise cloud and database competitors"},
+    {"a": "CRM", "b": "NOW", "type": "competitor", "sector": "tech", "note": "Enterprise SaaS competitors (CRM vs ITSM)"},
+    {"a": "CRM", "b": "ADBE", "type": "competitor", "sector": "tech", "note": "Marketing/sales cloud overlap"},
+    {"a": "AMZN", "b": "MSFT", "type": "competitor", "sector": "tech", "note": "Cloud infrastructure competitors (AWS vs Azure)"},
+
+    {"a": "WMT", "b": "COST", "type": "competitor", "sector": "consumer", "note": "Large-format retailers competing for consumer wallet share"},
+    {"a": "WMT", "b": "TGT", "type": "competitor", "sector": "consumer", "note": "Mass-market general merchandise retailers"},
+    {"a": "HD", "b": "LOW", "type": "competitor", "sector": "consumer", "note": "Home improvement duopoly, correlated via housing activity"},
+    {"a": "MCD", "b": "SBUX", "type": "competitor", "sector": "consumer", "note": "Quick-service leaders, correlated via consumer traffic and food costs"},
+    {"a": "MCD", "b": "YUM", "type": "competitor", "sector": "consumer", "note": "QSR franchisors with similar business models"},
+    {"a": "COST", "b": "TGT", "type": "competitor", "sector": "consumer", "note": "Consumer staples/discretionary retailers"},
+    {"a": "NKE", "b": "SBUX", "type": "same_factor", "sector": "consumer", "note": "Both consumer discretionary with China exposure"},
+    {"a": "DG", "b": "TGT", "type": "competitor", "sector": "consumer", "note": "Value retail competitors"},
+
+    {"a": "V", "b": "MA", "type": "competitor", "sector": "payments", "note": "Payment network duopoly, both earn interchange on consumer spending"},
+    {"a": "V", "b": "PYPL", "type": "competitor", "sector": "payments", "note": "Digital payments competitors"},
+    {"a": "MA", "b": "PYPL", "type": "competitor", "sector": "payments", "note": "Payment processing competitors"},
+    {"a": "PYPL", "b": "SQ", "type": "competitor", "sector": "payments", "note": "Digital/mobile payments competitors"},
+
+    {"a": "UBER", "b": "LYFT", "type": "competitor", "sector": "rideshare", "note": "Ride-sharing competitors in overlapping US markets"},
+
+    {"a": "DAL", "b": "UAL", "type": "competitor", "sector": "airlines", "note": "Hub-and-spoke network carriers, similar fuel/labor cost structure"},
+    {"a": "DAL", "b": "LUV", "type": "competitor", "sector": "airlines", "note": "Major US airlines, correlated via jet fuel and travel demand"},
+    {"a": "UAL", "b": "AAL", "type": "competitor", "sector": "airlines", "note": "Legacy carriers with similar route networks"},
+    {"a": "LUV", "b": "AAL", "type": "same_factor", "sector": "airlines", "note": "Both sensitive to jet fuel prices and domestic travel demand"},
+
+    {"a": "T", "b": "VZ", "type": "competitor", "sector": "telecom", "note": "Telecom duopoly, similar subscriber economics and 5G capex"},
+    {"a": "VZ", "b": "TMUS", "type": "competitor", "sector": "telecom", "note": "Wireless carriers competing for mobile subscribers"},
+    {"a": "T", "b": "TMUS", "type": "competitor", "sector": "telecom", "note": "Wireless and broadband competitors"},
+
+    {"a": "DIS", "b": "NFLX", "type": "competitor", "sector": "media", "note": "Streaming competitors, both invest heavily in content"},
+    {"a": "DIS", "b": "WBD", "type": "competitor", "sector": "media", "note": "Traditional media + streaming competitors"},
+
+    {"a": "FDX", "b": "UPS", "type": "competitor", "sector": "logistics", "note": "Package delivery duopoly, correlated via e-commerce volumes"},
+    {"a": "AMZN", "b": "UPS", "type": "supply_chain", "sector": "logistics", "note": "Amazon is UPS's largest customer (e-commerce logistics)"},
+    {"a": "AMZN", "b": "FDX", "type": "supply_chain", "sector": "logistics", "note": "Amazon uses FDX for delivery, but also building own logistics"},
+
+    {"a": "GLD", "b": "SLV", "type": "same_factor", "sector": "metals", "note": "Precious metals ETFs, correlated via safe-haven demand and real rates"},
+
+    {"a": "COIN", "b": "PLTR", "type": "same_factor", "sector": "tech_speculative", "note": "High-beta tech/fintech, correlated via risk-on/risk-off sentiment"}
+  ]
+}
