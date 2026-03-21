@@ -64,11 +64,23 @@ fn make_bar_record(i: usize) -> BarRecord {
         } else {
             None
         },
-        signal_score: if i.is_multiple_of(10) { Some(1.5) } else { None },
+        signal_score: if i.is_multiple_of(10) {
+            Some(1.5)
+        } else {
+            None
+        },
         signal_reason: None,
-        risk_passed: if i.is_multiple_of(10) { Some(true) } else { None },
+        risk_passed: if i.is_multiple_of(10) {
+            Some(true)
+        } else {
+            None
+        },
         risk_rejection: None,
-        qty_approved: if i.is_multiple_of(10) { Some(0.1) } else { None },
+        qty_approved: if i.is_multiple_of(10) {
+            Some(0.1)
+        } else {
+            None
+        },
         engine_version: "bench".to_string(),
     }
 }

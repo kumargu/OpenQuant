@@ -232,7 +232,10 @@ mod tests {
             adx.update(base + 1.0, base - 1.0, base);
         }
         let (val, pdi, mdi) = adx.update(600.0, 598.0, 599.0);
-        assert!((0.0..=100.0).contains(&val), "ADX should be 0-100, got {val}");
+        assert!(
+            (0.0..=100.0).contains(&val),
+            "ADX should be 0-100, got {val}"
+        );
         assert!(pdi >= 0.0, "+DI should be non-negative");
         assert!(mdi >= 0.0, "-DI should be non-negative");
     }
