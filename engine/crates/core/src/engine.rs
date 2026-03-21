@@ -105,6 +105,8 @@ pub struct EngineConfig {
     /// For wider bars: 5-min → 32, 15-min → 32.
     /// Minimum 32 (covers RollingStats<32>).
     pub warmup_bars: usize,
+    /// Timezone offset in hours (e.g., -5 for US Eastern). Used for VWAP session reset.
+    pub timezone_offset_hours: i32,
 }
 
 /// The core engine. Maintains all state, processes bars, emits order intents.
@@ -129,6 +131,7 @@ pub struct Engine {
     garch_config: crate::features::GarchConfig,
     regime_config: crate::features::RegimeConfig,
     warmup_bars: usize,
+    timezone_offset_hours: i32,
 }
 
 impl Engine {
@@ -271,6 +274,7 @@ impl Engine {
             garch_config: config.garch,
             regime_config: config.regime,
             warmup_bars: config.warmup_bars,
+            timezone_offset_hours: config.timezone_offset_hours,
         }
     }
 
@@ -338,10 +342,11 @@ impl Engine {
         // 1. Update features (always, even for stale bars — keeps warmup state correct)
         let warmup = self.warmup_bars;
         let feature_state = self.features.entry(bar.symbol.clone()).or_insert_with(|| {
-            FeatureState::with_warmup(
+            FeatureState::with_full_config(
                 self.garch_config.clone(),
                 self.regime_config.clone(),
                 warmup,
+                self.timezone_offset_hours,
             )
         });
 
@@ -509,10 +514,11 @@ impl Engine {
         // 1. Update features (always, even for stale bars)
         let warmup = self.warmup_bars;
         let feature_state = self.features.entry(bar.symbol.clone()).or_insert_with(|| {
-            FeatureState::with_warmup(
+            FeatureState::with_full_config(
                 self.garch_config.clone(),
                 self.regime_config.clone(),
                 warmup,
+                self.timezone_offset_hours,
             )
         });
 

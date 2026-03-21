@@ -317,7 +317,7 @@ mod tests {
         let file = load_fixtures();
         let tol = file.tolerance;
         for fixture in &file.fixtures {
-            let mut state = vwap::VwapState::new();
+            let mut state = vwap::VwapState::default();
             let mut results = Vec::new();
             for i in 0..fixture.inputs.closes.len() {
                 // timestamp=0 means no daily reset (single session)
@@ -341,7 +341,7 @@ mod tests {
         let file = load_fixtures();
         let tol = file.tolerance;
         for fixture in &file.fixtures {
-            let mut state = vwap::VwapState::new();
+            let mut state = vwap::VwapState::default();
             let mut results = Vec::new();
             for i in 0..fixture.inputs.closes.len() {
                 let vals = state.update(
@@ -364,7 +364,7 @@ mod tests {
         let file = load_fixtures();
         let tol = file.tolerance;
         for fixture in &file.fixtures {
-            let mut state = vwap::VwapState::new();
+            let mut state = vwap::VwapState::default();
             let mut results = Vec::new();
             for i in 0..fixture.inputs.closes.len() {
                 let vals = state.update(

@@ -71,6 +71,7 @@ fn main() {
     };
 
     let pairs_trading_config = cfg_file.pairs_trading.clone();
+    let data_config = cfg_file.data.clone();
     let engine_config = cfg_file.into_engine_config();
 
     // ── Initialize engines ──
@@ -96,7 +97,14 @@ fn main() {
     info!(pairs = pairs_engine.pair_count(), "engines initialized");
 
     // ── Load bars ──
-    let all_bars = match bars::load_days(&cli.data_dir) {
+    info!(
+        timezone_offset = data_config.timezone_offset_hours,
+        market_open = data_config.market_open.as_str(),
+        market_close = data_config.market_close.as_str(),
+        "market hours config"
+    );
+
+    let all_bars = match bars::load_days(&cli.data_dir, &data_config) {
         Ok(b) => b,
         Err(e) => {
             error!("failed to load bars: {e}");

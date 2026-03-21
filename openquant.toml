@@ -385,6 +385,18 @@ min_hold_bars = 10
 # For live trading, set to something like 120 (2 minutes).
 max_bar_age_seconds = 120
 
+# Trading timezone UTC offset in hours. Used for:
+# - VWAP session reset (resets at midnight in this timezone)
+# - Market hours filtering (bars outside open/close are dropped)
+# - Day boundary detection
+# US Eastern: -5 (EST) or -4 (EDT). Use -5 for year-round safety.
+timezone_offset_hours = -5
+
+# Market open/close in local timezone (HH:MM format).
+# Bars outside this window are filtered out (pre-market/after-hours).
+market_open = "09:30"
+market_close = "16:00"
+
 
 # ---------------------------------------------------------------------------
 # Asset class defaults — inherited by symbols via asset_class = "name"
