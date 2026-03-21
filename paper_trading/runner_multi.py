@@ -10,16 +10,16 @@ Usage:
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from openquant import Engine
 
 from . import alpaca_client as alpaca
-from .runner import _get_latest_bar
 
 # Console-only logging — Rust engine handles file logging via tracing
 # (data/journal/engine.log). Set RUST_LOG=warn or RUST_LOG=info.
@@ -43,6 +43,45 @@ signal.signal(signal.SIGINT, _handle_signal)
 signal.signal(signal.SIGTERM, _handle_signal)
 
 
+def _get_latest_bar(symbol: str):
+    """Get the most recent bar from Alpaca."""
+    from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
+    from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed
+    from dotenv import load_dotenv
+
+    is_crypto = "/" in symbol
+    start = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    if is_crypto:
+        client = CryptoHistoricalDataClient()
+        req = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, start=start)
+        bars = client.get_crypto_bars(req)
+    else:
+        load_dotenv()
+        client = StockHistoricalDataClient(
+            os.environ["ALPACA_API_KEY"],
+            os.environ["ALPACA_SECRET_KEY"],
+        )
+        req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, start=start, feed=DataFeed.IEX)
+        bars = client.get_stock_bars(req)
+
+    bar_key = symbol if symbol in bars.data else symbol.replace("/", "")
+    if bar_key not in bars.data or len(bars.data[bar_key]) == 0:
+        return None
+
+    bar = bars.data[bar_key][-1]
+    return {
+        "timestamp": int(bar.timestamp.timestamp() * 1000),
+        "open": float(bar.open),
+        "high": float(bar.high),
+        "low": float(bar.low),
+        "close": float(bar.close),
+        "volume": float(bar.volume),
+    }
+
+
 def _is_market_open() -> bool:
     """Check if US equity markets are open (9:30-16:00 ET, weekdays)."""
     from zoneinfo import ZoneInfo
@@ -57,12 +96,10 @@ def _is_market_open() -> bool:
 
 def _warmup(symbols: list[str], engine: Engine, num_bars: int = 60):
     """Pre-load historical bars to warm up indicators instantly."""
-    import os
-    from datetime import timedelta
-    from dotenv import load_dotenv
-    from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
-    from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
+    from dotenv import load_dotenv
     from alpaca.data.enums import DataFeed
 
     load_dotenv()
