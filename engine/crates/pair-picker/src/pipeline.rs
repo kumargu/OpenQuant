@@ -12,7 +12,7 @@
 //! writes `active_pairs.json` with passing pairs sorted by score.
 
 use crate::etf_filter::is_etf_component_pair;
-use crate::regime::compute_regime_robustness;
+use crate::regime::{compute_regime_robustness, RegimeAdjustedThresholds};
 use crate::scorer::compute_score;
 use crate::stats::adf::adf_test;
 use crate::stats::beta_stability::check_beta_stability;
@@ -229,7 +229,21 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     if let Some(beta) = result.beta {
         let robustness = compute_regime_robustness(prices_a, prices_b, beta);
         result.regime_robustness = Some(robustness.score);
-        if robustness.sufficient_data && robustness.score < 0.3 {
+
+        // Use regime-adjusted ADF threshold (p<0.01 in volatile vs p<0.05 in calm)
+        let thresholds = RegimeAdjustedThresholds::from_regime(robustness.current_regime);
+        if let Some(p) = result.adf_pvalue {
+            if p > thresholds.adf_pvalue_threshold && result.is_cointegrated {
+                // ADF passed at 0.05 but fails the tighter volatile threshold
+                result.is_cointegrated = false;
+                result.rejection_reasons.push(format!(
+                    "Regime-tightened: ADF p={p:.4} > {:.2} (volatile regime threshold)",
+                    thresholds.adf_pvalue_threshold
+                ));
+            }
+        }
+
+        if robustness.sufficient_data && robustness.score >= 0.0 && robustness.score < 0.3 {
             result.rejection_reasons.push(format!(
                 "Regime-fragile: robustness={:.2} (cointegration breaks in volatile periods)",
                 robustness.score

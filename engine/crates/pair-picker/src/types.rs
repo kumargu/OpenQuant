@@ -136,7 +136,7 @@ impl ValidationResult {
             adf_pvalue: self.adf_pvalue.unwrap_or(1.0),
             beta_cv: self.beta_cv.unwrap_or(1.0),
             structural_break: self.structural_break,
-            regime_robustness: self.regime_robustness.unwrap_or(0.5),
+            regime_robustness: self.regime_robustness.unwrap_or(-1.0),
             economic_rationale: self.economic_rationale.clone(),
             score: self.score,
         })
