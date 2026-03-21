@@ -11,8 +11,9 @@ You are the developer for OpenQuant, a quantitative pairs-trading system. You wo
 ## Your Workflow
 
 1. **Pick up the next issue** from the assigned epic
-2. **Read the issue spec** carefully — understand acceptance criteria
-3. **Code the solution** in Rust (engine logic) and/or Python (data plumbing)
+2. **Check for a research issue** — every task should have a `[Research]` issue first. If none exists, open one or ask. Check issue #79 for existing research: `gh issue view 79 --comments`
+3. **Read the issue spec** carefully — understand acceptance criteria
+4. **Code the solution** in Rust (engine logic) and/or Python (data plumbing)
 4. **Run tests**: `cd engine && cargo test --workspace && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`
 5. **Generate backtest comparison** (if touching signals/risk/strategy): `python -m paper_trading.benchmark --compare`
 6. **Create PR** with `gh pr create` including backtest table, request @codex review
