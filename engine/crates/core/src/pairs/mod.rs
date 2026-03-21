@@ -703,6 +703,76 @@ mod tests {
     }
 
     #[test]
+    fn test_min_hold_blocks_reversion() {
+        let mut state = PairState::new();
+        let config = easy_trigger_config();
+        let mut trading = easy_trigger_trading();
+        trading.min_hold_bars = 10;
+
+        // Warmup
+        for _ in 0..35 {
+            let _ = state.on_price("A", 100.0, &config, &trading, 0);
+            let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        }
+
+        // Enter long spread
+        let _ = state.on_price("A", 90.0, &config, &trading, 0);
+        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        assert_eq!(state.position(), PairPosition::LongSpread);
+
+        // Hold with spread extended for min_hold bars — keep A depressed
+        for bar in 0..9 {
+            let _ = state.on_price("A", 90.0, &config, &trading, 0);
+            let intents = state.on_price("B", 100.0, &config, &trading, 0);
+            // z should still be negative (spread still extended), no exit
+            assert!(
+                intents.is_empty() || state.position() == PairPosition::LongSpread,
+                "should hold position during min_hold (bar {bar})"
+            );
+        }
+        assert_eq!(
+            state.position(),
+            PairPosition::LongSpread,
+            "should still be in position during min_hold"
+        );
+
+        // Now revert A back to normal — we're at bar 10 (past min_hold), should exit
+        let _ = state.on_price("A", 100.0, &config, &trading, 0);
+        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        assert!(!intents.is_empty(), "should exit after min_hold_bars");
+        assert_eq!(state.position(), PairPosition::Flat);
+    }
+
+    #[test]
+    fn test_min_hold_does_not_block_stop_loss() {
+        let mut state = PairState::new();
+        let config = easy_trigger_config();
+        let mut trading = easy_trigger_trading();
+        trading.min_hold_bars = 100; // very high — should not block stop loss
+
+        // Warmup
+        for _ in 0..35 {
+            let _ = state.on_price("A", 100.0, &config, &trading, 0);
+            let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        }
+
+        // Enter long spread (z very negative)
+        let _ = state.on_price("A", 90.0, &config, &trading, 0);
+        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        assert_eq!(state.position(), PairPosition::LongSpread);
+
+        // Spread diverges FURTHER (A drops more) — should trigger stop loss at bar 1
+        // despite min_hold_bars=100
+        let _ = state.on_price("A", 70.0, &config, &trading, 0);
+        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        assert!(
+            !intents.is_empty(),
+            "stop loss must fire regardless of min_hold_bars"
+        );
+        assert_eq!(state.position(), PairPosition::Flat);
+    }
+
+    #[test]
     fn test_zero_price_rejected() {
         let mut state = PairState::new();
         let config = easy_trigger_config();

@@ -20,7 +20,12 @@ const MARKET_CLOSE_UTC_HOUR: u32 = 20;
 const MARKET_CLOSE_UTC_MIN: u32 = 0;
 
 /// Check if a timestamp falls within US equity regular trading hours.
+///
+/// Uses EDT boundaries (13:30-20:00 UTC). During EST (Nov-Mar), this
+/// admits ~30 min of pre-market bars (8:30-9:00 ET). Acceptable since
+/// pre-market bars have low volume and won't trigger entries.
 fn is_regular_hours(timestamp_ms: i64) -> bool {
+    debug_assert!(timestamp_ms > 0, "timestamp must be positive");
     let secs = timestamp_ms / 1000;
     let time_of_day = (secs % 86400) as u32; // seconds since midnight UTC
     let hour = time_of_day / 3600;
