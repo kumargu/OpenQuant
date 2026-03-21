@@ -54,7 +54,9 @@ pub struct PairConfig {
     pub exit_z: f64,
     /// Z-score threshold for stop loss (spread diverged further). Exit when |z| > stop_z.
     pub stop_z: f64,
-    /// Rolling window size for spread mean and std computation.
+    /// Warmup period: minimum spread observations before trading.
+    /// Actual rolling window is fixed at 32 bars (RollingStats<32>).
+    /// Values > 32 are clamped to 32. Set to 32 for standard behavior.
     pub lookback: usize,
     /// Maximum bars to hold before forced exit.
     pub max_hold_bars: usize,
@@ -168,6 +170,12 @@ impl PairState {
             _ => return vec![],
         };
 
+        // Guard: reject zero/negative prices (ln would produce -inf/NaN)
+        if price_a <= 0.0 || price_b <= 0.0 {
+            warn!("pairs: skipping bar — zero/negative price");
+            return vec![];
+        }
+
         // Clear buffered prices — require fresh data for next evaluation
         self.last_price_a = None;
         self.last_price_b = None;
@@ -200,8 +208,6 @@ impl PairState {
         }
         let z = (spread - mean) / std;
 
-        let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
-
         // ── Check exits first (if we have a position) ──
         if self.position != PairPosition::Flat {
             let bars_held = self.bar_count - self.entry_bar;
@@ -213,8 +219,12 @@ impl PairState {
                 PairPosition::Flat => unreachable!(),
             };
 
-            // Exit condition: stop loss (spread diverged further)
-            let stopped = z.abs() > config.stop_z;
+            // Exit condition: stop loss (spread diverged FURTHER from entry, not reverted past)
+            let stopped = match self.position {
+                PairPosition::LongSpread => z < -config.stop_z,   // entered negative, got more negative
+                PairPosition::ShortSpread => z > config.stop_z,    // entered positive, got more positive
+                PairPosition::Flat => false,
+            };
 
             // Exit condition: max hold
             let max_held = config.max_hold_bars > 0 && bars_held >= config.max_hold_bars;
@@ -228,6 +238,7 @@ impl PairState {
                     SignalReason::PairsExit
                 };
 
+                let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
                 let exit_reason = if stopped { "stop" } else if max_held { "max_hold" } else { "reversion" };
                 info!(
                     pair = pair_id.as_str(),
@@ -237,7 +248,7 @@ impl PairState {
                     "pairs: EXIT"
                 );
 
-                let intents = self.close_position(config, price_a, price_b, reason, z, spread);
+                let intents = self.close_position(config, reason, z, spread);
                 self.position = PairPosition::Flat;
                 return intents;
             }
@@ -248,6 +259,7 @@ impl PairState {
         // ── Check entries (if flat) ──
         if z < -config.entry_z {
             // Spread too low → expect reversion UP → LONG spread (buy A, sell B)
+            let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
             info!(
                 pair = pair_id.as_str(),
                 z = format!("{:.2}", z).as_str(),
@@ -286,6 +298,7 @@ impl PairState {
             ];
         } else if z > config.entry_z {
             // Spread too high → expect reversion DOWN → SHORT spread (sell A, buy B)
+            let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
             info!(
                 pair = pair_id.as_str(),
                 z = format!("{:.2}", z).as_str(),
@@ -331,8 +344,6 @@ impl PairState {
     fn close_position(
         &self,
         config: &PairConfig,
-        price_a: f64,
-        price_b: f64,
         reason: SignalReason,
         z: f64,
         spread: f64,
@@ -449,55 +460,136 @@ mod tests {
         assert!((spread - 4.5015).abs() < 0.01, "spread={spread}");
     }
 
+    /// Config with very low entry threshold to make tests deterministic.
+    fn easy_trigger_config() -> PairConfig {
+        PairConfig {
+            leg_a: "A".into(),
+            leg_b: "B".into(),
+            beta: 1.0,
+            entry_z: 1.5,  // easy to trigger
+            exit_z: 0.3,
+            stop_z: 5.0,
+            lookback: 32,
+            max_hold_bars: 50,
+            notional_per_leg: 10_000.0,
+        }
+    }
+
     #[test]
     fn test_entry_long_spread() {
         let mut state = PairState::new();
-        let config = test_config();
+        let config = easy_trigger_config();
 
-        // Build up stable spread, then shock it down
+        // Warmup with stable prices (A=100, B=100, beta=1, spread=0)
         for _ in 0..35 {
-            let _ = state.on_price("GLD", 420.0, &config);
-            let _ = state.on_price("SLV", 64.0, &config);
+            let _ = state.on_price("A", 100.0, &config);
+            let _ = state.on_price("B", 100.0, &config);
         }
 
-        // Now drop GLD sharply (spread drops → z goes negative → long spread)
-        let _ = state.on_price("GLD", 410.0, &config);
-        let intents = state.on_price("SLV", 64.0, &config);
+        // Drop A sharply: spread = ln(90) - ln(100) = -0.105. After 35 bars of 0,
+        // this is a huge z-score deviation (negative).
+        let _ = state.on_price("A", 90.0, &config);
+        let intents = state.on_price("B", 100.0, &config);
 
-        if !intents.is_empty() {
-            assert_eq!(intents.len(), 2, "entry should produce 2 order intents");
-            assert_eq!(intents[0].symbol, "GLD");
-            assert_eq!(intents[0].side, Side::Buy);
-            assert_eq!(intents[1].symbol, "SLV");
-            assert_eq!(intents[1].side, Side::Sell);
-            assert_eq!(state.position(), PairPosition::LongSpread);
-        }
-        // Note: may not trigger if the shock isn't large enough for z > 2.0
-        // with only 35 bars of history. This is expected behavior.
+        assert!(!intents.is_empty(), "should trigger long spread entry");
+        assert_eq!(intents.len(), 2);
+        assert_eq!(intents[0].symbol, "A");
+        assert_eq!(intents[0].side, Side::Buy);
+        assert_eq!(intents[1].symbol, "B");
+        assert_eq!(intents[1].side, Side::Sell);
+        assert_eq!(state.position(), PairPosition::LongSpread);
     }
 
     #[test]
     fn test_entry_short_spread() {
         let mut state = PairState::new();
-        let config = test_config();
+        let config = easy_trigger_config();
 
         for _ in 0..35 {
-            let _ = state.on_price("GLD", 420.0, &config);
-            let _ = state.on_price("SLV", 64.0, &config);
+            let _ = state.on_price("A", 100.0, &config);
+            let _ = state.on_price("B", 100.0, &config);
         }
 
-        // Spike GLD up (spread rises → z goes positive → short spread)
-        let _ = state.on_price("GLD", 430.0, &config);
-        let intents = state.on_price("SLV", 64.0, &config);
+        // Spike A: spread = ln(110) - ln(100) = +0.095 → positive z → short spread
+        let _ = state.on_price("A", 110.0, &config);
+        let intents = state.on_price("B", 100.0, &config);
 
-        if !intents.is_empty() {
-            assert_eq!(intents.len(), 2);
-            assert_eq!(intents[0].symbol, "GLD");
-            assert_eq!(intents[0].side, Side::Sell);
-            assert_eq!(intents[1].symbol, "SLV");
-            assert_eq!(intents[1].side, Side::Buy);
-            assert_eq!(state.position(), PairPosition::ShortSpread);
+        assert!(!intents.is_empty(), "should trigger short spread entry");
+        assert_eq!(intents.len(), 2);
+        assert_eq!(intents[0].symbol, "A");
+        assert_eq!(intents[0].side, Side::Sell);
+        assert_eq!(intents[1].symbol, "B");
+        assert_eq!(intents[1].side, Side::Buy);
+        assert_eq!(state.position(), PairPosition::ShortSpread);
+    }
+
+    #[test]
+    fn test_exit_reversion() {
+        let mut state = PairState::new();
+        let config = easy_trigger_config();
+
+        // Warmup
+        for _ in 0..35 {
+            let _ = state.on_price("A", 100.0, &config);
+            let _ = state.on_price("B", 100.0, &config);
         }
+
+        // Enter long spread
+        let _ = state.on_price("A", 90.0, &config);
+        let _ = state.on_price("B", 100.0, &config);
+        assert_eq!(state.position(), PairPosition::LongSpread);
+
+        // Revert: A returns to normal → spread returns to ~0 → z near 0 → exit
+        let _ = state.on_price("A", 100.0, &config);
+        let intents = state.on_price("B", 100.0, &config);
+
+        assert!(!intents.is_empty(), "should trigger exit on reversion");
+        assert_eq!(intents.len(), 2);
+        // Close long spread: sell A, buy B
+        assert_eq!(intents[0].side, Side::Sell);
+        assert_eq!(intents[1].side, Side::Buy);
+        assert_eq!(state.position(), PairPosition::Flat);
+    }
+
+    #[test]
+    fn test_exit_max_hold() {
+        let mut state = PairState::new();
+        let mut config = easy_trigger_config();
+        config.max_hold_bars = 5;
+
+        // Warmup
+        for _ in 0..35 {
+            let _ = state.on_price("A", 100.0, &config);
+            let _ = state.on_price("B", 100.0, &config);
+        }
+
+        // Enter
+        let _ = state.on_price("A", 90.0, &config);
+        let _ = state.on_price("B", 100.0, &config);
+        assert_eq!(state.position(), PairPosition::LongSpread);
+
+        // Hold for max_hold bars without reversion (keep spread extended)
+        let mut exited = false;
+        for _ in 0..10 {
+            let _ = state.on_price("A", 90.0, &config);
+            let intents = state.on_price("B", 100.0, &config);
+            if !intents.is_empty() {
+                exited = true;
+                assert_eq!(state.position(), PairPosition::Flat);
+                break;
+            }
+        }
+        assert!(exited, "should exit on max hold");
+    }
+
+    #[test]
+    fn test_zero_price_rejected() {
+        let mut state = PairState::new();
+        let config = easy_trigger_config();
+
+        let _ = state.on_price("A", 0.0, &config);
+        let intents = state.on_price("B", 100.0, &config);
+        assert!(intents.is_empty(), "zero price should be rejected");
     }
 
     #[test]
