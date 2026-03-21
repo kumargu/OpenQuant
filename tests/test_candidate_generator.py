@@ -12,6 +12,7 @@ import pytest
 
 from paper_trading.candidate_generator import (
     DEFAULT_UNIVERSE,
+    ETF_SYMBOLS,
     build_user_prompt,
     parse_candidates,
     write_pair_candidates,
@@ -103,6 +104,51 @@ class TestParseCandidates:
     def test_parse_no_candidates_key(self):
         result = parse_candidates('{"pairs": []}')
         assert result == []
+
+    def test_parse_deduplicates_reversed_pairs(self):
+        response = json.dumps({
+            "candidates": [
+                {"leg_a": "GS", "leg_b": "MS", "economic_rationale": "Banks v1"},
+                {"leg_a": "MS", "leg_b": "GS", "economic_rationale": "Banks v2"},
+            ]
+        })
+        result = parse_candidates(response)
+        assert len(result) == 1  # second is deduped
+
+    def test_parse_rejects_unknown_symbols(self):
+        response = json.dumps({
+            "candidates": [
+                {"leg_a": "GS", "leg_b": "MS", "economic_rationale": "Banks"},
+                {"leg_a": "FAKE", "leg_b": "MS", "economic_rationale": "Hallucinated"},
+            ]
+        })
+        result = parse_candidates(response, universe=["GS", "MS"])
+        assert len(result) == 1
+        assert result[0]["leg_a"] == "GS"
+
+    def test_parse_without_universe_accepts_all(self):
+        response = json.dumps({
+            "candidates": [
+                {"leg_a": "ANYTHING", "leg_b": "GOES", "economic_rationale": "No filter"},
+            ]
+        })
+        result = parse_candidates(response, universe=None)
+        assert len(result) == 1
+
+
+class TestETFExclusion:
+    def test_etfs_excluded_from_prompt(self):
+        prompt = build_user_prompt(DEFAULT_UNIVERSE)
+        # ETFs should NOT appear in the tradeable universe list
+        # (they might appear in the warning text though)
+        lines = prompt.split("\n")
+        universe_line = [l for l in lines if l.startswith("Stock universe:")][0]
+        for etf in ["XLF", "XLE", "SMH", "QQQ"]:
+            assert etf not in universe_line, f"{etf} should be excluded from tradeable universe"
+
+    def test_prompt_explicitly_warns_about_etfs(self):
+        prompt = build_user_prompt(DEFAULT_UNIVERSE)
+        assert "NEVER propose them" in prompt or "NEVER use them" in prompt
 
 
 class TestWritePairCandidates:

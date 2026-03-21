@@ -82,9 +82,17 @@ mechanical correlation, not economic
 
 Output ONLY valid JSON. No markdown, no code fences, no commentary outside the JSON."""
 
+ETF_SYMBOLS: set[str] = {
+    "XLF", "XLE", "XLK", "XLV", "XLY", "XLP", "XLU", "XLI", "XLB", "XLRE",
+    "GLD", "SLV", "SMH", "QQQ", "SPY", "IWM", "DIA", "EEM", "TLT", "HYG",
+    "LQD", "XBI",
+}
+
 def build_user_prompt(universe: list[str]) -> str:
-    """Build the user prompt with the current stock universe."""
-    universe_str = ", ".join(sorted(universe))
+    """Build the user prompt with the current stock universe (ETFs excluded)."""
+    # Exclude ETFs from the tradeable universe — they should not be pair legs
+    tradeable = [s for s in universe if s not in ETF_SYMBOLS]
+    universe_str = ", ".join(sorted(tradeable))
     return f"""\
 Analyze the following stock universe and propose 20-30 pair trading candidates.
 
@@ -100,6 +108,8 @@ cointegrated (shared revenue drivers, regulatory overlap, factor exposure)
 - counter_argument: one sentence on why this pair might NOT work
 
 IMPORTANT:
+- Do NOT use ETFs as pair legs. The following are ETFs — NEVER propose them \
+as leg_a or leg_b: XLF, XLE, XLK, SMH, QQQ, GLD, SLV, SPY, IWM, DIA
 - Do NOT pair an ETF with one of its components (e.g., XLF/JPM is INVALID)
 - Focus on pairs with genuine economic links, not just statistical correlation
 - Include pairs across different sectors if there's a fundamental link \
@@ -128,7 +138,7 @@ def call_claude_api(
     system_prompt: str,
     user_prompt: str,
     model: str = "claude-sonnet-4-6-20250514",
-    max_tokens: int = 4096,
+    max_tokens: int = 8192,
 ) -> dict[str, Any]:
     """Call the Claude API and return the parsed response.
 
@@ -176,17 +186,20 @@ def call_claude_api(
 # Output parsing and writing
 # ---------------------------------------------------------------------------
 
-def parse_candidates(response_text: str) -> list[dict[str, str]]:
+def parse_candidates(
+    response_text: str,
+    universe: list[str] | None = None,
+) -> list[dict[str, str]]:
     """Parse the LLM response into a list of candidate pairs.
 
-    Handles common issues: markdown fences, trailing commas, etc.
+    Handles: markdown fences, missing fields, duplicate pairs,
+    hallucinated tickers not in the universe.
     """
     text = response_text.strip()
 
     # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.split("\n")
-        # Remove first and last fence lines
         lines = [l for l in lines if not l.strip().startswith("```")]
         text = "\n".join(lines)
 
@@ -202,9 +215,11 @@ def parse_candidates(response_text: str) -> list[dict[str, str]]:
         logger.error("'candidates' is not a list: %s", type(candidates))
         return []
 
-    # Validate required fields
+    universe_set = set(universe) if universe else None
+    seen: set[tuple[str, str]] = set()
     valid = []
     required_fields = {"leg_a", "leg_b", "economic_rationale"}
+
     for i, c in enumerate(candidates):
         if not isinstance(c, dict):
             logger.warning("Candidate %d is not a dict, skipping", i)
@@ -213,6 +228,23 @@ def parse_candidates(response_text: str) -> list[dict[str, str]]:
         if missing:
             logger.warning("Candidate %d missing fields %s, skipping", i, missing)
             continue
+
+        # Validate tickers are in the universe (catch LLM hallucinations)
+        if universe_set is not None:
+            if c["leg_a"] not in universe_set or c["leg_b"] not in universe_set:
+                logger.warning(
+                    "Candidate %d has unknown symbol (%s/%s), skipping",
+                    i, c["leg_a"], c["leg_b"],
+                )
+                continue
+
+        # Deduplicate by canonical ordering (GS/MS == MS/GS)
+        key = tuple(sorted([c["leg_a"], c["leg_b"]]))
+        if key in seen:
+            logger.info("Dedup: %s/%s already seen, skipping", c["leg_a"], c["leg_b"])
+            continue
+        seen.add(key)
+
         valid.append(c)
 
     logger.info("Parsed %d valid candidates from %d total", len(valid), len(candidates))
@@ -317,8 +349,8 @@ def generate_candidates(
             return existing.get("pairs", [])
         return []
 
-    # Parse response
-    candidates = parse_candidates(response["text"])
+    # Parse response (validate tickers against universe, deduplicate)
+    candidates = parse_candidates(response["text"], universe=universe)
 
     if not candidates:
         logger.warning("No valid candidates from API — keeping existing file")
