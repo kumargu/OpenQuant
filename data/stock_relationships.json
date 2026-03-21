@@ -89,6 +89,15 @@
 
     {"a": "GLD", "b": "SLV", "type": "same_factor", "sector": "metals", "note": "Precious metals ETFs, correlated via safe-haven demand and real rates"},
 
-    {"a": "COIN", "b": "PLTR", "type": "same_factor", "sector": "tech_speculative", "note": "High-beta tech/fintech, correlated via risk-on/risk-off sentiment"}
+    {"a": "COIN", "b": "PLTR", "type": "same_factor", "sector": "tech_speculative", "note": "High-beta tech/fintech, correlated via risk-on/risk-off sentiment"},
+
+    {"a": "AXP", "b": "V", "type": "competitor", "sector": "payments", "note": "Card network competitors — AXP closed-loop vs V open-loop, shared consumer spending exposure"},
+    {"a": "AXP", "b": "JPM", "type": "same_regulator", "sector": "financials", "note": "Both Fed-supervised, consumer credit exposure, shared rate sensitivity"},
+    {"a": "ON", "b": "TXN", "type": "competitor", "sector": "semis", "note": "Analog/power semiconductor competitors, correlated via automotive and industrial demand"},
+    {"a": "ON", "b": "MRVL", "type": "same_factor", "sector": "semis", "note": "Both mid-cap semis exposed to datacenter and auto chip demand cycles"},
+
+    {"a": "AMZN", "b": "WMT", "type": "competitor", "sector": "retail", "note": "E-commerce vs brick-and-mortar retail, competing for consumer wallet share"},
+    {"a": "GOOGL", "b": "AMZN", "type": "competitor", "sector": "cloud", "note": "Cloud infrastructure competitors (GCP vs AWS), also compete in advertising"},
+    {"a": "META", "b": "DIS", "type": "same_factor", "sector": "advertising", "note": "Both dependent on advertising revenue, correlated via ad market spending cycles"}
   ]
 }
