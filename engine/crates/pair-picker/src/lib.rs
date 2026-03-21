@@ -25,4 +25,5 @@ pub mod scorer;
 pub mod stats;
 #[cfg(test)]
 pub mod test_utils;
+pub mod thompson;
 pub mod types;

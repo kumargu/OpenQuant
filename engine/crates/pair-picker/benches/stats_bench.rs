@@ -132,6 +132,41 @@ fn bench_full_pipeline_single_pair(c: &mut Criterion) {
     });
 }
 
+fn bench_thompson_sample_20_arms(c: &mut Criterion) {
+    use pair_picker::thompson::{ArmState, ThompsonState};
+
+    let mut state = ThompsonState::new();
+    for i in 0..20 {
+        let pair_id = format!("A{i}/B{i}");
+        let score = 0.5 + (i as f64) * 0.025;
+        state.get_or_create(&pair_id, score);
+        // Add some trade history to half the arms
+        if i % 2 == 0 {
+            state.update_pair(&pair_id, &[10.0, 15.0, -5.0, 20.0, 8.0], score);
+        }
+    }
+
+    c.bench_function("thompson_sample_20_arms", |b| {
+        let mut seed = 42u64;
+        b.iter(|| {
+            seed += 1;
+            state.rank_pairs(black_box(seed))
+        })
+    });
+}
+
+fn bench_thompson_update(c: &mut Criterion) {
+    use pair_picker::thompson::ArmState;
+
+    c.bench_function("thompson_posterior_update", |b| {
+        b.iter(|| {
+            let mut arm = ArmState::from_quality_score(0.70);
+            arm.update(black_box(&[15.0, -5.0, 20.0, 10.0, -8.0, 25.0, 12.0, -3.0]));
+            arm
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_ols_200,
@@ -141,5 +176,7 @@ criterion_group!(
     bench_halflife_500,
     bench_beta_stability_500,
     bench_full_pipeline_single_pair,
+    bench_thompson_sample_20_arms,
+    bench_thompson_update,
 );
 criterion_main!(benches);
