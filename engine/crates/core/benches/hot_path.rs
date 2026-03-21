@@ -21,19 +21,13 @@ use openquant_core::signals::{Side, SignalOutput, SignalReason, Strategy};
 // Synthetic data generator (deterministic, reproducible)
 // ---------------------------------------------------------------------------
 
-struct Rng {
-    state: u64,
-}
+struct Rng { state: u64 }
 
 impl Rng {
-    fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
+    fn new(seed: u64) -> Self { Self { state: seed } }
 
     fn next_f64(&mut self) -> f64 {
-        self.state = self
-            .state
-            .wrapping_mul(6364136223846793005)
+        self.state = self.state.wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         (self.state >> 33) as f64 / (1u64 << 31) as f64
     }
@@ -62,11 +56,7 @@ fn generate_bars(n: usize, seed: u64) -> Vec<Bar> {
         bars.push(Bar {
             symbol: "TEST".to_string(),
             timestamp: 1700000000000 + (i as i64 * 60_000),
-            open,
-            high,
-            low,
-            close: price,
-            volume,
+            open, high, low, close: price, volume,
         });
     }
     bars
@@ -142,17 +132,7 @@ fn bench_risk_check_pass(c: &mut Criterion) {
     };
 
     c.bench_function("risk_check_pass", |b| {
-        b.iter(|| {
-            black_box(risk::check(
-                &signal,
-                100.0,
-                0.0,
-                &state,
-                &kelly,
-                MarketRegime::Normal,
-                &config,
-            ))
-        })
+        b.iter(|| black_box(risk::check(&signal, 100.0, 0.0, &state, &kelly, MarketRegime::Normal, &config)))
     });
 }
 
@@ -168,12 +148,7 @@ fn bench_exit_check_no_trigger(c: &mut Criterion) {
     c.bench_function("exit_check_no_trigger", |b| {
         b.iter(|| {
             black_box(openquant_core::exit::check(
-                &pos,
-                black_box(101.0),
-                50,
-                1.5,
-                0.01,
-                &config,
+                &pos, black_box(101.0), 50, 1.5, 0.01, &config,
             ))
         })
     });
