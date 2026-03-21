@@ -73,6 +73,44 @@ Stop, pull main, and verify everything actually works — don't just review diff
 
 Post a summary comment on the parent issue with findings and flag concerns before continuing.
 
+### Testing and experimentation — protected main workflow
+
+**This system manages real money. Main must never be contaminated by experimental changes.**
+
+All testing, config tuning, and experimentation happens in isolated worktrees. Changes flow through a review cycle before reaching main:
+
+```
+Tester agent (worktree)                    Reviewer (main)                     Coder (branch)
+  │                                          │                                   │
+  ├─ Run forward tests on real data          │                                   │
+  ├─ Try config/threshold changes            │                                   │
+  ├─ Measure P&L impact                      │                                   │
+  ├─ Report findings (no code changes        │                                   │
+  │  to main — worktree is disposable)       │                                   │
+  │                                          │                                   │
+  └──→ Send results to reviewer ─────────────┤                                   │
+                                             ├─ Quant review: are the            │
+                                             │  findings statistically valid?    │
+                                             │  Overfitting? Sufficient data?    │
+                                             │                                   │
+                                             ├─ Create GitHub issue with         │
+                                             │  validated changes + evidence ────┤
+                                             │                                   ├─ Implement via PR
+                                             │                                   ├─ Backtest comparison
+                                             ├─ Review PR, verify CI ────────────┤
+                                             ├─ Merge only when validated        │
+                                             │                                   │
+```
+
+**Rules**:
+- Tester agents **always** use `isolation: "worktree"`. Never modify main directly
+- Tester agents change configs, run backtests, tune thresholds freely in their worktree — it's disposable
+- Tester sends back **findings and evidence** (P&L numbers, Sharpe ratios, comparison tables), not code changes
+- Reviewer applies **quant research judgment**: Is the sample size sufficient? Is this overfitting? Does it hold OOS?
+- Only after quant validation does the reviewer create a GitHub issue with the specific change + evidence
+- Coder implements via PR with backtest comparison table (per PR requirements above)
+- **No shortcutting**: tester cannot push to main, reviewer cannot apply tester's changes directly. The full cycle must complete
+
 ### Merge protocol
 1. All review comments addressed
 2. `gh pr checks <number>` — all green
