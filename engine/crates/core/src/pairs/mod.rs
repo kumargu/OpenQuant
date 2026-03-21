@@ -146,7 +146,9 @@ pub struct PairState {
     last_price_b: Option<f64>,
     /// Rolling statistics of the spread for z-score computation.
     /// Window of 256 bars supports lookback up to 256 (configurable via TOML).
-    spread_stats: RollingStats<256>,
+    /// Rolling window for spread z-score. Must match lookback config (default 32).
+    /// Was <256> which caused z-scores to diverge from expected behavior — see #115.
+    spread_stats: RollingStats<32>,
     /// Number of spread observations (for warmup detection).
     spread_count: usize,
     /// Current position state.
