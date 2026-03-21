@@ -34,6 +34,7 @@
 
 pub mod active_pairs;
 pub mod engine;
+pub mod shadow;
 
 use crate::features::rolling_stats::RollingStats;
 use crate::signals::{Side, SignalReason};
