@@ -2,13 +2,23 @@
 //!
 //! Reads `pair_candidates.json`, validates each pair, writes `active_pairs.json`.
 //! Uses a lock file to ensure at most one run per day.
+//!
+//! Integration pipeline:
+//! 1. Load candidates from pair_candidates.json
+//! 2. Filter through relationship graph (only screen connected pairs)
+//! 3. Validate each pair statistically (ADF, half-life, beta stability, regime)
+//! 4. Rank validated pairs via Thompson sampling (informed by trade history)
+//! 5. Write active_pairs.json for PairsEngine consumption
 
+use pair_picker::graph::RelationshipGraph;
 use pair_picker::lockfile;
 use pair_picker::pipeline::{self, InMemoryPrices, PipelineError};
-use pair_picker::types::PairCandidatesFile;
+use pair_picker::regime::regime_adjusted_prior;
+use pair_picker::thompson::{pair_id, ThompsonState, TradeHistory};
+use pair_picker::types::{PairCandidate, PairCandidatesFile};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -61,10 +71,11 @@ fn main() {
         .unwrap_or_else(|| data_dir.join("active_pairs.json"));
 
     info!("Pair Picker starting");
+    info!("  data_dir:   {}", data_dir.display());
     info!("  candidates: {}", candidates_path.display());
     info!("  output:     {}", output_path.display());
 
-    // Read candidates
+    // ── Step 1: Load candidates ──
     let contents = match std::fs::read_to_string(&candidates_path) {
         Ok(c) => c,
         Err(e) => {
@@ -83,26 +94,42 @@ fn main() {
 
     info!("Loaded {} candidate pairs", candidates.pairs.len());
 
-    // For now, use an empty provider (no price data).
-    // In production, this will be replaced with an Alpaca API provider.
-    // The binary is designed so the Python runner can pre-populate price data
-    // as JSON files that the provider reads.
+    // ── Step 2: Filter through relationship graph ──
+    let graph_path = data_dir.join("stock_relationships.json");
+    let filtered_candidates = if let Some(graph) = RelationshipGraph::load(&graph_path) {
+        let before = candidates.pairs.len();
+        let filtered: Vec<PairCandidate> = candidates
+            .pairs
+            .into_iter()
+            .filter(|c| graph.are_connected(&c.leg_a, &c.leg_b))
+            .collect();
+        let after = filtered.len();
+        info!(
+            "Graph filter: {before} candidates → {after} graph-connected ({} filtered out)",
+            before - after
+        );
+        filtered
+    } else {
+        warn!("No relationship graph found — screening all candidates (no graph filter)");
+        candidates.pairs
+    };
+
+    // ── Step 3: Load price data ──
     let price_file = data_dir.join("pair_picker_prices.json");
     let provider = if price_file.exists() {
         match load_prices_from_file(&price_file) {
-            Ok(p) => p,
+            Ok(p) => {
+                info!("Loaded prices for {} symbols", p.data.len());
+                p
+            }
             Err(e) => {
                 error!("Failed to load prices: {e}");
                 std::process::exit(1);
             }
         }
     } else {
-        info!(
-            "No price data file found at {}. Using empty provider.",
-            price_file.display()
-        );
-        info!(
-            "The Python runner should populate {} before calling pair-picker.",
+        warn!(
+            "No price data at {}. Run: python -m paper_trading.fetch_pair_prices",
             price_file.display()
         );
         InMemoryPrices {
@@ -110,11 +137,86 @@ fn main() {
         }
     };
 
-    match pipeline::run_pipeline_from_candidates(&candidates.pairs, &output_path, &provider) {
+    // ── Step 4: Validate each pair statistically ──
+    match pipeline::run_pipeline_from_candidates(&filtered_candidates, &output_path, &provider) {
         Ok(results) => {
-            let passed = results.iter().filter(|r| r.passed).count();
-            let rejected = results.len() - passed;
-            info!("Pipeline complete: {passed} passed, {rejected} rejected");
+            let passed: Vec<_> = results.iter().filter(|r| r.passed).collect();
+            let rejected = results.len() - passed.len();
+            info!(
+                "Pipeline complete: {} passed, {} rejected",
+                passed.len(),
+                rejected
+            );
+
+            // ── Step 5: Thompson sampling ranking ──
+            let mut thompson = ThompsonState::load(&data_dir);
+
+            // Load trade history for feedback
+            let history_path = data_dir.join("pair_trading_history.json");
+            let history = TradeHistory::load(&history_path);
+            let returns_by_pair = history.returns_by_pair();
+
+            for result in &passed {
+                let pid = pair_id(&result.leg_a, &result.leg_b);
+
+                // Use regime-adjusted prior: penalize fragile pairs
+                let base_score = result.score;
+                let regime_robustness = result.regime_robustness.unwrap_or(-1.0);
+                let adjusted_score = regime_adjusted_prior(base_score, regime_robustness);
+
+                thompson.get_or_create(&pid, adjusted_score);
+
+                // Feed trade history if available
+                if let Some(returns) = returns_by_pair.get(&pid) {
+                    thompson.update_pair(&pid, returns, adjusted_score);
+                }
+
+                info!(
+                    pair = pid.as_str(),
+                    score = format!("{:.3}", result.score).as_str(),
+                    regime_robustness = format!("{:.2}", regime_robustness).as_str(),
+                    adjusted_prior = format!("{:.3}", adjusted_score).as_str(),
+                    "Thompson arm updated"
+                );
+            }
+
+            // Rank by Thompson sampling
+            let top_k = args
+                .iter()
+                .position(|a| a == "--top-k")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(10);
+
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let ranking = thompson.rank_pairs(seed);
+
+            info!("Thompson ranking (top {top_k}):");
+            for (i, (pid, sampled_value)) in ranking.iter().take(top_k).enumerate() {
+                let arm = thompson.arms.get(pid).unwrap();
+                info!(
+                    "  #{}: {} — sampled={:.2}, posterior_mu={:.2}, n_trades={}",
+                    i + 1,
+                    pid,
+                    sampled_value,
+                    arm.posterior_mean(),
+                    arm.n_trades
+                );
+            }
+
+            // Save Thompson state
+            if let Err(e) = thompson.save(&data_dir) {
+                error!("Failed to save Thompson state: {e}");
+            }
+
+            info!(
+                "Thompson: {} arms, exploration_rate={:.0}%",
+                thompson.arms.len(),
+                thompson.exploration_rate() * 100.0
+            );
 
             // Create lock file
             if let Err(e) = lockfile::create_lock(&data_dir) {
