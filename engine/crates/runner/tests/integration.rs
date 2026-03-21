@@ -4,7 +4,7 @@ use std::io::Write;
 use std::process::Command;
 use tempfile::TempDir;
 
-/// Create a minimal openquant.toml with one pair.
+/// Create a minimal openquant.toml (no pairs — pairs come from active_pairs.json).
 fn minimal_toml() -> String {
     r#"
 [signal]
@@ -19,17 +19,32 @@ max_daily_loss = 500.0
 [exit]
 stop_loss_pct = 0.02
 max_hold_bars = 100
+"#
+    .to_string()
+}
 
-[[pairs]]
-leg_a = "AAA"
-leg_b = "BBB"
-beta = 1.0
-entry_z = 2.0
-exit_z = 0.5
-stop_z = 4.0
-lookback = 20
-max_hold_bars = 50
-notional_per_leg = 5000.0
+/// Create an active_pairs.json with one test pair.
+fn active_pairs_json() -> String {
+    r#"
+{
+    "generated_at": "2026-01-01T00:00:00Z",
+    "pairs": [
+        {
+            "leg_a": "AAA",
+            "leg_b": "BBB",
+            "alpha": 0.0,
+            "beta": 1.0,
+            "half_life_days": 10.0,
+            "adf_statistic": -4.0,
+            "adf_pvalue": 0.005,
+            "beta_cv": 0.05,
+            "structural_break": false,
+            "regime_robustness": 0.9,
+            "economic_rationale": "test",
+            "score": 0.9
+        }
+    ]
+}
 "#
     .to_string()
 }
@@ -76,6 +91,11 @@ fn runner_produces_order_intents() {
     let config_path = dir.path().join("openquant.toml");
     let mut f = std::fs::File::create(&config_path).unwrap();
     f.write_all(minimal_toml().as_bytes()).unwrap();
+
+    // Write active_pairs.json (pairs are sourced from JSON, not TOML)
+    let pairs_path = dir.path().join("active_pairs.json");
+    let mut f = std::fs::File::create(&pairs_path).unwrap();
+    f.write_all(active_pairs_json().as_bytes()).unwrap();
 
     // Write bar data
     let bars_path = dir.path().join("experiment_bars_20260101.json");

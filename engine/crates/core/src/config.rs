@@ -9,7 +9,6 @@ use std::path::Path;
 use crate::engine::{EngineConfig, SymbolOverrides};
 use crate::exit::ExitConfig;
 use crate::features::{GarchConfig, RegimeConfig};
-use crate::pairs::PairConfig;
 use crate::risk::RiskConfig;
 use crate::signals::{breakout, combiner, mean_reversion, momentum, vwap_reversion};
 
@@ -30,87 +29,6 @@ pub struct ConfigFile {
     pub data: DataConfig,
     pub asset_class: HashMap<String, SymbolOverrides>,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
-    /// Pairs trading configuration. Each `[[pairs]]` entry defines one pair.
-    #[serde(default)]
-    pub pairs: Vec<PairConfigToml>,
-}
-
-/// TOML representation of a pair config (maps to `[[pairs]]` array).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct PairConfigToml {
-    pub leg_a: String,
-    pub leg_b: String,
-    pub beta: f64,
-    pub entry_z: f64,
-    pub exit_z: f64,
-    pub stop_z: f64,
-    pub lookback: usize,
-    pub max_hold_bars: usize,
-    pub notional_per_leg: f64,
-}
-
-impl Default for PairConfigToml {
-    fn default() -> Self {
-        Self {
-            leg_a: String::new(),
-            leg_b: String::new(),
-            beta: 1.0,
-            entry_z: 2.0,
-            exit_z: 0.5,
-            stop_z: 4.0,
-            lookback: 32,
-            max_hold_bars: 150,
-            notional_per_leg: 10_000.0,
-        }
-    }
-}
-
-impl PairConfigToml {
-    /// Validate and convert to engine PairConfig. Panics on invalid config.
-    pub fn into_pair_config(self) -> PairConfig {
-        assert!(!self.leg_a.is_empty(), "pairs: leg_a must not be empty");
-        assert!(!self.leg_b.is_empty(), "pairs: leg_b must not be empty");
-        assert!(
-            self.leg_a != self.leg_b,
-            "pairs: leg_a and leg_b must differ"
-        );
-        assert!(
-            self.entry_z > self.exit_z,
-            "pairs {}/{}: entry_z ({}) must be > exit_z ({})",
-            self.leg_a,
-            self.leg_b,
-            self.entry_z,
-            self.exit_z
-        );
-        assert!(
-            self.stop_z > self.entry_z,
-            "pairs {}/{}: stop_z ({}) must be > entry_z ({})",
-            self.leg_a,
-            self.leg_b,
-            self.stop_z,
-            self.entry_z
-        );
-        assert!(
-            self.notional_per_leg > 0.0,
-            "pairs {}/{}: notional_per_leg must be > 0",
-            self.leg_a,
-            self.leg_b
-        );
-
-        PairConfig {
-            leg_a: self.leg_a,
-            leg_b: self.leg_b,
-            alpha: 0.0, // TOML configs don't have alpha; default to 0.0 for backward compat
-            beta: self.beta,
-            entry_z: self.entry_z,
-            exit_z: self.exit_z,
-            stop_z: self.stop_z,
-            lookback: self.lookback,
-            max_hold_bars: self.max_hold_bars,
-            notional_per_leg: self.notional_per_leg,
-        }
-    }
 }
 
 /// Metrics toggle (more fields later when we wire CloudWatch).
@@ -173,15 +91,6 @@ impl ConfigFile {
             metrics_enabled: self.metrics.enabled,
             warmup_bars: 64, // default for 1-min bars; override via Engine kwargs
         }
-    }
-
-    /// Extract pairs configurations for PairsEngine.
-    pub fn pair_configs(&self) -> Vec<PairConfig> {
-        self.pairs
-            .iter()
-            .cloned()
-            .map(|p| p.into_pair_config())
-            .collect()
     }
 
     /// Whether metrics collection is enabled.

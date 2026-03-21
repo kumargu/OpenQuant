@@ -10,6 +10,12 @@
 
 use super::RollingStats;
 
+/// UTC offset for US Eastern Time (standard = -5h, daylight = -4h).
+/// We use -5h (EST) as the conservative default. The difference is that
+/// during EDT, the VWAP session resets at 20:00 ET instead of 19:00 ET —
+/// both are after market close (16:00 ET), so this is safe.
+const ET_OFFSET_MS: i64 = -5 * 3600 * 1000;
+
 /// VWAP state — cumulative accumulators that reset daily.
 ///
 /// O(1) per bar: just accumulates sums. The rolling std of deviation
@@ -19,7 +25,7 @@ pub struct VwapState {
     cum_tp_vol: f64,             // cumulative (typical_price * volume)
     cum_vol: f64,                // cumulative volume
     dev_stats: RollingStats<32>, // rolling std of (close - vwap)
-    last_day: Option<i32>,       // day ordinal for session reset detection
+    last_day: Option<i32>,       // day ordinal for session reset detection (ET)
     bar_count: usize,
 }
 
@@ -62,13 +68,18 @@ impl VwapState {
         // Keep dev_stats — rolling window adapts naturally
     }
 
-    /// Check if timestamp indicates a new day (UTC) and reset if so.
+    /// Check if timestamp indicates a new day (ET) and reset if so.
     /// Returns true if a reset occurred.
+    ///
+    /// Uses US Eastern Time for day boundaries so the VWAP session aligns
+    /// with US equity market hours (9:30-16:00 ET), not UTC midnight.
     fn maybe_reset(&mut self, timestamp_ms: i64) -> bool {
         if timestamp_ms <= 0 {
             return false; // no timestamp (backtesting with ts=0)
         }
-        let day = (timestamp_ms / 86_400_000) as i32; // ms -> days since epoch
+        // Shift to Eastern Time before computing day ordinal.
+        // This ensures the day boundary falls at midnight ET, not midnight UTC.
+        let day = ((timestamp_ms + ET_OFFSET_MS) / 86_400_000) as i32;
         match self.last_day {
             Some(prev) if prev == day => false,
             _ => {
@@ -216,5 +227,55 @@ mod tests {
         let mut state = VwapState::new();
         let v = state.update(102.0, 98.0, 100.0, 0.0, DAY1_MS);
         assert!((v.vwap - 100.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn session_boundary_uses_eastern_time() {
+        // 2026-01-15 04:59 UTC = 2026-01-14 23:59 ET (still "yesterday" in ET)
+        // 2026-01-15 05:01 UTC = 2026-01-15 00:01 ET (new day in ET)
+        //
+        // With UTC day boundaries, both would be "Jan 15" → same session (wrong).
+        // With ET offset, they're "Jan 14" and "Jan 15" → different sessions (correct).
+        let jan15_0459_utc: i64 = 1_768_453_140_000; // 2026-01-15 04:59 UTC
+        let jan15_0501_utc: i64 = 1_768_453_260_000; // 2026-01-15 05:01 UTC
+
+        let mut state = VwapState::new();
+
+        // Feed bars in "Jan 14 ET" session
+        for i in 0..5 {
+            state.update(
+                102.0,
+                98.0,
+                100.0,
+                1000.0,
+                jan15_0459_utc - (5 - i) * 60_000,
+            );
+        }
+        assert_eq!(state.bar_count, 5);
+
+        // Cross midnight ET — should reset to new session
+        let reset = state.maybe_reset(jan15_0501_utc);
+        assert!(reset, "should detect new ET day at 05:01 UTC");
+    }
+
+    #[test]
+    fn no_reset_across_utc_midnight_within_same_et_day() {
+        // 2026-01-15 23:59 UTC = 2026-01-15 18:59 ET (same ET day)
+        // 2026-01-16 00:01 UTC = 2026-01-15 19:01 ET (still same ET day!)
+        //
+        // UTC midnight crossing should NOT reset VWAP in ET mode.
+        let jan15_2359_utc: i64 = 1_768_521_540_000; // 2026-01-15 23:59 UTC
+        let jan16_0001_utc: i64 = 1_768_521_660_000; // 2026-01-16 00:01 UTC
+
+        let mut state = VwapState::new();
+        state.update(102.0, 98.0, 100.0, 1000.0, jan15_2359_utc);
+        assert_eq!(state.bar_count, 1);
+
+        // Cross UTC midnight but NOT ET midnight — should NOT reset
+        let reset = state.maybe_reset(jan16_0001_utc);
+        assert!(
+            !reset,
+            "should NOT reset at UTC midnight — still same ET day"
+        );
     }
 }

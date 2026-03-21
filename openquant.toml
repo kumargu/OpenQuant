@@ -463,49 +463,6 @@ asset_class = "disabled"
 # ---------------------------------------------------------------------------
 # Pairs Trading — market-neutral spread reversion
 # ---------------------------------------------------------------------------
-# Walk-forward validated (train Jan 13-Feb 13, test Feb 17-Mar 20).
-# All pairs profitable OOS after 12 bps total round-trip costs.
-
-[[pairs]]
-leg_a = "GLD"
-leg_b = "SLV"
-beta = 0.37
-entry_z = 2.0
-exit_z = 0.5
-stop_z = 4.0
-lookback = 32
-max_hold_bars = 150
-notional_per_leg = 10000.0
-
-[[pairs]]
-leg_a = "COIN"
-leg_b = "PLTR"
-beta = 0.97
-entry_z = 2.0
-exit_z = 0.5
-stop_z = 4.0
-lookback = 32
-max_hold_bars = 150
-notional_per_leg = 10000.0
-
-[[pairs]]
-leg_a = "C"
-leg_b = "JPM"
-beta = 1.39
-entry_z = 2.0
-exit_z = 0.5
-stop_z = 4.0
-lookback = 32
-max_hold_bars = 150
-notional_per_leg = 10000.0
-
-[[pairs]]
-leg_a = "GS"
-leg_b = "MS"
-beta = 0.91
-entry_z = 2.0
-exit_z = 0.5
-stop_z = 4.0
-lookback = 32
-max_hold_bars = 150
-notional_per_leg = 10000.0
+# Pairs are sourced from data/active_pairs.json (produced by pair-picker).
+# No hardcoded pairs in this file — pair-picker handles discovery, validation,
+# and beta estimation. See: cargo run -p pair-picker -- --help

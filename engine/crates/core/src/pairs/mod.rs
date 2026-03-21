@@ -40,7 +40,7 @@ use crate::features::rolling_stats::RollingStats;
 use crate::signals::{Side, SignalReason};
 use tracing::{debug, error, info, warn};
 
-/// Configuration for a single pair. Parsed from `[[pairs]]` in openquant.toml.
+/// Configuration for a single pair. Loaded from `active_pairs.json` (produced by pair-picker).
 #[derive(Debug, Clone)]
 pub struct PairConfig {
     /// Symbol for leg A (the "long" side when going long the spread).
@@ -49,7 +49,7 @@ pub struct PairConfig {
     pub leg_b: String,
     /// OLS intercept: log_a = alpha + beta × log_b.
     /// Subtracted from spread for correct z-score computation.
-    /// Defaults to 0.0 for backward compatibility with TOML configs.
+    /// Estimated via OLS regression by pair-picker.
     pub alpha: f64,
     /// Hedge ratio: spread = ln(price_A) - alpha - beta × ln(price_B).
     /// Estimated via OLS regression on historical log-prices.

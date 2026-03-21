@@ -716,7 +716,7 @@ fn load_config(config_path: &str) -> PyResult<String> {
 /// Python wrapper for the pairs trading engine.
 ///
 /// Usage:
-///   pairs = openquant.PairsEngine.from_toml("openquant.toml")
+///   pairs = openquant.PairsEngine.from_active_pairs("data/active_pairs.json", "data/pair_trading_history.json")
 ///   intents = pairs.on_bar("GLD", timestamp, 420.0)
 #[pyclass(name = "PairsEngine")]
 struct PairsEngineWrapper {
@@ -725,48 +725,17 @@ struct PairsEngineWrapper {
 
 #[pymethods]
 impl PairsEngineWrapper {
-    /// Create from TOML config file. Reads [[pairs]] sections.
-    #[staticmethod]
-    fn from_toml(config_path: &str) -> PyResult<Self> {
-        let cfg_file = openquant_core::config::ConfigFile::load(std::path::Path::new(config_path))
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        let pair_configs = cfg_file.pair_configs();
-
-        if pair_configs.is_empty() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "No [[pairs]] sections found in config file",
-            ));
-        }
-
-        Ok(Self {
-            inner: openquant_core::pairs::engine::PairsEngine::new(pair_configs),
-        })
-    }
-
     /// Create from active_pairs.json (produced by pair-picker binary).
     ///
-    /// Falls back to TOML pair configs if active_pairs.json is missing/stale.
     /// Loads trade history from history_path for Thompson sampling feedback.
     #[staticmethod]
-    #[pyo3(signature = (active_pairs_path, history_path, fallback_toml=None))]
-    fn from_active_pairs(
-        active_pairs_path: &str,
-        history_path: &str,
-        fallback_toml: Option<&str>,
-    ) -> PyResult<Self> {
-        let fallback_configs = if let Some(toml_path) = fallback_toml {
-            let cfg = openquant_core::config::ConfigFile::load(std::path::Path::new(toml_path))
-                .map_err(pyo3::exceptions::PyValueError::new_err)?;
-            cfg.pair_configs()
-        } else {
-            Vec::new()
-        };
-
+    #[pyo3(signature = (active_pairs_path, history_path))]
+    fn from_active_pairs(active_pairs_path: &str, history_path: &str) -> PyResult<Self> {
         Ok(Self {
             inner: openquant_core::pairs::engine::PairsEngine::from_active_pairs(
                 std::path::Path::new(active_pairs_path),
                 std::path::Path::new(history_path),
-                fallback_configs,
+                Vec::new(),
             ),
         })
     }
