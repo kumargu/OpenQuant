@@ -32,6 +32,7 @@
 //! | C/JPM     | $86       | 75%      | ~9         |
 //! | GS/MS     | $77       | 76%      | ~9         |
 
+pub mod active_pairs;
 pub mod engine;
 
 use crate::features::rolling_stats::RollingStats;
