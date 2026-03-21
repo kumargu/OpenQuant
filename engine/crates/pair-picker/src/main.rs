@@ -20,7 +20,12 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
 
-    let data_dir = find_data_dir();
+    let data_dir = args
+        .iter()
+        .position(|a| a == "--data-dir")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from)
+        .unwrap_or_else(find_data_dir);
 
     // --check mode: just report whether today's run is done
     if args.iter().any(|a| a == "--check") {
@@ -130,12 +135,16 @@ fn main() {
 }
 
 fn find_data_dir() -> PathBuf {
-    // Walk up from CWD to find the data/ directory (max 5 levels to avoid
-    // walking to filesystem root from unexpected directories).
+    // Walk up from CWD looking for a data/ directory that contains
+    // pair_candidates.json (the expected input file). This avoids
+    // false matches like engine/data/ (journal storage) when running
+    // from the engine/ subdirectory.
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     for _ in 0..5 {
         let data = dir.join("data");
-        if data.is_dir() {
+        if data.join("pair_candidates.json").exists()
+            || data.join("stock_relationships.json").exists()
+        {
             return data;
         }
         if !dir.pop() {
