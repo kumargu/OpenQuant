@@ -445,9 +445,7 @@ mod tests {
         // Next bar opens at 93, engine should have pending buy
         prices.push(95.0); // recovery bar — buy fills at open=95
         // More recovery
-        for _ in 0..5 {
-            prices.push(100.0);
-        }
+        prices.extend(std::iter::repeat_n(100.0, 5));
         // Spike — should trigger sell
         prices.push(108.0);
         // Sell fills at next bar open

@@ -26,7 +26,7 @@ use crate::risk::{self, RiskConfig, RiskState};
 use crate::signals::{
     Side, SignalReason, Strategy, breakout, combiner, mean_reversion, momentum, vwap_reversion,
 };
-use tracing::{debug, info, warn};
+use tracing::warn;
 
 /// An order the engine wants placed.
 #[derive(Debug, Clone)]

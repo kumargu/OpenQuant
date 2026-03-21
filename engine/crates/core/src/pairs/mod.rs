@@ -129,6 +129,12 @@ pub struct PairState {
     bar_count: usize,
 }
 
+impl Default for PairState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PairState {
     pub fn new() -> Self {
         Self {
