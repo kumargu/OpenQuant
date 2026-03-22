@@ -25,9 +25,12 @@ data/journal/engine.log
 data/experiment_bars*.json
 data/active_pairs_v*.json
 
-# Runner output (regenerated on each run)
+# Runner output and dashboard data (regenerated on each run)
 data/order_intents.json
 data/trade_results.json
+data/backtest_history.json
+data/dashboard_data.json
+data/daily_pnl.json
 
 # Pair picker intermediate files
 data/pair_picker_output.json
