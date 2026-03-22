@@ -124,9 +124,9 @@ if os.path.exists(history_path):
 import re
 html = re.sub(r'<script id="inline-data">.*?</script>\n?', '', html, flags=re.DOTALL)
 
-# Insert inline data script before closing </body>
+# Insert inline data BEFORE the main <script> so vars are defined when init() runs
 inline = f'<script id="inline-data">var INLINE_DASHBOARD={json.dumps(dashboard)};var INLINE_HISTORY={json.dumps(history_data)};</script>\n'
-html = html.replace('</body>', inline + '</body>')
+html = html.replace('<script>\n\n// ── State', inline + '<script>\n\n// ── State')
 
 with open(template_path, 'w') as f:
     f.write(html)

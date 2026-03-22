@@ -94,5 +94,40 @@
         "win_rate": 42.9
       }
     }
+  },
+  {
+    "run_id": "53bccda-20260322-150917",
+    "commit": "53bccda",
+    "timestamp": "2026-03-22T15:09:17.373652Z",
+    "note": "",
+    "trading_days": 241,
+    "total_trades": 3231,
+    "total_pnl_bps": 1513.9,
+    "dollar_pnl": 3027.83,
+    "dollar_per_day": 12.56,
+    "win_rate": 38.5,
+    "pairs": {
+      "AMD/INTC": {
+        "trades": 1494,
+        "total_bps": -5133.3,
+        "dollar_pnl": -10266.62,
+        "dollar_per_day": -42.6,
+        "win_rate": 39.0
+      },
+      "GLD/SLV": {
+        "trades": 1098,
+        "total_bps": 4414.6,
+        "dollar_pnl": 8829.15,
+        "dollar_per_day": 36.64,
+        "win_rate": 35.3
+      },
+      "GS/MS": {
+        "trades": 639,
+        "total_bps": 2232.6,
+        "dollar_pnl": 4465.29,
+        "dollar_per_day": 18.53,
+        "win_rate": 42.9
+      }
+    }
   }
 ]
