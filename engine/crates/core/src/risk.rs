@@ -300,6 +300,14 @@ pub fn check(
                         MarketRegime::Unknown => config.kelly_fraction,
                     };
                     let raw = kelly_state.kelly_fraction();
+                    // Zero or negative edge → zero exposure. The min clamp is
+                    // for cold-start uncertainty on positive edge, not to override
+                    // the model when it says "don't bet." (#160)
+                    if raw <= 0.0 {
+                        return Err(Rejection {
+                            reason: "Kelly: zero or negative edge".into(),
+                        });
+                    }
                     let fractional = raw * regime_kelly * dd_mult;
                     fractional.clamp(config.kelly_min_size, config.kelly_max_size)
                 }
