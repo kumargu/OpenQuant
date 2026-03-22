@@ -70,6 +70,14 @@ pub struct PairsTradingConfig {
     /// Force close hour (ET, 0-23). All positions closed at this hour.
     /// Default 15 = close at 15:30 ET (30 min before close).
     pub force_close_minute: u32,
+    /// Timezone offset from UTC in hours. Used for entry cutoff and force close.
+    /// -5 = EST, -4 = EDT. Should match `[data].timezone_offset_hours`.
+    #[serde(default = "default_tz_offset")]
+    pub tz_offset_hours: i32,
+}
+
+fn default_tz_offset() -> i32 {
+    -5
 }
 
 impl Default for PairsTradingConfig {
@@ -84,6 +92,7 @@ impl Default for PairsTradingConfig {
             notional_per_leg: 10_000.0,
             last_entry_hour: 14,
             force_close_minute: 930, // 15:30 ET = 15*60+30 = 930
+            tz_offset_hours: -5,
         }
     }
 }
@@ -267,8 +276,8 @@ impl PairState {
         }
         let z = (spread - mean) / std;
 
-        // Compute time of day in ET (minutes since midnight)
-        let tz_offset_ms: i64 = -5 * 3600 * 1000; // TODO: read from DataConfig
+        // Compute time of day in local timezone (minutes since midnight)
+        let tz_offset_ms: i64 = (trading.tz_offset_hours as i64) * 3600 * 1000;
         let local_ms = timestamp + tz_offset_ms;
         let secs_of_day = ((local_ms / 1000) % 86400 + 86400) % 86400;
         let et_hour = (secs_of_day / 3600) as u32;
@@ -638,6 +647,7 @@ mod tests {
             notional_per_leg: 10_000.0,
             last_entry_hour: 24,       // never block entries
             force_close_minute: 1_500, // never force close
+            tz_offset_hours: -5,
         }
     }
 

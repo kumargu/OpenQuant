@@ -213,7 +213,9 @@ fn run_backtest(args: RunArgs) {
     let run_pairs = matches!(cfg_file.mode, TradingMode::Pairs | TradingMode::Both);
     info!(mode = ?cfg_file.mode, run_single, run_pairs, "trading mode");
 
-    let pairs_trading_config = cfg_file.pairs_trading.clone();
+    let mut pairs_trading_config = cfg_file.pairs_trading.clone();
+    // Sync timezone from [data] config so pairs engine uses the same offset
+    pairs_trading_config.tz_offset_hours = cfg_file.data.timezone_offset_hours;
     let notional_per_leg = pairs_trading_config.notional_per_leg;
     let data_config = cfg_file.data.clone();
 

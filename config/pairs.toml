@@ -522,3 +522,7 @@ last_entry_hour = 14
 # Force close all positions at this time (ET minutes since midnight).
 # 930 = 15:30 ET (30 min before market close). Set to 960 (16:00) to disable.
 force_close_minute = 930
+
+# Timezone offset from UTC in hours. Must match [data].timezone_offset_hours.
+# -5 = EST, -4 = EDT. Update when DST changes (or use -4 during Mar-Nov).
+tz_offset_hours = -5
