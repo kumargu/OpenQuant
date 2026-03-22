@@ -47,11 +47,14 @@ fn main() {
     let cli = Cli::parse();
     let output_dir = cli.output_dir.as_ref().unwrap_or(&cli.data_dir);
 
-    // Log to both stderr and data/journal/engine.log
+    // Log to both stderr and data/journal/engine.log (append mode)
     let journal_dir = cli.data_dir.join("journal");
     std::fs::create_dir_all(&journal_dir).ok();
-    let log_file = std::fs::File::create(journal_dir.join("engine.log"))
-        .expect("cannot create engine.log");
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(journal_dir.join("engine.log"))
+        .expect("cannot open engine.log");
     let tee = TeeWriter(std::sync::Mutex::new(log_file));
 
     tracing_subscriber::fmt()
@@ -63,12 +66,29 @@ fn main() {
         .with_writer(tee)
         .init();
 
-    info!("========== OPENQUANT RUNNER STARTUP ==========");
+    // Run ID: git commit short hash + sequence number for log correlation
+    let git_commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_else(|| "unknown".into())
+        .trim()
+        .to_string();
+    let run_id = format!(
+        "{}-{}",
+        git_commit,
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    );
+
+    info!("================================================================");
+    info!(run_id = run_id.as_str(), "========== OPENQUANT RUN START ==========");
     info!(
         config = %cli.config.display(),
         data_dir = %cli.data_dir.display(),
         output_dir = %output_dir.display(),
         warmup_bars = cli.warmup_bars,
+        git_commit = git_commit.as_str(),
         "CLI args"
     );
 
@@ -85,6 +105,7 @@ fn main() {
     };
 
     let pairs_trading_config = cfg_file.pairs_trading.clone();
+    let notional_per_leg = pairs_trading_config.notional_per_leg;
     let data_config = cfg_file.data.clone();
 
     info!(
@@ -224,16 +245,24 @@ fn main() {
     }
 
     let summary = pnl_tracker.summary();
+    let dollar_pnl = summary.total_pnl_bps * 2.0 * notional_per_leg / 10_000.0;
+    let days = all_bars.iter().map(|b| b.timestamp / 86_400_000).collect::<std::collections::HashSet<_>>().len();
+    let dollar_per_day = if days > 0 { dollar_pnl / days as f64 } else { 0.0 };
     info!(
+        run_id = run_id.as_str(),
         total_trades = summary.total_trades,
         total_pnl_bps = format!("{:.1}", summary.total_pnl_bps).as_str(),
+        dollar_pnl = format!("{:.2}", dollar_pnl).as_str(),
+        dollar_per_day = format!("{:.2}", dollar_per_day).as_str(),
+        trading_days = days,
         win_rate = format!("{:.1}%", summary.win_rate * 100.0).as_str(),
         avg_win_bps = format!("{:.1}", summary.avg_win_bps).as_str(),
         avg_loss_bps = format!("{:.1}", summary.avg_loss_bps).as_str(),
         "P&L summary"
     );
 
-    info!("openquant-runner complete");
+    info!(run_id = run_id.as_str(), "========== OPENQUANT RUN END ==========");
+    info!("================================================================");
 }
 
 /// Writer that tees output to both stderr and a file.
