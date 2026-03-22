@@ -108,18 +108,30 @@ dashboard = {
 with open(f'{data_dir}/dashboard_data.json', 'w') as f:
     json.dump(dashboard, f)
 
-# Inject into HTML template
+# Inject inline data into HTML so it works from file:// (no http server needed)
 template_path = f'{data_dir}/dashboard.html'
 with open(template_path) as f:
     html = f.read()
 
-# Replace data (handle both fresh template and previously injected)
+# Load history
+history_path = f'{data_dir}/backtest_history.json'
+history_data = []
+if os.path.exists(history_path):
+    with open(history_path) as f:
+        history_data = json.load(f)
+
+# Remove old inline block if present
 import re
-html = re.sub(r'const dashboard = .+?;', f'const dashboard = {json.dumps(dashboard)};', html, count=1)
+html = re.sub(r'<script id="inline-data">.*?</script>\n?', '', html, flags=re.DOTALL)
+
+# Insert inline data script before closing </body>
+inline = f'<script id="inline-data">var INLINE_DASHBOARD={json.dumps(dashboard)};var INLINE_HISTORY={json.dumps(history_data)};</script>\n'
+html = html.replace('</body>', inline + '</body>')
+
 with open(template_path, 'w') as f:
     f.write(html)
 
-print(f"Dashboard updated: {len(all_pair_data)} views")
+print(f"Dashboard updated: {len(all_pair_data)} views, {len(history_data)} history runs")
 PYEOF
 
 echo -e "${GREEN}Done. Open data/dashboard.html${NC}"
