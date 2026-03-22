@@ -77,14 +77,26 @@ def fetch_daily_closes(
         logger.info("Fetching daily bars for %d symbols: %s...", len(batch), batch[:5])
 
         try:
-            request = StockBarsRequest(
-                symbol_or_symbols=batch,
-                timeframe=TimeFrame.Day,
-                start=start,
-                end=end,
-                feed=DataFeed.IEX,
-            )
-            bars = client.get_stock_bars(request)
+            # Try SIP first (consolidated, matches live trading feed),
+            # fall back to IEX for free-tier accounts.
+            try:
+                request = StockBarsRequest(
+                    symbol_or_symbols=batch,
+                    timeframe=TimeFrame.Day,
+                    start=start,
+                    end=end,
+                    feed=DataFeed.SIP,
+                )
+                bars = client.get_stock_bars(request)
+            except Exception:
+                request = StockBarsRequest(
+                    symbol_or_symbols=batch,
+                    timeframe=TimeFrame.Day,
+                    start=start,
+                    end=end,
+                    feed=DataFeed.IEX,
+                )
+                bars = client.get_stock_bars(request)
 
             for symbol in batch:
                 symbol_bars = bars.data.get(symbol, [])
