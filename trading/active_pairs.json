@@ -1,47 +1,4 @@
 {
-  "generated_at": "2026-03-22T15:55:47Z",
-  "pairs": [
-    {
-      "leg_a": "GLD",
-      "leg_b": "SLV",
-      "alpha": 0.0,
-      "beta": 0.37,
-      "half_life_days": 8.3,
-      "adf_statistic": -4.0,
-      "adf_pvalue": 0.005,
-      "beta_cv": 0.05,
-      "structural_break": false,
-      "regime_robustness": 0.9,
-      "economic_rationale": "Gold/silver ratio",
-      "score": 0.95
-    },
-    {
-      "leg_a": "GS",
-      "leg_b": "MS",
-      "alpha": 0.0,
-      "beta": 0.91,
-      "half_life_days": 1.0,
-      "adf_statistic": -4.0,
-      "adf_pvalue": 0.005,
-      "beta_cv": 0.05,
-      "structural_break": false,
-      "regime_robustness": 0.9,
-      "economic_rationale": "Investment banks",
-      "score": 0.9
-    },
-    {
-      "leg_a": "AMD",
-      "leg_b": "INTC",
-      "alpha": 0.0,
-      "beta": 0.65,
-      "half_life_days": 1.0,
-      "adf_statistic": -4.0,
-      "adf_pvalue": 0.005,
-      "beta_cv": 0.05,
-      "structural_break": false,
-      "regime_robustness": 0.9,
-      "economic_rationale": "Semiconductor rivals",
-      "score": 0.85
-    }
-  ]
+  "generated_at": "2026-03-22T18:09:17Z",
+  "pairs": []
 }
