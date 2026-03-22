@@ -93,29 +93,15 @@ pub fn write_intents(intents: &[OrderIntentRecord], path: &Path) -> std::io::Res
 }
 
 /// Write trade results to JSON file (appends to existing file).
-pub fn write_trade_results(new_results: &[TradeResultRecord], path: &Path) -> std::io::Result<()> {
-    if new_results.is_empty() {
-        return Ok(());
-    }
-
-    let mut all: Vec<TradeResultRecord> = if path.exists() {
-        let contents = fs::read_to_string(path)?;
-        serde_json::from_str(&contents).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    all.extend(new_results.iter().cloned());
-
+pub fn write_trade_results(results: &[TradeResultRecord], path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(&all).map_err(std::io::Error::other)?;
+    let json = serde_json::to_string_pretty(results).map_err(std::io::Error::other)?;
     fs::write(path, json)?;
 
     info!(
-        new = new_results.len(),
-        total = all.len(),
+        trades = results.len(),
         path = %path.display(),
         "wrote trade results"
     );
