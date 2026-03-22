@@ -63,6 +63,54 @@ def main():
     for ps in pairs_summary.values():
         ps["dollar_per_day"] = round(ps["dollar_pnl"] / trading_days, 2) if trading_days else 0
 
+    # Per-pair daily data (for charts on historical runs)
+    daily_by_pair = defaultdict(lambda: defaultdict(
+        lambda: {"pnl_bps": 0.0, "trades": 0, "wins": 0}
+    ))
+    for t in trades:
+        dt = datetime.fromtimestamp(t["exit_ts"] / 1000, tz=timezone.utc)
+        day = dt.strftime("%Y-%m-%d")
+        pair = t["id"]
+        daily_by_pair[pair][day]["pnl_bps"] += t["return_bps"]
+        daily_by_pair[pair][day]["trades"] += 1
+        if t["return_bps"] > 0:
+            daily_by_pair[pair][day]["wins"] += 1
+
+    daily_data = {}
+    for pair_name in daily_by_pair:
+        pair_days = []
+        for day in sorted(daily_by_pair[pair_name].keys()):
+            d = daily_by_pair[pair_name][day]
+            dollar = d["pnl_bps"] * 2
+            wr = d["wins"] / d["trades"] * 100 if d["trades"] else 0
+            pair_days.append({
+                "date": day,
+                "pnl_bps": round(d["pnl_bps"], 1),
+                "dollar_pnl": round(dollar, 2),
+                "trades": d["trades"],
+                "win_rate": round(wr, 1),
+            })
+        daily_data[pair_name] = pair_days
+
+    # Combined ALL view
+    all_days = defaultdict(lambda: {"pnl_bps": 0.0, "trades": 0, "wins": 0, "dollar_pnl": 0.0})
+    for pair_name, days in daily_data.items():
+        for d in days:
+            all_days[d["date"]]["dollar_pnl"] += d["dollar_pnl"]
+            all_days[d["date"]]["pnl_bps"] += d["pnl_bps"]
+            all_days[d["date"]]["trades"] += d["trades"]
+            all_days[d["date"]]["wins"] += round(d["win_rate"] * d["trades"] / 100)
+    combined = []
+    for day in sorted(all_days.keys()):
+        d = all_days[day]
+        wr = d["wins"] / d["trades"] * 100 if d["trades"] else 0
+        combined.append({
+            "date": day, "pnl_bps": round(d["pnl_bps"], 1),
+            "dollar_pnl": round(d["dollar_pnl"], 2),
+            "trades": d["trades"], "win_rate": round(wr, 1),
+        })
+    daily_data["ALL"] = combined
+
     entry = {
         "run_id": run_id,
         "commit": commit,
@@ -75,6 +123,7 @@ def main():
         "dollar_per_day": round(total_bps * 2 / trading_days, 2) if trading_days else 0,
         "win_rate": round(total_wins / total_trades * 100, 1) if total_trades else 0,
         "pairs": pairs_summary,
+        "daily": daily_data,
     }
 
     if os.path.exists(args.history):
