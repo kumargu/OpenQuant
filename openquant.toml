@@ -509,3 +509,11 @@ min_hold_bars = 30
 
 # Dollar notional per leg. Total exposure per trade = 2 x notional_per_leg.
 notional_per_leg = 10000.0
+
+# Last hour (ET) to allow new entries. No new positions after this hour.
+# 14 = no entries after 14:59 ET (avoids overnight risk from late-day entries).
+last_entry_hour = 14
+
+# Force close all positions at this time (ET minutes since midnight).
+# 930 = 15:30 ET (30 min before market close). Set to 960 (16:00) to disable.
+force_close_minute = 930

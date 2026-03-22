@@ -64,6 +64,12 @@ pub struct PairsTradingConfig {
     pub min_hold_bars: usize,
     /// Dollar notional per leg. Total exposure = 2 × notional_per_leg.
     pub notional_per_leg: f64,
+    /// Last entry hour (ET, 0-23). No new entries after this hour.
+    /// Default 14 = no entries after 14:59 ET (1 hour before close).
+    pub last_entry_hour: u32,
+    /// Force close hour (ET, 0-23). All positions closed at this hour.
+    /// Default 15 = close at 15:30 ET (30 min before close).
+    pub force_close_minute: u32,
 }
 
 impl Default for PairsTradingConfig {
@@ -76,6 +82,8 @@ impl Default for PairsTradingConfig {
             max_hold_bars: 150,
             min_hold_bars: 30,
             notional_per_leg: 10_000.0,
+            last_entry_hour: 14,
+            force_close_minute: 930, // 15:30 ET = 15*60+30 = 930
         }
     }
 }
@@ -259,6 +267,14 @@ impl PairState {
         }
         let z = (spread - mean) / std;
 
+        // Compute time of day in ET (minutes since midnight)
+        let tz_offset_ms: i64 = -5 * 3600 * 1000; // TODO: read from DataConfig
+        let local_ms = timestamp + tz_offset_ms;
+        let secs_of_day = ((local_ms / 1000) % 86400 + 86400) % 86400;
+        let et_hour = (secs_of_day / 3600) as u32;
+        let et_min = ((secs_of_day % 3600) / 60) as u32;
+        let et_minutes = et_hour * 60 + et_min;
+
         // ── Check exits first (if we have a position) ──
         if self.position != PairPosition::Flat {
             let bars_held = self.bar_count - self.entry_bar;
@@ -276,21 +292,37 @@ impl PairState {
 
             // Exit condition: stop loss (spread diverged FURTHER from entry, not reverted past)
             let stopped = match self.position {
-                PairPosition::LongSpread => z < -effective_stop_z, // entered negative, got more negative
-                PairPosition::ShortSpread => z > effective_stop_z, // entered positive, got more positive
+                PairPosition::LongSpread => z < -effective_stop_z,
+                PairPosition::ShortSpread => z > effective_stop_z,
                 PairPosition::Flat => false,
             };
 
             // Exit condition: max hold
             let max_held = trading.max_hold_bars > 0 && bars_held >= trading.max_hold_bars;
 
+            // Exit condition: force close before end of day (no overnight holding)
+            let force_close = et_minutes >= trading.force_close_minute;
+            if force_close {
+                info!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    ts = timestamp,
+                    et_hour,
+                    et_min,
+                    et_minutes,
+                    force_close_minute = trading.force_close_minute,
+                    "pairs: EOD FORCE CLOSE triggered"
+                );
+            }
+
             // Minimum hold: block reversion exits (but NOT stop loss) until min_hold_bars
             let past_min_hold = bars_held >= trading.min_hold_bars;
             let can_exit_reversion = reverted && past_min_hold;
 
-            if can_exit_reversion || stopped || max_held {
+            if can_exit_reversion || stopped || max_held || force_close {
                 let reason = if stopped {
                     SignalReason::StopLoss
+                } else if force_close {
+                    SignalReason::MaxHoldTime // reuse for EOD close
                 } else if max_held {
                     SignalReason::MaxHoldTime
                 } else {
@@ -299,7 +331,9 @@ impl PairState {
 
                 let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
                 let exit_reason = if stopped {
-                    "stop"
+                    "stop_loss"
+                } else if force_close {
+                    "eod_close"
                 } else if max_held {
                     "max_hold"
                 } else {
@@ -345,6 +379,18 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
+        // Block entries after last_entry_hour (avoid overnight risk)
+        if et_hour >= trading.last_entry_hour {
+            debug!(
+                pair_a = config.leg_a.as_str(),
+                pair_b = config.leg_b.as_str(),
+                et_hour,
+                z = %format_args!("{z:.2}"),
+                "pairs: ENTRY BLOCKED — past last_entry_hour"
+            );
+            return vec![];
+        }
+
         if z < -trading.entry_z {
             // Spread too low → expect reversion UP → LONG spread (buy A, sell B)
             let pair_id = format!("{}/{}", config.leg_a, config.leg_b);

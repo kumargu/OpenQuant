@@ -12,6 +12,7 @@ mod intents;
 mod pnl;
 
 use clap::Parser;
+use std::io::Write;
 use intents::{write_intents, write_trade_results, OrderIntentRecord};
 use openquant_core::config::ConfigFile;
 use openquant_core::engine::Engine;
@@ -43,15 +44,24 @@ struct Cli {
 }
 
 fn main() {
+    let cli = Cli::parse();
+    let output_dir = cli.output_dir.as_ref().unwrap_or(&cli.data_dir);
+
+    // Log to both stderr and data/journal/engine.log
+    let journal_dir = cli.data_dir.join("journal");
+    std::fs::create_dir_all(&journal_dir).ok();
+    let log_file = std::fs::File::create(journal_dir.join("engine.log"))
+        .expect("cannot create engine.log");
+    let tee = TeeWriter(std::sync::Mutex::new(log_file));
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with_ansi(false)
+        .with_writer(tee)
         .init();
-
-    let cli = Cli::parse();
-    let output_dir = cli.output_dir.as_ref().unwrap_or(&cli.data_dir);
 
     info!(
         config = %cli.config.display(),
@@ -205,4 +215,43 @@ fn main() {
     );
 
     info!("openquant-runner complete");
+}
+
+/// Writer that tees output to both stderr and a file.
+struct TeeWriter(std::sync::Mutex<std::fs::File>);
+
+impl Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::io::stderr().write_all(buf)?;
+        self.0.lock().unwrap().write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()?;
+        self.0.lock().unwrap().flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TeeWriter {
+    type Writer = TeeWriterGuard<'a>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TeeWriterGuard(&self.0)
+    }
+}
+
+struct TeeWriterGuard<'a>(&'a std::sync::Mutex<std::fs::File>);
+
+impl<'a> Write for TeeWriterGuard<'a> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::io::stderr().write_all(buf)?;
+        self.0.lock().unwrap().write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()?;
+        self.0.lock().unwrap().flush()
+    }
 }
