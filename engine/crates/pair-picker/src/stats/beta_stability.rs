@@ -153,12 +153,14 @@ fn structural_break_test(series: &[f64]) -> bool {
         }
     }
 
-    // Break detected if beta shifts by more than 20% of its mean value.
-    // Relaxed from 15% to 20% because shorter rolling windows (30 bars)
-    // produce noisier rolling betas than 60-bar windows.
-    // 20% still catches genuine regime changes (e.g., beta 1.5 → 0.5)
-    // while tolerating the higher noise floor from shorter windows.
-    max_shift_pct > 0.20
+    // Break detected if beta shifts by more than 45% of its mean value.
+    // With ROLLING_WINDOW=30 on 150-day data, rolling OLS betas are noisy —
+    // even stable pairs (DUK/SO, BAC/WFC) show 40-42% apparent shifts from
+    // estimation variance alone (#168). Calibrated to:
+    // - Pass stable pairs (DUK/SO 41.8%, BAC/WFC 42.3%)
+    // - Reject unstable pairs (LMT/NOC 155.9%, KO/PEP 73.0%)
+    // Long-term: Kalman filter for smoother beta estimation (#168)
+    max_shift_pct > 0.45
 }
 
 #[cfg(test)]
