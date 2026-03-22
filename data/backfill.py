@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -23,6 +24,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DATA_DIR = Path(__file__).parent
+
+
+def atomic_json_write(path: Path, data) -> None:
+    """Write JSON atomically — write to temp file, then rename.
+    Prevents corruption if the process is killed mid-write."""
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".json.tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp_path, path)
+    except Exception:
+        os.unlink(tmp_path)
+        raise
 SYMBOLS = [
     # Tech
     "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "ORCL", "TSLA",
@@ -185,15 +199,13 @@ def backfill(date_str: str, symbols: list[str], feed: str = "iex") -> Path:
         if safe_date not in existing_dates:
             merged.append({"date": safe_date, "symbols": data})
             merged.sort(key=lambda d: d["date"])
-            with open(merged_path, "w") as f:
-                json.dump(merged, f)
+            atomic_json_write(merged_path, merged)
             print(f"\nAppended to {merged_path} ({len(merged)} days)")
         else:
             print(f"\nDate {safe_date} already in {merged_path}, skipped append")
     else:
         # Create new merged file
-        with open(merged_path, "w") as f:
-            json.dump([{"date": safe_date, "symbols": data}], f)
+        atomic_json_write(merged_path, [{"date": safe_date, "symbols": data}])
         print(f"\nCreated {merged_path}")
 
     # Also save individual file (backup)
@@ -282,9 +294,8 @@ def backfill_symbols_inplace(new_symbols: list[str], feed: str = "iex"):
         total_fetched += day_fetched
         print(f"{day_fetched} bars")
 
-    # Write back
-    with open(merged_path, "w") as f:
-        json.dump(days, f)
+    # Write back (atomic to prevent corruption)
+    atomic_json_write(merged_path, days)
 
     print(f"\nDone. Added {total_fetched} bars across {len(days)} days.")
     print(f"Merged file: {merged_path}")
