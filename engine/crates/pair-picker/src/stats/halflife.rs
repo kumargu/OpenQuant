@@ -19,7 +19,10 @@ pub struct HalfLifeResult {
 }
 
 /// Valid half-life range (in bars/days).
-pub const MIN_HALF_LIFE: f64 = 3.0;
+/// Lowered MIN from 3.0 to 1.0: fast mean-reversion is desirable for
+/// intraday trading. A 2-day half-life means the spread reverts quickly,
+/// which is exactly what our 1-min bar strategy needs.
+pub const MIN_HALF_LIFE: f64 = 1.0;
 pub const MAX_HALF_LIFE: f64 = 40.0;
 
 /// Estimate OU half-life from a spread series.
@@ -120,8 +123,9 @@ mod tests {
 
     #[test]
     fn test_validity_range() {
-        assert!(!is_half_life_valid(2.0));
-        assert!(is_half_life_valid(3.0));
+        assert!(!is_half_life_valid(0.5));
+        assert!(is_half_life_valid(1.0));
+        assert!(is_half_life_valid(2.0));
         assert!(is_half_life_valid(20.0));
         assert!(is_half_life_valid(40.0));
         assert!(!is_half_life_valid(41.0));

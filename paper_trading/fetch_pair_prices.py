@@ -17,8 +17,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +58,12 @@ def fetch_daily_closes(
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed
 
-    client = StockHistoricalDataClient()
+    client = StockHistoricalDataClient(
+        os.environ.get("ALPACA_API_KEY"),
+        os.environ.get("ALPACA_SECRET_KEY"),
+    )
 
     end = datetime.now(timezone.utc)
     # Request extra days to account for weekends/holidays
@@ -68,13 +77,26 @@ def fetch_daily_closes(
         logger.info("Fetching daily bars for %d symbols: %s...", len(batch), batch[:5])
 
         try:
-            request = StockBarsRequest(
-                symbol_or_symbols=batch,
-                timeframe=TimeFrame.Day,
-                start=start,
-                end=end,
-            )
-            bars = client.get_stock_bars(request)
+            # Try SIP first (consolidated, matches live trading feed),
+            # fall back to IEX for free-tier accounts.
+            try:
+                request = StockBarsRequest(
+                    symbol_or_symbols=batch,
+                    timeframe=TimeFrame.Day,
+                    start=start,
+                    end=end,
+                    feed=DataFeed.SIP,
+                )
+                bars = client.get_stock_bars(request)
+            except Exception:
+                request = StockBarsRequest(
+                    symbol_or_symbols=batch,
+                    timeframe=TimeFrame.Day,
+                    start=start,
+                    end=end,
+                    feed=DataFeed.IEX,
+                )
+                bars = client.get_stock_bars(request)
 
             for symbol in batch:
                 symbol_bars = bars.data.get(symbol, [])

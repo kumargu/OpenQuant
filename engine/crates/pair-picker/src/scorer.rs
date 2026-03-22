@@ -87,18 +87,18 @@ fn cointegration_score(p_value: f64) -> f64 {
 }
 
 /// Half-life → quality score.
-/// Ideal range: 5-15 days (fast enough to trade, slow enough to execute).
-/// Valid range: 3-40 days.
+/// Ideal range: 2-15 days (fast enough to trade intraday, slow enough to execute).
+/// Valid range: 1-40 days (lowered from 3 to admit fast mean-reverting pairs).
 fn half_life_score(hl: f64) -> f64 {
-    if !(3.0..=40.0).contains(&hl) {
+    if !(1.0..=40.0).contains(&hl) {
         return 0.0;
     }
-    if (5.0..=15.0).contains(&hl) {
+    if (2.0..=15.0).contains(&hl) {
         return 1.0; // ideal
     }
-    if hl < 5.0 {
-        // 3-5: ramp up
-        (hl - 3.0) / 2.0
+    if hl < 2.0 {
+        // 1-2: ramp up (very fast reversion — may be noise)
+        hl - 1.0
     } else {
         // 15-40: ramp down
         1.0 - (hl - 15.0) / 25.0
@@ -156,11 +156,12 @@ mod tests {
 
     #[test]
     fn test_half_life_score() {
-        assert_eq!(half_life_score(2.0), 0.0);
-        assert_eq!(half_life_score(10.0), 1.0);
-        assert!(half_life_score(4.0) > 0.0 && half_life_score(4.0) < 1.0);
-        assert!(half_life_score(30.0) > 0.0 && half_life_score(30.0) < 1.0);
-        assert_eq!(half_life_score(50.0), 0.0);
+        assert_eq!(half_life_score(0.5), 0.0);   // below MIN_HALF_LIFE
+        assert!(half_life_score(1.5) > 0.0 && half_life_score(1.5) < 1.0); // ramp-up
+        assert_eq!(half_life_score(2.0), 1.0);   // ideal range
+        assert_eq!(half_life_score(10.0), 1.0);  // ideal range
+        assert!(half_life_score(30.0) > 0.0 && half_life_score(30.0) < 1.0); // ramp-down
+        assert_eq!(half_life_score(50.0), 0.0);  // above MAX_HALF_LIFE
     }
 
     #[test]

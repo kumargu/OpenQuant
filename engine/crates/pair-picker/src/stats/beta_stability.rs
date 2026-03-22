@@ -29,7 +29,10 @@ pub struct BetaStabilityResult {
 pub const MAX_BETA_CV: f64 = 0.20;
 
 /// Rolling window size for beta estimation.
-pub const ROLLING_WINDOW: usize = 60;
+/// Lowered from 60 to 30 to work with 90-day validation windows.
+/// 30 bars gives ~60 rolling windows for CV estimation, sufficient
+/// for detecting structural breaks while fitting within shorter data.
+pub const ROLLING_WINDOW: usize = 30;
 
 /// Check beta stability using rolling windows and structural break detection.
 ///
@@ -150,10 +153,12 @@ fn structural_break_test(series: &[f64]) -> bool {
         }
     }
 
-    // Break detected if beta shifts by more than 15% of its mean value
-    // This catches genuine regime changes (e.g., beta going from 1.5 to 0.5)
-    // while ignoring tiny statistical fluctuations
-    max_shift_pct > 0.15
+    // Break detected if beta shifts by more than 20% of its mean value.
+    // Relaxed from 15% to 20% because shorter rolling windows (30 bars)
+    // produce noisier rolling betas than 60-bar windows.
+    // 20% still catches genuine regime changes (e.g., beta 1.5 → 0.5)
+    // while tolerating the higher noise floor from shorter windows.
+    max_shift_pct > 0.20
 }
 
 #[cfg(test)]
@@ -230,8 +235,8 @@ mod tests {
 
     #[test]
     fn test_too_short() {
-        let a = vec![1.0; 50];
-        let b = vec![1.0; 50];
+        let a = vec![1.0; 35];
+        let b = vec![1.0; 35];
         assert!(check_beta_stability(&a, &b).is_none());
     }
 

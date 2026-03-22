@@ -26,7 +26,16 @@ use std::path::Path;
 use tracing::{info, warn};
 
 /// Minimum number of daily bars required for validation.
-pub const MIN_HISTORY_BARS: usize = 200;
+/// Lowered from 200 to 90: captures recent regime while still providing
+/// sufficient observations for ADF (needs ~50+) and rolling beta (30-bar windows).
+/// Trade-off: shorter window = more responsive to regime changes but less
+/// statistical power. 90 days is ~4.5 months of daily data.
+pub const MIN_HISTORY_BARS: usize = 90;
+
+/// Maximum window for validation. Caps data to the most recent N bars
+/// even when more history is available. Keeps validation focused on the
+/// current regime rather than averaging across historical regime changes.
+pub const MAX_VALIDATION_WINDOW: usize = 150;
 
 /// Minimum R² for the hedge ratio OLS — below this the beta is meaningless noise.
 pub const MIN_R_SQUARED: f64 = 0.50;
@@ -103,8 +112,9 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         }
     };
 
-    // Use min length
-    let n = prices_a.len().min(prices_b.len());
+    // Use the most recent observations. If more data is available than needed,
+    // cap to MAX_VALIDATION_WINDOW to focus on the recent regime.
+    let n = prices_a.len().min(prices_b.len()).min(MAX_VALIDATION_WINDOW);
     let prices_a = &prices_a[prices_a.len() - n..];
     let prices_b = &prices_b[prices_b.len() - n..];
 
@@ -461,7 +471,8 @@ mod tests {
 
     #[test]
     fn test_cointegrated_pair_passes() {
-        let (pa, pb) = test_utils::cointegrated_pair(500, 1.5, 10.0, 42);
+        // Generate exactly MAX_VALIDATION_WINDOW bars so the cap doesn't truncate
+        let (pa, pb) = test_utils::cointegrated_pair(MAX_VALIDATION_WINDOW, 1.5, 10.0, 42);
         let provider = make_provider(vec![("A", pa), ("B", pb)]);
         let candidate = PairCandidate {
             leg_a: "A".into(),
