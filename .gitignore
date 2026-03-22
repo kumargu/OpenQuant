@@ -17,3 +17,27 @@ reports/
 data/journal/*.db
 data/journal/*.db-wal
 data/journal/*.db-shm
+
+# Engine logs (append-mode, local only)
+data/journal/engine.log
+
+# Runner output (regenerated on each run)
+data/order_intents.json
+data/trade_results.json
+
+# Pair picker intermediate files
+data/pair_picker_output.json
+data/pair_picker_prices.json
+data/pair_picker_*.lock
+data/thompson_state.json
+
+# Simulation results (regenerated)
+data/sim_*_results.json
+data/walk_forward_results.json
+
+# Claude working files
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+
+# Virtual environments
+.venv/
