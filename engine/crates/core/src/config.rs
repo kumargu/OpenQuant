@@ -13,13 +13,22 @@ use crate::pairs::PairsTradingConfig;
 use crate::risk::RiskConfig;
 use crate::signals::{breakout, combiner, mean_reversion, momentum, vwap_reversion};
 
+/// Trading mode selector.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TradingMode {
+    #[default]
+    Pairs,
+    Single,
+    Both,
+}
+
 /// Top-level TOML file layout.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ConfigFile {
-    /// Trading mode: "pairs", "single", or "both".
-    #[serde(default = "default_mode")]
-    pub mode: String,
+    /// Trading mode: pairs, single, or both.
+    pub mode: TradingMode,
     pub metrics: MetricsConfig,
     pub signal: mean_reversion::Config,
     pub momentum: momentum::Config,
@@ -90,10 +99,6 @@ impl DataConfig {
     pub fn tz_offset_ms(&self) -> i64 {
         self.timezone_offset_hours as i64 * 3600 * 1000
     }
-}
-
-fn default_mode() -> String {
-    "pairs".into()
 }
 
 fn parse_hm(s: &str) -> (u32, u32) {

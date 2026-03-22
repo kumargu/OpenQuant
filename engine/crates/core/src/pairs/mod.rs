@@ -321,9 +321,7 @@ impl PairState {
             if can_exit_reversion || stopped || max_held || force_close {
                 let reason = if stopped {
                     SignalReason::StopLoss
-                } else if force_close {
-                    SignalReason::MaxHoldTime // reuse for EOD close
-                } else if max_held {
+                } else if force_close || max_held {
                     SignalReason::MaxHoldTime
                 } else {
                     SignalReason::PairsExit
@@ -628,6 +626,7 @@ mod tests {
     }
 
     /// Trading config with very low entry threshold to make tests deterministic.
+    /// Time-of-day guards are fully permissive so timestamp=0 works in unit tests.
     fn easy_trigger_trading() -> PairsTradingConfig {
         PairsTradingConfig {
             entry_z: 1.5, // easy to trigger
@@ -637,6 +636,8 @@ mod tests {
             max_hold_bars: 50,
             min_hold_bars: 0, // no minimum for unit tests
             notional_per_leg: 10_000.0,
+            last_entry_hour: 24,       // never block entries
+            force_close_minute: 1_500, // never force close
         }
     }
 

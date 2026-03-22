@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_shadow_lifecycle() {
-        let mut state = ShadowState::new("GS/MS".into(), 0);
+        let state = ShadowState::new("GS/MS".into(), 0);
         assert_eq!(state.mode, PairMode::Shadow);
         assert_eq!(state.mode.size_multiplier(), 0.0);
         assert!(!state.mode.is_live());

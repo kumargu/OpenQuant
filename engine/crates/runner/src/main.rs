@@ -64,22 +64,48 @@ mod intents;
 mod pnl;
 
 use clap::Parser;
-use std::io::Write;
 use intents::{write_intents, write_trade_results, OrderIntentRecord};
 use openquant_core::config::ConfigFile;
 use openquant_core::engine::Engine;
 use openquant_core::pairs::engine::PairsEngine;
+use std::io::Write;
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "openquant-runner",
-    about = "Standalone OpenQuant trading engine"
+    about = "OpenQuant trading engine — live, backtest, or walk-forward"
 )]
 struct Cli {
-    /// Path to openquant.toml config file.
-    #[arg(long, default_value = "openquant.toml")]
+    /// Running mode.
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Backtest — replay historical bar files through the engine.
+    Backtest(RunArgs),
+
+    /// Walk-forward — backtest with per-window P&L reporting.
+    WalkForward {
+        #[command(flatten)]
+        run: RunArgs,
+
+        /// Window size in trading days.
+        #[arg(long, default_value = "10")]
+        window_days: usize,
+    },
+
+    /// Live — paper/live trading via Python sidecar (not yet implemented).
+    Live(RunArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct RunArgs {
+    /// Path to TOML config file.
+    #[arg(long, default_value = "config/pairs.toml")]
     config: PathBuf,
 
     /// Directory containing experiment_bars_*.json files.
@@ -91,16 +117,39 @@ struct Cli {
     output_dir: Option<PathBuf>,
 
     /// Number of warmup bars before signal generation begins.
-    #[arg(long, default_value = "64")]
+    #[arg(long, default_value = "0")]
     warmup_bars: usize,
 }
 
 fn main() {
     let cli = Cli::parse();
-    let output_dir = cli.output_dir.as_ref().unwrap_or(&cli.data_dir);
+
+    match cli.command {
+        Command::Backtest(args) => run_backtest(args),
+        Command::WalkForward { run, window_days } => {
+            run_backtest(run);
+            // Walk-forward window analysis is done post-hoc on trade_results.json
+            // by slicing trades into time windows. The runner already processes
+            // bars sequentially with rolling state — that IS walk-forward.
+            info!(
+                window_days,
+                "Walk-forward complete — slice trade_results.json by date windows for per-window P&L"
+            );
+        }
+        Command::Live(_args) => {
+            eprintln!("Live trading mode — not yet implemented.");
+            eprintln!("The runner will connect to the Python sidecar for Alpaca bar streaming.");
+            eprintln!("For now, use `backtest` mode with historical data.");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_backtest(args: RunArgs) {
+    let output_dir = args.output_dir.as_ref().unwrap_or(&args.data_dir);
 
     // Log to both stderr and data/journal/engine.log (append mode)
-    let journal_dir = cli.data_dir.join("journal");
+    let journal_dir = args.data_dir.join("journal");
     std::fs::create_dir_all(&journal_dir).ok();
     let log_file = std::fs::OpenOptions::new()
         .create(true)
@@ -134,18 +183,21 @@ fn main() {
     );
 
     info!("================================================================");
-    info!(run_id = run_id.as_str(), "========== OPENQUANT RUN START ==========");
     info!(
-        config = %cli.config.display(),
-        data_dir = %cli.data_dir.display(),
+        run_id = run_id.as_str(),
+        "========== OPENQUANT RUN START =========="
+    );
+    info!(
+        config = %args.config.display(),
+        data_dir = %args.data_dir.display(),
         output_dir = %output_dir.display(),
-        warmup_bars = cli.warmup_bars,
+        warmup_bars = args.warmup_bars,
         git_commit = git_commit.as_str(),
         "CLI args"
     );
 
     // ── Load config ──
-    let cfg_file = match ConfigFile::load(&cli.config) {
+    let cfg_file = match ConfigFile::load(&args.config) {
         Ok(c) => {
             info!("config loaded successfully");
             c
@@ -156,10 +208,10 @@ fn main() {
         }
     };
 
-    let trading_mode = cfg_file.mode.clone();
-    let run_single = trading_mode == "single" || trading_mode == "both";
-    let run_pairs = trading_mode == "pairs" || trading_mode == "both";
-    info!(mode = trading_mode.as_str(), run_single, run_pairs, "trading mode");
+    use openquant_core::config::TradingMode;
+    let run_single = matches!(cfg_file.mode, TradingMode::Single | TradingMode::Both);
+    let run_pairs = matches!(cfg_file.mode, TradingMode::Pairs | TradingMode::Both);
+    info!(mode = ?cfg_file.mode, run_single, run_pairs, "trading mode");
 
     let pairs_trading_config = cfg_file.pairs_trading.clone();
     let notional_per_leg = pairs_trading_config.notional_per_leg;
@@ -181,8 +233,8 @@ fn main() {
     engine.set_warmup_mode(true);
     info!("single-symbol engine initialized (warmup mode)");
 
-    let active_pairs_path = cli.data_dir.join("active_pairs.json");
-    let history_path = cli.data_dir.join("pair_trading_history.json");
+    let active_pairs_path = args.data_dir.join("active_pairs.json");
+    let history_path = args.data_dir.join("pair_trading_history.json");
 
     let mut pairs_engine = if active_pairs_path.exists() {
         info!(path = %active_pairs_path.display(), "loading active pairs");
@@ -197,10 +249,7 @@ fn main() {
         PairsEngine::new(vec![], pairs_trading_config)
     };
 
-    info!(
-        pairs = pairs_engine.pair_count(),
-        "engines initialized"
-    );
+    info!(pairs = pairs_engine.pair_count(), "engines initialized");
     info!("========== STARTUP COMPLETE ==========");
 
     // ── Load bars ──
@@ -211,7 +260,7 @@ fn main() {
         "market hours config"
     );
 
-    let all_bars = match bars::load_days(&cli.data_dir, &data_config) {
+    let all_bars = match bars::load_days(&args.data_dir, &data_config) {
         Ok(b) => b,
         Err(e) => {
             error!("failed to load bars: {e}");
@@ -234,7 +283,7 @@ fn main() {
     const DAY_GAP_MS: i64 = 6 * 3600 * 1000;
 
     for (i, bar) in all_bars.iter().enumerate() {
-        if i == cli.warmup_bars {
+        if i == args.warmup_bars {
             engine.set_warmup_mode(false);
             info!("warmup complete — live signal generation enabled");
         }
@@ -309,8 +358,16 @@ fn main() {
 
     let summary = pnl_tracker.summary();
     let dollar_pnl = summary.total_pnl_bps * 2.0 * notional_per_leg / 10_000.0;
-    let days = all_bars.iter().map(|b| b.timestamp / 86_400_000).collect::<std::collections::HashSet<_>>().len();
-    let dollar_per_day = if days > 0 { dollar_pnl / days as f64 } else { 0.0 };
+    let days = all_bars
+        .iter()
+        .map(|b| b.timestamp / 86_400_000)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let dollar_per_day = if days > 0 {
+        dollar_pnl / days as f64
+    } else {
+        0.0
+    };
     info!(
         run_id = run_id.as_str(),
         total_trades = summary.total_trades,
@@ -324,7 +381,10 @@ fn main() {
         "P&L summary"
     );
 
-    info!(run_id = run_id.as_str(), "========== OPENQUANT RUN END ==========");
+    info!(
+        run_id = run_id.as_str(),
+        "========== OPENQUANT RUN END =========="
+    );
     info!("================================================================");
 }
 

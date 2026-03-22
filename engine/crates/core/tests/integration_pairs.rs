@@ -59,9 +59,12 @@ fn fallback_config(leg_a: &str, leg_b: &str, beta: f64) -> PairConfig {
 }
 
 /// Test-friendly trading config with no min_hold_bars.
+/// Time-of-day guards are fully permissive so small timestamps work in tests.
 fn test_trading() -> PairsTradingConfig {
     PairsTradingConfig {
         min_hold_bars: 0,
+        last_entry_hour: 24,       // never block entries
+        force_close_minute: 1_500, // never force close
         ..PairsTradingConfig::default()
     }
 }

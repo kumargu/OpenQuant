@@ -57,7 +57,7 @@ run_engine() {
     echo ""
 
     cd "$ROOT"
-    RUST_LOG=info "$BINARY" \
+    RUST_LOG=info "$BINARY" backtest \
         --config "$config_path" \
         --data-dir "$DATA" \
         --output-dir "$DATA" \

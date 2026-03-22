@@ -19,17 +19,25 @@ max_daily_loss = 500.0
 [exit]
 stop_loss_pct = 0.02
 max_hold_bars = 100
+
+[pairs_trading]
+min_hold_bars = 0
+last_entry_hour = 24
+force_close_minute = 1500
 "#
     .to_string()
 }
 
 /// Create an active_pairs.json with one test pair.
+/// Uses a recent generated_at to avoid the 48h staleness check.
 fn active_pairs_json() -> String {
-    r#"
-{
-    "generated_at": "2026-01-01T00:00:00Z",
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    format!(
+        r#"
+{{
+    "generated_at": "{now}",
     "pairs": [
-        {
+        {{
             "leg_a": "AAA",
             "leg_b": "BBB",
             "alpha": 0.0,
@@ -42,11 +50,11 @@ fn active_pairs_json() -> String {
             "regime_robustness": 0.9,
             "economic_rationale": "test",
             "score": 0.9
-        }
+        }}
     ]
-}
+}}
 "#
-    .to_string()
+    )
 }
 
 /// Generate synthetic bars for two symbols with a mean-reverting spread.
@@ -58,9 +66,8 @@ fn synthetic_bars() -> String {
     for i in 0..200 {
         let ts = base_ts + i * 60_000; // 1-min bars
         let price_b = 100.0;
-        // Spread oscillates to create entry/exit signals
-        let spread = 3.0 * (i as f64 * 0.15).sin();
-        let price_a = price_b + spread;
+        // Large oscillation: ±30% around 100 to exceed entry_z=2.0 after warmup
+        let price_a = 100.0 * (1.0 + 0.3 * (i as f64 * 0.08).sin());
 
         bars_aaa.push(format!(
             r#"{{"timestamp":{ts},"open":{pa},"high":{ph},"low":{pl},"close":{pa},"volume":1000.0}}"#,
@@ -108,6 +115,7 @@ fn runner_produces_order_intents() {
     // Run
     let output = Command::new(binary)
         .args([
+            "backtest",
             "--config",
             config_path.to_str().unwrap(),
             "--data-dir",
@@ -141,7 +149,7 @@ fn runner_produces_order_intents() {
     }
 
     // At least some should be pair intents (pair_id present)
-    let pair_intents: Vec<_> = intents
+    let _pair_intents: Vec<_> = intents
         .iter()
         .filter(|i| i.get("pair_id").is_some())
         .collect();
