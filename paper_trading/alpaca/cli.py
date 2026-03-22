@@ -14,7 +14,7 @@ Usage:
 import argparse
 import sys
 
-from . import alpaca_client as alpaca
+from . import client as alpaca
 
 
 def cmd_account(args):

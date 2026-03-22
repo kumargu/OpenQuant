@@ -1,3 +1,3 @@
-from .cli import main
+from .alpaca.cli import main
 
 main()
