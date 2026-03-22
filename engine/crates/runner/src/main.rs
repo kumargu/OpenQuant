@@ -108,9 +108,13 @@ struct RunArgs {
     #[arg(long, default_value = "config/pairs.toml")]
     config: PathBuf,
 
-    /// Directory containing experiment_bars_*.json files.
+    /// Directory containing experiment_bars.json (bar data).
     #[arg(long, default_value = "data")]
     data_dir: PathBuf,
+
+    /// Directory containing active_pairs.json, pair_candidates.json (committed to git).
+    #[arg(long, default_value = "trading")]
+    trading_dir: PathBuf,
 
     /// Directory for output files. Defaults to data_dir.
     #[arg(long)]
@@ -147,6 +151,12 @@ fn main() {
 
 fn run_backtest(args: RunArgs) {
     let output_dir = args.output_dir.as_ref().unwrap_or(&args.data_dir);
+    // Fall back to data_dir if trading_dir doesn't exist (backward compat + tests)
+    let trading_dir = if args.trading_dir.exists() {
+        args.trading_dir.clone()
+    } else {
+        args.data_dir.clone()
+    };
 
     // Log to both stderr and data/journal/engine.log (append mode)
     let journal_dir = args.data_dir.join("journal");
@@ -235,8 +245,8 @@ fn run_backtest(args: RunArgs) {
     engine.set_warmup_mode(true);
     info!("single-symbol engine initialized (warmup mode)");
 
-    let active_pairs_path = args.data_dir.join("active_pairs.json");
-    let history_path = args.data_dir.join("pair_trading_history.json");
+    let active_pairs_path = trading_dir.join("active_pairs.json");
+    let history_path = trading_dir.join("pair_trading_history.json");
 
     let mut pairs_engine = if active_pairs_path.exists() {
         info!(path = %active_pairs_path.display(), "loading active pairs");

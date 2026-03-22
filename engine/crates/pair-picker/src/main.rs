@@ -37,6 +37,26 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(find_data_dir);
 
+    // Trading dir: where active_pairs.json, pair_candidates.json, stock_relationships.json live.
+    // Defaults to trading/ (committed to git, separate from data/ which is local-only).
+    let trading_dir = args
+        .iter()
+        .position(|a| a == "--trading-dir")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            // Walk up looking for trading/ dir
+            let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            for _ in 0..5 {
+                let td = dir.join("trading");
+                if td.exists() {
+                    return td;
+                }
+                if !dir.pop() { break; }
+            }
+            data_dir.clone() // fallback to data_dir for backward compat
+        });
+
     // --check mode: just report whether today's run is done
     if args.iter().any(|a| a == "--check") {
         if lockfile::has_run_today(&data_dir) {
@@ -50,7 +70,7 @@ fn main() {
 
     // --refresh-beta: lightweight OLS refresh without full validation
     if args.iter().any(|a| a == "--refresh-beta") {
-        let active_path = data_dir.join("active_pairs.json");
+        let active_path = trading_dir.join("active_pairs.json");
         let price_file = data_dir.join("pair_picker_prices.json");
         if !active_path.exists() {
             error!("No active_pairs.json to refresh");
@@ -88,14 +108,14 @@ fn main() {
         .position(|a| a == "--candidates")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .unwrap_or_else(|| data_dir.join("pair_candidates.json"));
+        .unwrap_or_else(|| trading_dir.join("pair_candidates.json"));
 
     let output_path = args
         .iter()
         .position(|a| a == "--output")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .unwrap_or_else(|| data_dir.join("active_pairs.json"));
+        .unwrap_or_else(|| trading_dir.join("active_pairs.json"));
 
     info!("Pair Picker starting");
     info!("  data_dir:   {}", data_dir.display());
@@ -122,7 +142,7 @@ fn main() {
     info!("Loaded {} candidate pairs", candidates.pairs.len());
 
     // ── Step 2: Filter through relationship graph ──
-    let graph_path = data_dir.join("stock_relationships.json");
+    let graph_path = trading_dir.join("stock_relationships.json");
     let filtered_candidates = if let Some(graph) = RelationshipGraph::load(&graph_path) {
         let before = candidates.pairs.len();
         let filtered: Vec<PairCandidate> = candidates

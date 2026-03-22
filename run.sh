@@ -60,6 +60,7 @@ run_engine() {
     RUST_LOG=info "$BINARY" backtest \
         --config "$config_path" \
         --data-dir "$DATA" \
+        --trading-dir "$ROOT/trading" \
         --output-dir "$DATA" \
         --warmup-bars 0 2>/dev/null
 
