@@ -101,6 +101,7 @@ pub fn load_day(path: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, Strin
 /// A single day's entry in the merged experiment_bars.json.
 #[derive(Deserialize)]
 struct DayEntry {
+    #[allow(dead_code)]
     date: String,
     symbols: HashMap<String, Vec<RawBar>>,
 }

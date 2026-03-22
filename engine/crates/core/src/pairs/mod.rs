@@ -409,16 +409,14 @@ impl PairState {
                         .rev()
                         .take(5)
                         .all(|&p| p < 0.0);
-                if recent_all_negative || self.consecutive_stops >= 3 {
-                    if !self.paused {
-                        self.paused = true;
-                        warn!(
-                            pair = pair_id.as_str(),
-                            consecutive_stops = self.consecutive_stops,
-                            last_5_negative = recent_all_negative,
-                            "pairs: REGIME GATE — pausing entries (recent trades losing)"
-                        );
-                    }
+                if (recent_all_negative || self.consecutive_stops >= 3) && !self.paused {
+                    self.paused = true;
+                    warn!(
+                        pair = pair_id.as_str(),
+                        consecutive_stops = self.consecutive_stops,
+                        last_5_negative = recent_all_negative,
+                        "pairs: REGIME GATE — pausing entries (recent trades losing)"
+                    );
                 }
 
                 let intents = self.close_position(config, trading, reason, z, spread);
