@@ -17,6 +17,9 @@ use crate::signals::{breakout, combiner, mean_reversion, momentum, vwap_reversio
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ConfigFile {
+    /// Trading mode: "pairs", "single", or "both".
+    #[serde(default = "default_mode")]
+    pub mode: String,
     pub metrics: MetricsConfig,
     pub signal: mean_reversion::Config,
     pub momentum: momentum::Config,
@@ -87,6 +90,10 @@ impl DataConfig {
     pub fn tz_offset_ms(&self) -> i64 {
         self.timezone_offset_hours as i64 * 3600 * 1000
     }
+}
+
+fn default_mode() -> String {
+    "pairs".into()
 }
 
 fn parse_hm(s: &str) -> (u32, u32) {

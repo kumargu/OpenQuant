@@ -14,7 +14,7 @@
 # "pairs" = pairs engine only (GLD/SLV, GS/MS, etc.)
 # "single" = single-symbol engine only (mean-reversion, momentum, etc.)
 # "both" = run both engines (mixed P&L, harder to attribute)
-mode = "pairs"
+mode = "single"
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ min_hold_bars = 10
 # Stale bars are rejected — the engine does nothing rather than trade
 # on delayed data. 0 = disabled (appropriate for backtesting).
 # For live trading, set to something like 120 (2 minutes).
-max_bar_age_seconds = 120
+max_bar_age_seconds = 0
 
 # Trading timezone UTC offset in hours. Used for:
 # - VWAP session reset (resets at midnight in this timezone)

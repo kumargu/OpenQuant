@@ -104,6 +104,11 @@ fn main() {
         }
     };
 
+    let trading_mode = cfg_file.mode.clone();
+    let run_single = trading_mode == "single" || trading_mode == "both";
+    let run_pairs = trading_mode == "pairs" || trading_mode == "both";
+    info!(mode = trading_mode.as_str(), run_single, run_pairs, "trading mode");
+
     let pairs_trading_config = cfg_file.pairs_trading.clone();
     let notional_per_leg = pairs_trading_config.notional_per_leg;
     let data_config = cfg_file.data.clone();
@@ -198,16 +203,22 @@ fn main() {
         // Track prices for P&L computation
         pnl_tracker.update_price(&bar.symbol, bar.close);
 
-        // Single-symbol engine
-        let single_intents = engine.on_bar(bar);
-        for intent in &single_intents {
-            all_intents.push(OrderIntentRecord::from_engine_intent(intent, bar.timestamp));
-            engine.on_fill(&intent.symbol, intent.side, intent.qty, bar.close);
+        // Single-symbol engine (skip in pairs-only mode)
+        if run_single {
+            let single_intents = engine.on_bar(bar);
+            for intent in &single_intents {
+                all_intents.push(OrderIntentRecord::from_engine_intent(intent, bar.timestamp));
+                engine.on_fill(&intent.symbol, intent.side, intent.qty, bar.close);
+            }
+            single_intent_count += single_intents.len();
         }
-        single_intent_count += single_intents.len();
 
-        // Pairs engine
-        let pair_intents = pairs_engine.on_bar(&bar.symbol, bar.timestamp, bar.close);
+        // Pairs engine (skip in single-only mode)
+        let pair_intents = if run_pairs {
+            pairs_engine.on_bar(&bar.symbol, bar.timestamp, bar.close)
+        } else {
+            vec![]
+        };
         if !pair_intents.is_empty() {
             pnl_tracker.on_intents(&pair_intents, bar.timestamp);
             for intent in &pair_intents {
