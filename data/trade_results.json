@@ -1,0 +1,3810 @@
+[
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768317420000,
+    "exit_ts": 1768319760000,
+    "return_bps": -13.215825933985448,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768320360000,
+    "exit_ts": 1768322400000,
+    "return_bps": -28.728440551312737,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768323960000,
+    "exit_ts": 1768328040000,
+    "return_bps": -83.35744613698321,
+    "exit_reason": "reversion",
+    "holding_bars": 68
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768401000000,
+    "exit_ts": 1768402800000,
+    "return_bps": 227.16568206445183,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768405320000,
+    "exit_ts": 1768407120000,
+    "return_bps": -4.626280394352662,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768408080000,
+    "exit_ts": 1768410000000,
+    "return_bps": -35.34530369807509,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768410960000,
+    "exit_ts": 1768412820000,
+    "return_bps": -16.10705796947373,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768413240000,
+    "exit_ts": 1768415220000,
+    "return_bps": 46.559138710992144,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768416240000,
+    "exit_ts": 1768418760000,
+    "return_bps": -43.78339444900987,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768487400000,
+    "exit_ts": 1768489320000,
+    "return_bps": 121.74764644113586,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768489560000,
+    "exit_ts": 1768491420000,
+    "return_bps": 27.740299602732847,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768493580000,
+    "exit_ts": 1768495920000,
+    "return_bps": -22.92236768891714,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768500360000,
+    "exit_ts": 1768506960000,
+    "return_bps": -32.231889556342,
+    "exit_reason": "reversion",
+    "holding_bars": 110
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768573800000,
+    "exit_ts": 1768575840000,
+    "return_bps": 20.556929924959192,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768577340000,
+    "exit_ts": 1768579140000,
+    "return_bps": -39.81425559081741,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768580040000,
+    "exit_ts": 1768582140000,
+    "return_bps": -4.865070474751853,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768582260000,
+    "exit_ts": 1768584720000,
+    "return_bps": -1.749615104124734,
+    "exit_reason": "reversion",
+    "holding_bars": 41
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768586040000,
+    "exit_ts": 1768589640000,
+    "return_bps": -22.229506216130616,
+    "exit_reason": "reversion",
+    "holding_bars": 60
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768919400000,
+    "exit_ts": 1768921200000,
+    "return_bps": -0.5916355009833065,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768922220000,
+    "exit_ts": 1768924020000,
+    "return_bps": -22.680090753115277,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768925640000,
+    "exit_ts": 1768929300000,
+    "return_bps": -23.597704978556223,
+    "exit_reason": "reversion",
+    "holding_bars": 61
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768929840000,
+    "exit_ts": 1768931760000,
+    "return_bps": -10.594821712141387,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768933860000,
+    "exit_ts": 1768935900000,
+    "return_bps": -6.046091963160981,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769005800000,
+    "exit_ts": 1769007600000,
+    "return_bps": -36.19516187096033,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769007780000,
+    "exit_ts": 1769009580000,
+    "return_bps": -8.732660692560563,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769010420000,
+    "exit_ts": 1769012220000,
+    "return_bps": 29.158015518990837,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769012280000,
+    "exit_ts": 1769014620000,
+    "return_bps": -4.780276762027976,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769016360000,
+    "exit_ts": 1769018280000,
+    "return_bps": -11.603101175630298,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769018760000,
+    "exit_ts": 1769020800000,
+    "return_bps": -6.371102229732682,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769021760000,
+    "exit_ts": 1769023620000,
+    "return_bps": 32.209317880859416,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769092200000,
+    "exit_ts": 1769094000000,
+    "return_bps": 123.75833163805046,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769095020000,
+    "exit_ts": 1769096940000,
+    "return_bps": 49.696761897012486,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769097240000,
+    "exit_ts": 1769099100000,
+    "return_bps": 9.520835854762442,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769099160000,
+    "exit_ts": 1769101080000,
+    "return_bps": 7.682543038080187,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769101680000,
+    "exit_ts": 1769103720000,
+    "return_bps": 18.689692773228114,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769104620000,
+    "exit_ts": 1769107860000,
+    "return_bps": -19.782459519869697,
+    "exit_reason": "reversion",
+    "holding_bars": 54
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769178600000,
+    "exit_ts": 1769180400000,
+    "return_bps": -8.767696684635016,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769181840000,
+    "exit_ts": 1769183640000,
+    "return_bps": -11.448944030062004,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769184540000,
+    "exit_ts": 1769186340000,
+    "return_bps": -3.47527937769161,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769186760000,
+    "exit_ts": 1769188560000,
+    "return_bps": -19.338618672019216,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769189040000,
+    "exit_ts": 1769191860000,
+    "return_bps": -33.92146682581982,
+    "exit_reason": "reversion",
+    "holding_bars": 47
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769193060000,
+    "exit_ts": 1769194860000,
+    "return_bps": 0.8402697205167549,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769437800000,
+    "exit_ts": 1769441460000,
+    "return_bps": -98.4063403234148,
+    "exit_reason": "reversion",
+    "holding_bars": 61
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769443740000,
+    "exit_ts": 1769447040000,
+    "return_bps": -79.92589390533742,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769447700000,
+    "exit_ts": 1769449620000,
+    "return_bps": -41.349687494397486,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769449920000,
+    "exit_ts": 1769451720000,
+    "return_bps": 19.538603751582237,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769451840000,
+    "exit_ts": 1769455620000,
+    "return_bps": -213.91005726550017,
+    "exit_reason": "reversion",
+    "holding_bars": 63
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769524200000,
+    "exit_ts": 1769527680000,
+    "return_bps": -66.19266291714257,
+    "exit_reason": "reversion",
+    "holding_bars": 58
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769529000000,
+    "exit_ts": 1769531280000,
+    "return_bps": -32.990250600617664,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769533620000,
+    "exit_ts": 1769537040000,
+    "return_bps": -21.973643189316576,
+    "exit_reason": "reversion",
+    "holding_bars": 57
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769537340000,
+    "exit_ts": 1769540760000,
+    "return_bps": 91.53582311288048,
+    "exit_reason": "reversion",
+    "holding_bars": 57
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769610600000,
+    "exit_ts": 1769612640000,
+    "return_bps": 238.54009227390105,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769612820000,
+    "exit_ts": 1769614620000,
+    "return_bps": 95.10727874852604,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769616060000,
+    "exit_ts": 1769617920000,
+    "return_bps": 43.19842228867967,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769617980000,
+    "exit_ts": 1769619780000,
+    "return_bps": -23.385805867995195,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769621880000,
+    "exit_ts": 1769624940000,
+    "return_bps": -64.42828474603314,
+    "exit_reason": "reversion",
+    "holding_bars": 51
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769625480000,
+    "exit_ts": 1769628000000,
+    "return_bps": -26.187575845874782,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769697000000,
+    "exit_ts": 1769698800000,
+    "return_bps": 229.92494398805053,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769698920000,
+    "exit_ts": 1769701080000,
+    "return_bps": 117.72256847516525,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769703840000,
+    "exit_ts": 1769705640000,
+    "return_bps": 16.09735557454244,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769706300000,
+    "exit_ts": 1769708700000,
+    "return_bps": 39.756338422382086,
+    "exit_reason": "reversion",
+    "holding_bars": 40
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769709300000,
+    "exit_ts": 1769711100000,
+    "return_bps": -2.103375387802924,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769711520000,
+    "exit_ts": 1769713380000,
+    "return_bps": -10.857417390762208,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769783400000,
+    "exit_ts": 1769785860000,
+    "return_bps": 577.8331219594804,
+    "exit_reason": "reversion",
+    "holding_bars": 41
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769788200000,
+    "exit_ts": 1769790060000,
+    "return_bps": -95.7392773497991,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769790300000,
+    "exit_ts": 1769792160000,
+    "return_bps": -62.09046816256662,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769792760000,
+    "exit_ts": 1769794560000,
+    "return_bps": 133.77124321786758,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769795760000,
+    "exit_ts": 1769797620000,
+    "return_bps": -241.3013205499768,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769797740000,
+    "exit_ts": 1769799540000,
+    "return_bps": 331.2159525811075,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770042600000,
+    "exit_ts": 1770044400000,
+    "return_bps": 159.89796509095342,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770046200000,
+    "exit_ts": 1770048240000,
+    "return_bps": 38.42514963035763,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770049680000,
+    "exit_ts": 1770051840000,
+    "return_bps": 2.686228520495453,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770052200000,
+    "exit_ts": 1770054060000,
+    "return_bps": -6.776870763575683,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770057900000,
+    "exit_ts": 1770060720000,
+    "return_bps": -38.21317414874245,
+    "exit_reason": "reversion",
+    "holding_bars": 47
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770129000000,
+    "exit_ts": 1770130800000,
+    "return_bps": 38.47816801767204,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770131400000,
+    "exit_ts": 1770133200000,
+    "return_bps": 3.1892973193408416,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770134460000,
+    "exit_ts": 1770137580000,
+    "return_bps": -90.35126594567654,
+    "exit_reason": "reversion",
+    "holding_bars": 52
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770138060000,
+    "exit_ts": 1770140280000,
+    "return_bps": -37.22779928610144,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770140820000,
+    "exit_ts": 1770142920000,
+    "return_bps": 56.76315214784472,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770143520000,
+    "exit_ts": 1770145800000,
+    "return_bps": 25.741813582274723,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770215400000,
+    "exit_ts": 1770217380000,
+    "return_bps": 0.7879336601224853,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770218520000,
+    "exit_ts": 1770220380000,
+    "return_bps": 68.17820393660955,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770221520000,
+    "exit_ts": 1770223440000,
+    "return_bps": -34.64477890135488,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770224040000,
+    "exit_ts": 1770226860000,
+    "return_bps": -4.416971977594237,
+    "exit_reason": "reversion",
+    "holding_bars": 47
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770229020000,
+    "exit_ts": 1770231780000,
+    "return_bps": 44.70102010978573,
+    "exit_reason": "reversion",
+    "holding_bars": 46
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770301800000,
+    "exit_ts": 1770303720000,
+    "return_bps": 57.66466504438485,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770304080000,
+    "exit_ts": 1770306000000,
+    "return_bps": -9.83787299019408,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770306300000,
+    "exit_ts": 1770308220000,
+    "return_bps": 94.40239465972763,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770308940000,
+    "exit_ts": 1770311400000,
+    "return_bps": -0.21623322120500357,
+    "exit_reason": "reversion",
+    "holding_bars": 41
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770314040000,
+    "exit_ts": 1770317820000,
+    "return_bps": 66.20692174134867,
+    "exit_reason": "reversion",
+    "holding_bars": 63
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770388200000,
+    "exit_ts": 1770390180000,
+    "return_bps": 94.58857732886162,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770390360000,
+    "exit_ts": 1770392460000,
+    "return_bps": 22.501578058490743,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770392700000,
+    "exit_ts": 1770395280000,
+    "return_bps": 55.75071420546648,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770399000000,
+    "exit_ts": 1770402540000,
+    "return_bps": 34.96146919840801,
+    "exit_reason": "reversion",
+    "holding_bars": 59
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770403980000,
+    "exit_ts": 1770407280000,
+    "return_bps": -6.631078386255461,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770647400000,
+    "exit_ts": 1770649380000,
+    "return_bps": 232.7199381301548,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770650100000,
+    "exit_ts": 1770652080000,
+    "return_bps": -30.230144853953576,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770652140000,
+    "exit_ts": 1770653940000,
+    "return_bps": 23.77036285881171,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770654720000,
+    "exit_ts": 1770656700000,
+    "return_bps": -8.696914392719666,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770658500000,
+    "exit_ts": 1770660780000,
+    "return_bps": 35.820950212631985,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770661200000,
+    "exit_ts": 1770663540000,
+    "return_bps": 29.23232582512658,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770733800000,
+    "exit_ts": 1770735600000,
+    "return_bps": -22.964641078493884,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770737700000,
+    "exit_ts": 1770739560000,
+    "return_bps": 49.7135483972489,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770740340000,
+    "exit_ts": 1770742980000,
+    "return_bps": -8.979763879744418,
+    "exit_reason": "reversion",
+    "holding_bars": 44
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770745020000,
+    "exit_ts": 1770747720000,
+    "return_bps": 20.7639475748241,
+    "exit_reason": "reversion",
+    "holding_bars": 45
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770747840000,
+    "exit_ts": 1770750240000,
+    "return_bps": -4.826554789904734,
+    "exit_reason": "reversion",
+    "holding_bars": 40
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770820200000,
+    "exit_ts": 1770822000000,
+    "return_bps": 37.8492874175443,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770822300000,
+    "exit_ts": 1770824220000,
+    "return_bps": -39.10679720287946,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770825120000,
+    "exit_ts": 1770826980000,
+    "return_bps": 0.8870016471837232,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770829380000,
+    "exit_ts": 1770831480000,
+    "return_bps": 46.38100636578448,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770831540000,
+    "exit_ts": 1770833880000,
+    "return_bps": 5.507509899819581,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770834240000,
+    "exit_ts": 1770836580000,
+    "return_bps": 5.818073937324552,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770906600000,
+    "exit_ts": 1770908400000,
+    "return_bps": 72.95331555770801,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770908820000,
+    "exit_ts": 1770911400000,
+    "return_bps": -2.1943201753741306,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770911940000,
+    "exit_ts": 1770912840000,
+    "return_bps": 99.59816498696036,
+    "exit_reason": "stop_loss",
+    "holding_bars": 15
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770912900000,
+    "exit_ts": 1770914700000,
+    "return_bps": 81.54257197397428,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770914880000,
+    "exit_ts": 1770916680000,
+    "return_bps": 32.97573547664041,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770918840000,
+    "exit_ts": 1770920640000,
+    "return_bps": 5.757760039445561,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770920700000,
+    "exit_ts": 1770922500000,
+    "return_bps": -36.8276760567163,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770993000000,
+    "exit_ts": 1770994800000,
+    "return_bps": -73.35373588615829,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770997380000,
+    "exit_ts": 1770999300000,
+    "return_bps": 3.1231212249468623,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770999960000,
+    "exit_ts": 1771001880000,
+    "return_bps": -17.731839473905584,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771003440000,
+    "exit_ts": 1771005960000,
+    "return_bps": 7.900280206396609,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771006140000,
+    "exit_ts": 1771008420000,
+    "return_bps": 10.324920931907728,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771338600000,
+    "exit_ts": 1771340400000,
+    "return_bps": 90.21792737423635,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771342380000,
+    "exit_ts": 1771344180000,
+    "return_bps": -41.12200470533131,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771345440000,
+    "exit_ts": 1771347360000,
+    "return_bps": 3.428251418806962,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771348020000,
+    "exit_ts": 1771350900000,
+    "return_bps": -44.40608687537155,
+    "exit_reason": "reversion",
+    "holding_bars": 48
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771351680000,
+    "exit_ts": 1771353540000,
+    "return_bps": -26.040160218757507,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771354560000,
+    "exit_ts": 1771356660000,
+    "return_bps": -15.428254824125824,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771425240000,
+    "exit_ts": 1771427220000,
+    "return_bps": 14.121223313358946,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771428720000,
+    "exit_ts": 1771430760000,
+    "return_bps": -2.086717020534678,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771431420000,
+    "exit_ts": 1771433460000,
+    "return_bps": -3.7263602516929297,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771435800000,
+    "exit_ts": 1771438740000,
+    "return_bps": -2.4481498228067924,
+    "exit_reason": "reversion",
+    "holding_bars": 49
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771438800000,
+    "exit_ts": 1771440900000,
+    "return_bps": -33.27478151151776,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771511400000,
+    "exit_ts": 1771511460000,
+    "return_bps": -82.99829664004771,
+    "exit_reason": "stop_loss",
+    "holding_bars": 1
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771511520000,
+    "exit_ts": 1771513320000,
+    "return_bps": -12.641326776537214,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771514160000,
+    "exit_ts": 1771516020000,
+    "return_bps": -15.937246729016517,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771517280000,
+    "exit_ts": 1771520160000,
+    "return_bps": -8.480744005720801,
+    "exit_reason": "reversion",
+    "holding_bars": 48
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771521300000,
+    "exit_ts": 1771523640000,
+    "return_bps": -11.387244025702218,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771524600000,
+    "exit_ts": 1771527120000,
+    "return_bps": -15.713941675684405,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771597800000,
+    "exit_ts": 1771600560000,
+    "return_bps": -26.12615523807876,
+    "exit_reason": "reversion",
+    "holding_bars": 46
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771603440000,
+    "exit_ts": 1771605780000,
+    "return_bps": 18.536096357980085,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771608300000,
+    "exit_ts": 1771611000000,
+    "return_bps": -33.13435760631587,
+    "exit_reason": "reversion",
+    "holding_bars": 45
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771611720000,
+    "exit_ts": 1771613580000,
+    "return_bps": 14.098764410353702,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771857000000,
+    "exit_ts": 1771859400000,
+    "return_bps": 7.170889442357186,
+    "exit_reason": "reversion",
+    "holding_bars": 40
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771859760000,
+    "exit_ts": 1771861620000,
+    "return_bps": 7.258878168463109,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771861740000,
+    "exit_ts": 1771864260000,
+    "return_bps": -21.032099951311103,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771865520000,
+    "exit_ts": 1771867380000,
+    "return_bps": -37.30225893570504,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771871160000,
+    "exit_ts": 1771873740000,
+    "return_bps": -49.79633984487359,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771943400000,
+    "exit_ts": 1771945500000,
+    "return_bps": -44.31802781255096,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771947840000,
+    "exit_ts": 1771949820000,
+    "return_bps": -0.16625769645919952,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771951140000,
+    "exit_ts": 1771953900000,
+    "return_bps": -9.237701092848438,
+    "exit_reason": "reversion",
+    "holding_bars": 46
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771955940000,
+    "exit_ts": 1771960320000,
+    "return_bps": -65.03520170967207,
+    "exit_reason": "reversion",
+    "holding_bars": 73
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772029800000,
+    "exit_ts": 1772031600000,
+    "return_bps": -17.151778007414514,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772031840000,
+    "exit_ts": 1772033700000,
+    "return_bps": -34.50012337030894,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772034420000,
+    "exit_ts": 1772037600000,
+    "return_bps": 5.292666613435735,
+    "exit_reason": "reversion",
+    "holding_bars": 53
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772037960000,
+    "exit_ts": 1772040120000,
+    "return_bps": -10.905396806791469,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772041320000,
+    "exit_ts": 1772043840000,
+    "return_bps": -24.855533223194016,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772044500000,
+    "exit_ts": 1772046720000,
+    "return_bps": 3.4355456047619963,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772116200000,
+    "exit_ts": 1772118060000,
+    "return_bps": 9.245780208403062,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772120040000,
+    "exit_ts": 1772121840000,
+    "return_bps": 48.8681431018639,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772124300000,
+    "exit_ts": 1772126280000,
+    "return_bps": -14.269170867717976,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772127060000,
+    "exit_ts": 1772129160000,
+    "return_bps": 5.170940384755511,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772130840000,
+    "exit_ts": 1772132820000,
+    "return_bps": -36.007451587610326,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772202600000,
+    "exit_ts": 1772204820000,
+    "return_bps": -25.171041800907027,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772205360000,
+    "exit_ts": 1772207520000,
+    "return_bps": -48.16480076213621,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772207640000,
+    "exit_ts": 1772209500000,
+    "return_bps": -0.00956626931432325,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772211720000,
+    "exit_ts": 1772214000000,
+    "return_bps": 8.447186453030753,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772216400000,
+    "exit_ts": 1772216700000,
+    "return_bps": -50.71654924100456,
+    "exit_reason": "stop_loss",
+    "holding_bars": 5
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772216760000,
+    "exit_ts": 1772218980000,
+    "return_bps": 16.211472444647285,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772461800000,
+    "exit_ts": 1772461860000,
+    "return_bps": -203.8728697161477,
+    "exit_reason": "stop_loss",
+    "holding_bars": 1
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772461920000,
+    "exit_ts": 1772463720000,
+    "return_bps": -11.873858144798447,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772464620000,
+    "exit_ts": 1772466420000,
+    "return_bps": 37.29074118722981,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772466780000,
+    "exit_ts": 1772469300000,
+    "return_bps": -79.85457277221597,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772472180000,
+    "exit_ts": 1772474520000,
+    "return_bps": 40.12037031125338,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772474700000,
+    "exit_ts": 1772477040000,
+    "return_bps": -25.15847950466712,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772548200000,
+    "exit_ts": 1772551500000,
+    "return_bps": -30.63409696860769,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772553540000,
+    "exit_ts": 1772555340000,
+    "return_bps": 14.106896368650029,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772555520000,
+    "exit_ts": 1772557440000,
+    "return_bps": -33.54962825512021,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772558040000,
+    "exit_ts": 1772559960000,
+    "return_bps": -2.5371081153533463,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772562120000,
+    "exit_ts": 1772564040000,
+    "return_bps": -4.712480252198552,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772634600000,
+    "exit_ts": 1772636400000,
+    "return_bps": -46.80702247715506,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772636760000,
+    "exit_ts": 1772638740000,
+    "return_bps": -29.034379932100112,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772638980000,
+    "exit_ts": 1772641020000,
+    "return_bps": 21.5572066281373,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772641980000,
+    "exit_ts": 1772644320000,
+    "return_bps": 10.022472994806868,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772644620000,
+    "exit_ts": 1772644980000,
+    "return_bps": -20.427468024598255,
+    "exit_reason": "stop_loss",
+    "holding_bars": 6
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772645040000,
+    "exit_ts": 1772647620000,
+    "return_bps": -0.1063630957437276,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772648520000,
+    "exit_ts": 1772650980000,
+    "return_bps": 37.21063958460468,
+    "exit_reason": "reversion",
+    "holding_bars": 41
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772721300000,
+    "exit_ts": 1772723280000,
+    "return_bps": 13.767285831008572,
+    "exit_reason": "stop_loss",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772723340000,
+    "exit_ts": 1772725140000,
+    "return_bps": 25.246255698468367,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772727000000,
+    "exit_ts": 1772728920000,
+    "return_bps": -6.198900010975558,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772731920000,
+    "exit_ts": 1772733840000,
+    "return_bps": -5.171059308175604,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772734800000,
+    "exit_ts": 1772736780000,
+    "return_bps": 27.55571962913376,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772807400000,
+    "exit_ts": 1772809200000,
+    "return_bps": -23.617245168429783,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772809320000,
+    "exit_ts": 1772811120000,
+    "return_bps": -7.559839980945864,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772811300000,
+    "exit_ts": 1772814660000,
+    "return_bps": 2.656046911707076,
+    "exit_reason": "reversion",
+    "holding_bars": 56
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772815440000,
+    "exit_ts": 1772817480000,
+    "return_bps": -19.65317318616274,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772819580000,
+    "exit_ts": 1772821980000,
+    "return_bps": -12.919382222757706,
+    "exit_reason": "reversion",
+    "holding_bars": 40
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772822400000,
+    "exit_ts": 1772824920000,
+    "return_bps": 1.5572471115293638,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773153000000,
+    "exit_ts": 1773154860000,
+    "return_bps": -23.14969150658353,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773155580000,
+    "exit_ts": 1773158040000,
+    "return_bps": -6.66908498844699,
+    "exit_reason": "reversion",
+    "holding_bars": 41
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773158880000,
+    "exit_ts": 1773160980000,
+    "return_bps": 17.2113583180776,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773162300000,
+    "exit_ts": 1773165600000,
+    "return_bps": -21.00836783090439,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773166440000,
+    "exit_ts": 1773166620000,
+    "return_bps": -6.948544639261079,
+    "exit_reason": "stop_loss",
+    "holding_bars": 3
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773166680000,
+    "exit_ts": 1773168660000,
+    "return_bps": -5.28009681001714,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773239520000,
+    "exit_ts": 1773241800000,
+    "return_bps": -11.084643418269971,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773245040000,
+    "exit_ts": 1773247560000,
+    "return_bps": 24.923246776552304,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773249900000,
+    "exit_ts": 1773252660000,
+    "return_bps": -5.7512973337890045,
+    "exit_reason": "reversion",
+    "holding_bars": 46
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773325800000,
+    "exit_ts": 1773328020000,
+    "return_bps": 3.859847706248514,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773328320000,
+    "exit_ts": 1773330300000,
+    "return_bps": -33.68352313031092,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773332460000,
+    "exit_ts": 1773335760000,
+    "return_bps": 9.236355691294047,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773336000000,
+    "exit_ts": 1773338940000,
+    "return_bps": -12.915106187324245,
+    "exit_reason": "reversion",
+    "holding_bars": 49
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773340380000,
+    "exit_ts": 1773343320000,
+    "return_bps": -15.1392517836633,
+    "exit_reason": "reversion",
+    "holding_bars": 49
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773412200000,
+    "exit_ts": 1773414120000,
+    "return_bps": -57.9941790877928,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773416760000,
+    "exit_ts": 1773418620000,
+    "return_bps": 13.703035088049935,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773421500000,
+    "exit_ts": 1773423600000,
+    "return_bps": -34.7052097939813,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773424440000,
+    "exit_ts": 1773426720000,
+    "return_bps": -21.236826158164313,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773757800000,
+    "exit_ts": 1773759720000,
+    "return_bps": 9.540623399717536,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773759960000,
+    "exit_ts": 1773762240000,
+    "return_bps": -61.50092544483922,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773764460000,
+    "exit_ts": 1773766440000,
+    "return_bps": 3.8577406612998697,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773767040000,
+    "exit_ts": 1773770040000,
+    "return_bps": -7.896533143803667,
+    "exit_reason": "reversion",
+    "holding_bars": 50
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773770940000,
+    "exit_ts": 1773775620000,
+    "return_bps": -31.44257633749073,
+    "exit_reason": "reversion",
+    "holding_bars": 78
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773844200000,
+    "exit_ts": 1773846300000,
+    "return_bps": -28.81256027771155,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773849780000,
+    "exit_ts": 1773851700000,
+    "return_bps": -2.806042378237727,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773852780000,
+    "exit_ts": 1773854880000,
+    "return_bps": -12.40866957248042,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773855300000,
+    "exit_ts": 1773857520000,
+    "return_bps": -11.2340085091252,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773857700000,
+    "exit_ts": 1773861360000,
+    "return_bps": 7.936442964479575,
+    "exit_reason": "reversion",
+    "holding_bars": 61
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773930600000,
+    "exit_ts": 1773932400000,
+    "return_bps": 386.546247606375,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773934260000,
+    "exit_ts": 1773936060000,
+    "return_bps": -7.8231139469275535,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773936120000,
+    "exit_ts": 1773937920000,
+    "return_bps": 27.04417994494461,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773939120000,
+    "exit_ts": 1773940920000,
+    "return_bps": -39.8917676114997,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773942720000,
+    "exit_ts": 1773944520000,
+    "return_bps": -11.816202498778065,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773945000000,
+    "exit_ts": 1773946800000,
+    "return_bps": 6.72527512319105,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774017000000,
+    "exit_ts": 1774018800000,
+    "return_bps": 157.91396749803693,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774019760000,
+    "exit_ts": 1774021680000,
+    "return_bps": 45.268827584989396,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774022640000,
+    "exit_ts": 1774024500000,
+    "return_bps": -23.26792432944059,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774026420000,
+    "exit_ts": 1774028400000,
+    "return_bps": -21.19065350455656,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774030020000,
+    "exit_ts": 1774031820000,
+    "return_bps": -17.457135865302142,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774032060000,
+    "exit_ts": 1774033920000,
+    "return_bps": 17.896310455670818,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768317540000,
+    "exit_ts": 1768320060000,
+    "return_bps": -35.77391354639791,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768320360000,
+    "exit_ts": 1768322520000,
+    "return_bps": -39.141379417038245,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768323420000,
+    "exit_ts": 1768325580000,
+    "return_bps": -11.64305016332853,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768325940000,
+    "exit_ts": 1768326120000,
+    "return_bps": -32.06838406724596,
+    "exit_reason": "stop_loss",
+    "holding_bars": 3
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768326180000,
+    "exit_ts": 1768328760000,
+    "return_bps": -74.80439084626201,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768329660000,
+    "exit_ts": 1768331760000,
+    "return_bps": -4.591274697189868,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768401000000,
+    "exit_ts": 1768403160000,
+    "return_bps": 22.86496174514025,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768404180000,
+    "exit_ts": 1768405980000,
+    "return_bps": 5.156970807928484,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768408080000,
+    "exit_ts": 1768410000000,
+    "return_bps": -35.34530369807509,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768410960000,
+    "exit_ts": 1768412820000,
+    "return_bps": -16.10705796947373,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768413240000,
+    "exit_ts": 1768415220000,
+    "return_bps": 46.559138710992144,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768416240000,
+    "exit_ts": 1768418760000,
+    "return_bps": -43.78339444900987,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768487400000,
+    "exit_ts": 1768489320000,
+    "return_bps": 121.74764644113586,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768489560000,
+    "exit_ts": 1768491420000,
+    "return_bps": 27.740299602732847,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768493580000,
+    "exit_ts": 1768495920000,
+    "return_bps": -22.92236768891714,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768500360000,
+    "exit_ts": 1768506960000,
+    "return_bps": -32.231889556342,
+    "exit_reason": "reversion",
+    "holding_bars": 110
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768573800000,
+    "exit_ts": 1768575840000,
+    "return_bps": 20.556929924959192,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768577340000,
+    "exit_ts": 1768579140000,
+    "return_bps": -39.81425559081741,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768580040000,
+    "exit_ts": 1768582140000,
+    "return_bps": -4.865070474751853,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768582260000,
+    "exit_ts": 1768584720000,
+    "return_bps": -1.749615104124734,
+    "exit_reason": "reversion",
+    "holding_bars": 41
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768586040000,
+    "exit_ts": 1768589640000,
+    "return_bps": -22.229506216130616,
+    "exit_reason": "reversion",
+    "holding_bars": 60
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768919400000,
+    "exit_ts": 1768921200000,
+    "return_bps": -0.5916355009833065,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768922220000,
+    "exit_ts": 1768924020000,
+    "return_bps": -22.680090753115277,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768925640000,
+    "exit_ts": 1768929300000,
+    "return_bps": -23.597704978556223,
+    "exit_reason": "reversion",
+    "holding_bars": 61
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768929840000,
+    "exit_ts": 1768931760000,
+    "return_bps": -10.594821712141389,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1768933860000,
+    "exit_ts": 1768935900000,
+    "return_bps": -6.046091963160981,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769005800000,
+    "exit_ts": 1769007600000,
+    "return_bps": -36.19516187096033,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769007780000,
+    "exit_ts": 1769009580000,
+    "return_bps": -8.732660692560563,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769010420000,
+    "exit_ts": 1769012220000,
+    "return_bps": 29.158015518990837,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769012280000,
+    "exit_ts": 1769014620000,
+    "return_bps": -4.780276762027976,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769016360000,
+    "exit_ts": 1769018280000,
+    "return_bps": -11.603101175630298,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769018760000,
+    "exit_ts": 1769020800000,
+    "return_bps": -6.371102229732682,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769021760000,
+    "exit_ts": 1769023620000,
+    "return_bps": 32.209317880859416,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769092200000,
+    "exit_ts": 1769094000000,
+    "return_bps": 123.75833163805046,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769095020000,
+    "exit_ts": 1769096940000,
+    "return_bps": 49.696761897012486,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769097240000,
+    "exit_ts": 1769099100000,
+    "return_bps": 9.520835854762442,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769099160000,
+    "exit_ts": 1769101080000,
+    "return_bps": 7.682543038080187,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769101680000,
+    "exit_ts": 1769103720000,
+    "return_bps": 18.689692773228114,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769104620000,
+    "exit_ts": 1769107860000,
+    "return_bps": -19.782459519869697,
+    "exit_reason": "reversion",
+    "holding_bars": 54
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769178600000,
+    "exit_ts": 1769180400000,
+    "return_bps": -8.767696684635016,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769181840000,
+    "exit_ts": 1769183640000,
+    "return_bps": -11.448944030062005,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769184540000,
+    "exit_ts": 1769186340000,
+    "return_bps": -3.47527937769161,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769186760000,
+    "exit_ts": 1769188560000,
+    "return_bps": -19.338618672019216,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769189040000,
+    "exit_ts": 1769191860000,
+    "return_bps": -33.92146682581982,
+    "exit_reason": "reversion",
+    "holding_bars": 47
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769193060000,
+    "exit_ts": 1769194860000,
+    "return_bps": 0.8402697205167549,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769437800000,
+    "exit_ts": 1769441460000,
+    "return_bps": -98.40634032341481,
+    "exit_reason": "reversion",
+    "holding_bars": 61
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769443740000,
+    "exit_ts": 1769447040000,
+    "return_bps": -79.92589390533742,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769447700000,
+    "exit_ts": 1769449620000,
+    "return_bps": -41.349687494397486,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769449920000,
+    "exit_ts": 1769451720000,
+    "return_bps": 19.538603751582237,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769451840000,
+    "exit_ts": 1769455620000,
+    "return_bps": -213.91005726550017,
+    "exit_reason": "reversion",
+    "holding_bars": 63
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769524200000,
+    "exit_ts": 1769527440000,
+    "return_bps": -125.94354926307334,
+    "exit_reason": "reversion",
+    "holding_bars": 54
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769528940000,
+    "exit_ts": 1769531220000,
+    "return_bps": -31.54482512497988,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769533500000,
+    "exit_ts": 1769538540000,
+    "return_bps": -34.70587203487384,
+    "exit_reason": "reversion",
+    "holding_bars": 84
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769610600000,
+    "exit_ts": 1769612820000,
+    "return_bps": 14.42590595083961,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769613060000,
+    "exit_ts": 1769615280000,
+    "return_bps": -7.482854325933287,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769616000000,
+    "exit_ts": 1769617860000,
+    "return_bps": 42.117613321820514,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769620620000,
+    "exit_ts": 1769622480000,
+    "return_bps": 8.797592081553152,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769623080000,
+    "exit_ts": 1769625000000,
+    "return_bps": -92.46421729259778,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769697000000,
+    "exit_ts": 1769698800000,
+    "return_bps": -40.33664159652136,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769698860000,
+    "exit_ts": 1769701800000,
+    "return_bps": 93.51539949403416,
+    "exit_reason": "reversion",
+    "holding_bars": 49
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769703960000,
+    "exit_ts": 1769705760000,
+    "return_bps": -29.735062848184192,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769706300000,
+    "exit_ts": 1769708820000,
+    "return_bps": 13.228121012456544,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769709360000,
+    "exit_ts": 1769711160000,
+    "return_bps": 5.639462835404789,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769711460000,
+    "exit_ts": 1769713260000,
+    "return_bps": -19.945302322274884,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769783400000,
+    "exit_ts": 1769785200000,
+    "return_bps": 54.13434543493153,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769785260000,
+    "exit_ts": 1769787060000,
+    "return_bps": 27.54217627466268,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769788560000,
+    "exit_ts": 1769790420000,
+    "return_bps": -81.50585341502891,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769791200000,
+    "exit_ts": 1769793000000,
+    "return_bps": -62.54181415424381,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769794980000,
+    "exit_ts": 1769796780000,
+    "return_bps": 252.3246313437968,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1769796900000,
+    "exit_ts": 1769798820000,
+    "return_bps": 4.0835355347698545,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770042600000,
+    "exit_ts": 1770044400000,
+    "return_bps": 159.89796509095342,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770046200000,
+    "exit_ts": 1770048240000,
+    "return_bps": 38.42514963035763,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770049680000,
+    "exit_ts": 1770051600000,
+    "return_bps": 11.670042497597898,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770051960000,
+    "exit_ts": 1770053820000,
+    "return_bps": 15.289027347798847,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770054120000,
+    "exit_ts": 1770056040000,
+    "return_bps": 68.9236326335023,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770056460000,
+    "exit_ts": 1770058320000,
+    "return_bps": 133.83149733712554,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770129000000,
+    "exit_ts": 1770130800000,
+    "return_bps": 38.47816801767204,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770131400000,
+    "exit_ts": 1770133200000,
+    "return_bps": 3.1892973193408416,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770134460000,
+    "exit_ts": 1770139440000,
+    "return_bps": -165.63713791689506,
+    "exit_reason": "reversion",
+    "holding_bars": 83
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770140400000,
+    "exit_ts": 1770142380000,
+    "return_bps": 11.791476343011379,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770143460000,
+    "exit_ts": 1770146040000,
+    "return_bps": -46.512844440936426,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770215400000,
+    "exit_ts": 1770217380000,
+    "return_bps": 0.7879336601224853,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770218520000,
+    "exit_ts": 1770220380000,
+    "return_bps": 68.17820393660955,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770221520000,
+    "exit_ts": 1770223440000,
+    "return_bps": -34.64477890135488,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770224040000,
+    "exit_ts": 1770226860000,
+    "return_bps": -4.416971977594237,
+    "exit_reason": "reversion",
+    "holding_bars": 47
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770229020000,
+    "exit_ts": 1770231780000,
+    "return_bps": 44.70102010978573,
+    "exit_reason": "reversion",
+    "holding_bars": 46
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770301800000,
+    "exit_ts": 1770303720000,
+    "return_bps": 49.56034028198895,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770304080000,
+    "exit_ts": 1770306660000,
+    "return_bps": -86.90005933335053,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770310200000,
+    "exit_ts": 1770313200000,
+    "return_bps": -0.44225631482702177,
+    "exit_reason": "reversion",
+    "holding_bars": 50
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770315840000,
+    "exit_ts": 1770319020000,
+    "return_bps": 51.90077357546558,
+    "exit_reason": "reversion",
+    "holding_bars": 53
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770388200000,
+    "exit_ts": 1770390180000,
+    "return_bps": 36.565564571850544,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770390360000,
+    "exit_ts": 1770392460000,
+    "return_bps": 22.501578058490743,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770392700000,
+    "exit_ts": 1770395280000,
+    "return_bps": 55.75071420546648,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770399000000,
+    "exit_ts": 1770402540000,
+    "return_bps": 34.96146919840801,
+    "exit_reason": "reversion",
+    "holding_bars": 59
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770403980000,
+    "exit_ts": 1770407280000,
+    "return_bps": -6.631078386255461,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770647400000,
+    "exit_ts": 1770649380000,
+    "return_bps": 232.7199381301548,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770650100000,
+    "exit_ts": 1770652080000,
+    "return_bps": -30.230144853953576,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770652140000,
+    "exit_ts": 1770653940000,
+    "return_bps": 23.77036285881171,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770654720000,
+    "exit_ts": 1770656700000,
+    "return_bps": -8.696914392719666,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770658500000,
+    "exit_ts": 1770660780000,
+    "return_bps": 35.820950212631985,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770661200000,
+    "exit_ts": 1770663540000,
+    "return_bps": 29.23232582512658,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770733860000,
+    "exit_ts": 1770735660000,
+    "return_bps": -18.510041701290675,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770737760000,
+    "exit_ts": 1770739620000,
+    "return_bps": 51.20527472105644,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770740760000,
+    "exit_ts": 1770743640000,
+    "return_bps": 22.695056291526598,
+    "exit_reason": "reversion",
+    "holding_bars": 48
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770745080000,
+    "exit_ts": 1770747720000,
+    "return_bps": 24.298073965479247,
+    "exit_reason": "reversion",
+    "holding_bars": 44
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770747840000,
+    "exit_ts": 1770750240000,
+    "return_bps": -3.459126921725053,
+    "exit_reason": "reversion",
+    "holding_bars": 40
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770820200000,
+    "exit_ts": 1770822000000,
+    "return_bps": 162.10799261259126,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770822300000,
+    "exit_ts": 1770824220000,
+    "return_bps": -39.10679720287946,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770825120000,
+    "exit_ts": 1770826980000,
+    "return_bps": 0.8870016471837232,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770829380000,
+    "exit_ts": 1770831480000,
+    "return_bps": 46.38100636578448,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770831540000,
+    "exit_ts": 1770833880000,
+    "return_bps": 5.507509899819581,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770834240000,
+    "exit_ts": 1770836580000,
+    "return_bps": 5.818073937324552,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770906600000,
+    "exit_ts": 1770908400000,
+    "return_bps": 72.95331555770801,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770908820000,
+    "exit_ts": 1770911400000,
+    "return_bps": -2.1943201753741306,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770911940000,
+    "exit_ts": 1770912840000,
+    "return_bps": 99.59816498696037,
+    "exit_reason": "stop_loss",
+    "holding_bars": 15
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770912900000,
+    "exit_ts": 1770914700000,
+    "return_bps": 81.54257197397428,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770914880000,
+    "exit_ts": 1770916680000,
+    "return_bps": 32.97573547664041,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770918840000,
+    "exit_ts": 1770920640000,
+    "return_bps": 5.757760039445561,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770920700000,
+    "exit_ts": 1770922500000,
+    "return_bps": -36.8276760567163,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770993000000,
+    "exit_ts": 1770994800000,
+    "return_bps": 63.577509199221495,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1770998280000,
+    "exit_ts": 1771000200000,
+    "return_bps": -35.28686939873535,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771001940000,
+    "exit_ts": 1771003800000,
+    "return_bps": 19.475524763257138,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771006140000,
+    "exit_ts": 1771008420000,
+    "return_bps": 0.7710074524285737,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771008840000,
+    "exit_ts": 1771010940000,
+    "return_bps": 7.014424273250864,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771338600000,
+    "exit_ts": 1771340400000,
+    "return_bps": 269.42798390503106,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771342440000,
+    "exit_ts": 1771344300000,
+    "return_bps": -26.550528309252734,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771345440000,
+    "exit_ts": 1771347360000,
+    "return_bps": 7.884584490174596,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771350240000,
+    "exit_ts": 1771352220000,
+    "return_bps": 29.615277638100984,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771354260000,
+    "exit_ts": 1771356300000,
+    "return_bps": -2.1808007623095182,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771425240000,
+    "exit_ts": 1771427220000,
+    "return_bps": 14.121223313358946,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771428900000,
+    "exit_ts": 1771431060000,
+    "return_bps": 1.2532083221446797,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771431180000,
+    "exit_ts": 1771433220000,
+    "return_bps": -23.299721999255958,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771433280000,
+    "exit_ts": 1771435800000,
+    "return_bps": -10.324542717644295,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771436280000,
+    "exit_ts": 1771438920000,
+    "return_bps": 4.388480390675564,
+    "exit_reason": "reversion",
+    "holding_bars": 44
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771439100000,
+    "exit_ts": 1771441200000,
+    "return_bps": -16.153694164641383,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771511400000,
+    "exit_ts": 1771513200000,
+    "return_bps": 3.8255249899724966,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771514100000,
+    "exit_ts": 1771516020000,
+    "return_bps": -15.937246729016515,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771517280000,
+    "exit_ts": 1771520160000,
+    "return_bps": -8.480744005720801,
+    "exit_reason": "reversion",
+    "holding_bars": 48
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771521300000,
+    "exit_ts": 1771523640000,
+    "return_bps": -11.387244025702218,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771524600000,
+    "exit_ts": 1771527120000,
+    "return_bps": -15.713941675684403,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771597800000,
+    "exit_ts": 1771600560000,
+    "return_bps": -26.12615523807876,
+    "exit_reason": "reversion",
+    "holding_bars": 46
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771603440000,
+    "exit_ts": 1771605780000,
+    "return_bps": 18.536096357980085,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771608300000,
+    "exit_ts": 1771611000000,
+    "return_bps": -33.13435760631587,
+    "exit_reason": "reversion",
+    "holding_bars": 45
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771611720000,
+    "exit_ts": 1771613580000,
+    "return_bps": 14.098764410353702,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771857000000,
+    "exit_ts": 1771859400000,
+    "return_bps": 7.170889442357186,
+    "exit_reason": "reversion",
+    "holding_bars": 40
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771859760000,
+    "exit_ts": 1771861620000,
+    "return_bps": 7.258878168463109,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771861740000,
+    "exit_ts": 1771864260000,
+    "return_bps": -21.032099951311103,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771865520000,
+    "exit_ts": 1771867380000,
+    "return_bps": -37.30225893570504,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771871160000,
+    "exit_ts": 1771873740000,
+    "return_bps": -49.79633984487359,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771943400000,
+    "exit_ts": 1771945500000,
+    "return_bps": 38.708069201835066,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771947060000,
+    "exit_ts": 1771948920000,
+    "return_bps": -5.1838351545819945,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771949160000,
+    "exit_ts": 1771951140000,
+    "return_bps": 3.8760637090977994,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771951200000,
+    "exit_ts": 1771953900000,
+    "return_bps": -9.365212123561953,
+    "exit_reason": "reversion",
+    "holding_bars": 45
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1771955940000,
+    "exit_ts": 1771958820000,
+    "return_bps": -35.572175956205186,
+    "exit_reason": "reversion",
+    "holding_bars": 48
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772029800000,
+    "exit_ts": 1772031600000,
+    "return_bps": -17.151778007414514,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772031840000,
+    "exit_ts": 1772033700000,
+    "return_bps": -25.982235806424747,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772034480000,
+    "exit_ts": 1772037540000,
+    "return_bps": 0.6332427091542243,
+    "exit_reason": "reversion",
+    "holding_bars": 51
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772038380000,
+    "exit_ts": 1772040540000,
+    "return_bps": -14.364142821291209,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772041320000,
+    "exit_ts": 1772043840000,
+    "return_bps": -26.37815278961082,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772044500000,
+    "exit_ts": 1772046720000,
+    "return_bps": -0.19665345587367256,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772116200000,
+    "exit_ts": 1772118060000,
+    "return_bps": 27.900096431226054,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772119620000,
+    "exit_ts": 1772121420000,
+    "return_bps": -31.60443971139857,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772121540000,
+    "exit_ts": 1772123400000,
+    "return_bps": 3.71109964128779,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772127120000,
+    "exit_ts": 1772129100000,
+    "return_bps": -0.7593398603770005,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772129700000,
+    "exit_ts": 1772131680000,
+    "return_bps": 30.39583449676016,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772202600000,
+    "exit_ts": 1772204880000,
+    "return_bps": -38.43274326102565,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772205420000,
+    "exit_ts": 1772208060000,
+    "return_bps": -50.89290697067889,
+    "exit_reason": "reversion",
+    "holding_bars": 44
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772208780000,
+    "exit_ts": 1772210580000,
+    "return_bps": -10.69061326139802,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772212800000,
+    "exit_ts": 1772214660000,
+    "return_bps": -18.465564417764476,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772216400000,
+    "exit_ts": 1772216640000,
+    "return_bps": -52.49888639452005,
+    "exit_reason": "stop_loss",
+    "holding_bars": 4
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772216700000,
+    "exit_ts": 1772218920000,
+    "return_bps": 20.96624805060511,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772461800000,
+    "exit_ts": 1772463600000,
+    "return_bps": 6.225181103969284,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772463960000,
+    "exit_ts": 1772465760000,
+    "return_bps": -25.838872296641206,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772466300000,
+    "exit_ts": 1772468340000,
+    "return_bps": -117.81078675367068,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772468640000,
+    "exit_ts": 1772470680000,
+    "return_bps": -33.310613399844286,
+    "exit_reason": "reversion",
+    "holding_bars": 34
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772470920000,
+    "exit_ts": 1772472840000,
+    "return_bps": -15.689861787938439,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772474460000,
+    "exit_ts": 1772476860000,
+    "return_bps": -30.46221874102954,
+    "exit_reason": "reversion",
+    "holding_bars": 40
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772548200000,
+    "exit_ts": 1772550000000,
+    "return_bps": 465.98047215243446,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772550780000,
+    "exit_ts": 1772552580000,
+    "return_bps": -48.025688604875,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772553840000,
+    "exit_ts": 1772555700000,
+    "return_bps": 14.601730503228747,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772555760000,
+    "exit_ts": 1772557680000,
+    "return_bps": -37.4329684939101,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772558700000,
+    "exit_ts": 1772560680000,
+    "return_bps": 12.327515624069104,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772560800000,
+    "exit_ts": 1772565180000,
+    "return_bps": -3.7814359080121687,
+    "exit_reason": "reversion",
+    "holding_bars": 73
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772634600000,
+    "exit_ts": 1772636400000,
+    "return_bps": -46.80702247715506,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772636760000,
+    "exit_ts": 1772638740000,
+    "return_bps": -25.741873676338415,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772640000000,
+    "exit_ts": 1772642160000,
+    "return_bps": 32.33913132415424,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772644980000,
+    "exit_ts": 1772647500000,
+    "return_bps": -2.2302268286465043,
+    "exit_reason": "reversion",
+    "holding_bars": 42
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772647800000,
+    "exit_ts": 1772649780000,
+    "return_bps": 7.1378884720820395,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772721300000,
+    "exit_ts": 1772723280000,
+    "return_bps": 13.767285831008572,
+    "exit_reason": "stop_loss",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772723340000,
+    "exit_ts": 1772725140000,
+    "return_bps": 25.246255698468367,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772727000000,
+    "exit_ts": 1772728920000,
+    "return_bps": -6.198900010975558,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772731920000,
+    "exit_ts": 1772733840000,
+    "return_bps": -5.171059308175604,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772734800000,
+    "exit_ts": 1772736780000,
+    "return_bps": 27.555719629133762,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772807760000,
+    "exit_ts": 1772809620000,
+    "return_bps": -84.80281485275746,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772809980000,
+    "exit_ts": 1772811900000,
+    "return_bps": 19.62757103733934,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772813460000,
+    "exit_ts": 1772815800000,
+    "return_bps": 12.205814799838798,
+    "exit_reason": "reversion",
+    "holding_bars": 39
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772816040000,
+    "exit_ts": 1772818620000,
+    "return_bps": 3.3644203356555735,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1772819580000,
+    "exit_ts": 1772821980000,
+    "return_bps": -12.261920026833636,
+    "exit_reason": "reversion",
+    "holding_bars": 40
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773153000000,
+    "exit_ts": 1773154860000,
+    "return_bps": -23.14969150658353,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773155580000,
+    "exit_ts": 1773158040000,
+    "return_bps": -6.66908498844699,
+    "exit_reason": "reversion",
+    "holding_bars": 41
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773158880000,
+    "exit_ts": 1773160980000,
+    "return_bps": 17.2113583180776,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773162300000,
+    "exit_ts": 1773165600000,
+    "return_bps": -21.00836783090439,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773166440000,
+    "exit_ts": 1773166620000,
+    "return_bps": -6.948544639261079,
+    "exit_reason": "stop_loss",
+    "holding_bars": 3
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773166680000,
+    "exit_ts": 1773168660000,
+    "return_bps": -5.28009681001714,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773239520000,
+    "exit_ts": 1773241740000,
+    "return_bps": -27.163952349624964,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773242880000,
+    "exit_ts": 1773245040000,
+    "return_bps": 30.592887767042704,
+    "exit_reason": "reversion",
+    "holding_bars": 36
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773245400000,
+    "exit_ts": 1773247980000,
+    "return_bps": 33.43449972225523,
+    "exit_reason": "reversion",
+    "holding_bars": 43
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773249600000,
+    "exit_ts": 1773252420000,
+    "return_bps": -18.216942351670472,
+    "exit_reason": "reversion",
+    "holding_bars": 47
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773325800000,
+    "exit_ts": 1773328020000,
+    "return_bps": 3.859847706248514,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773328320000,
+    "exit_ts": 1773330300000,
+    "return_bps": -33.68352313031092,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773332460000,
+    "exit_ts": 1773335760000,
+    "return_bps": 9.236355691294047,
+    "exit_reason": "reversion",
+    "holding_bars": 55
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773336000000,
+    "exit_ts": 1773338940000,
+    "return_bps": -12.915106187324245,
+    "exit_reason": "reversion",
+    "holding_bars": 49
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773340380000,
+    "exit_ts": 1773343320000,
+    "return_bps": -15.139251783663301,
+    "exit_reason": "reversion",
+    "holding_bars": 49
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773412200000,
+    "exit_ts": 1773414120000,
+    "return_bps": -57.9941790877928,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773416760000,
+    "exit_ts": 1773418620000,
+    "return_bps": 13.703035088049937,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773421500000,
+    "exit_ts": 1773423600000,
+    "return_bps": -34.7052097939813,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773424440000,
+    "exit_ts": 1773426720000,
+    "return_bps": -21.236826158164313,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773757800000,
+    "exit_ts": 1773759720000,
+    "return_bps": 9.540623399717536,
+    "exit_reason": "reversion",
+    "holding_bars": 32
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773759960000,
+    "exit_ts": 1773762240000,
+    "return_bps": -61.50092544483922,
+    "exit_reason": "reversion",
+    "holding_bars": 38
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773764460000,
+    "exit_ts": 1773766440000,
+    "return_bps": 3.8577406612998697,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773767040000,
+    "exit_ts": 1773770040000,
+    "return_bps": -7.896533143803667,
+    "exit_reason": "reversion",
+    "holding_bars": 50
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773770940000,
+    "exit_ts": 1773775620000,
+    "return_bps": -31.44257633749073,
+    "exit_reason": "reversion",
+    "holding_bars": 78
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773844200000,
+    "exit_ts": 1773846060000,
+    "return_bps": -30.116301500187387,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773847980000,
+    "exit_ts": 1773849840000,
+    "return_bps": 14.709176679658164,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773851700000,
+    "exit_ts": 1773854160000,
+    "return_bps": -6.984818484182471,
+    "exit_reason": "reversion",
+    "holding_bars": 41
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773855720000,
+    "exit_ts": 1773857940000,
+    "return_bps": -20.53169348147926,
+    "exit_reason": "reversion",
+    "holding_bars": 37
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773930600000,
+    "exit_ts": 1773932700000,
+    "return_bps": -85.62857211099362,
+    "exit_reason": "reversion",
+    "holding_bars": 35
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773934380000,
+    "exit_ts": 1773936180000,
+    "return_bps": -34.56219240374796,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773936300000,
+    "exit_ts": 1773938100000,
+    "return_bps": 3.8186304438671144,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773940200000,
+    "exit_ts": 1773942000000,
+    "return_bps": -54.256060179600965,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1773944460000,
+    "exit_ts": 1773946260000,
+    "return_bps": 7.364861054286539,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774017900000,
+    "exit_ts": 1774020600000,
+    "return_bps": -34.77833273869905,
+    "exit_reason": "reversion",
+    "holding_bars": 45
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774022640000,
+    "exit_ts": 1774024500000,
+    "return_bps": -23.26792432944059,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774026420000,
+    "exit_ts": 1774028400000,
+    "return_bps": -21.190653504556558,
+    "exit_reason": "reversion",
+    "holding_bars": 33
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774030020000,
+    "exit_ts": 1774031820000,
+    "return_bps": -17.457135865302142,
+    "exit_reason": "reversion",
+    "holding_bars": 30
+  },
+  {
+    "id": "GLD/SLV",
+    "entry_ts": 1774032060000,
+    "exit_ts": 1774033920000,
+    "return_bps": 17.896310455670818,
+    "exit_reason": "reversion",
+    "holding_bars": 31
+  }
+]
