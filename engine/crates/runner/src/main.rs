@@ -63,17 +63,21 @@ fn main() {
         .with_writer(tee)
         .init();
 
+    info!("========== OPENQUANT RUNNER STARTUP ==========");
     info!(
         config = %cli.config.display(),
         data_dir = %cli.data_dir.display(),
         output_dir = %output_dir.display(),
         warmup_bars = cli.warmup_bars,
-        "openquant-runner starting"
+        "CLI args"
     );
 
     // ── Load config ──
     let cfg_file = match ConfigFile::load(&cli.config) {
-        Ok(c) => c,
+        Ok(c) => {
+            info!("config loaded successfully");
+            c
+        }
         Err(e) => {
             error!("failed to load config: {e}");
             std::process::exit(1);
@@ -82,11 +86,22 @@ fn main() {
 
     let pairs_trading_config = cfg_file.pairs_trading.clone();
     let data_config = cfg_file.data.clone();
+
+    info!(
+        buy_z = format!("{:.2}", cfg_file.signal.buy_z_threshold).as_str(),
+        sell_z = format!("{:.2}", cfg_file.signal.sell_z_threshold).as_str(),
+        max_position = format!("{:.0}", cfg_file.risk.max_position_notional).as_str(),
+        max_daily_loss = format!("{:.0}", cfg_file.risk.max_daily_loss).as_str(),
+        combiner_enabled = cfg_file.combiner.enabled,
+        "single-symbol engine config"
+    );
+
     let engine_config = cfg_file.into_engine_config();
 
     // ── Initialize engines ──
     let mut engine = Engine::new(engine_config);
     engine.set_warmup_mode(true);
+    info!("single-symbol engine initialized (warmup mode)");
 
     let active_pairs_path = cli.data_dir.join("active_pairs.json");
     let history_path = cli.data_dir.join("pair_trading_history.json");
@@ -104,7 +119,11 @@ fn main() {
         PairsEngine::new(vec![], pairs_trading_config)
     };
 
-    info!(pairs = pairs_engine.pair_count(), "engines initialized");
+    info!(
+        pairs = pairs_engine.pair_count(),
+        "engines initialized"
+    );
+    info!("========== STARTUP COMPLETE ==========");
 
     // ── Load bars ──
     info!(
