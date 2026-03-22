@@ -83,8 +83,10 @@ pub fn load_day(path: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, Strin
         );
     }
 
-    // Sort by timestamp for correct interleaving
-    bars.sort_by_key(|b| b.timestamp);
+    // Sort by (timestamp, symbol) for deterministic interleaving.
+    // Without symbol tiebreaker, HashMap iteration order causes nondeterministic
+    // bar ordering at the same timestamp, which changes P&L results between runs.
+    bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.symbol.cmp(&b.symbol)));
 
     info!(
         path = %path.display(),
@@ -127,7 +129,7 @@ pub fn load_days(dir: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, Strin
     }
 
     // Final sort across all days
-    all_bars.sort_by_key(|b| b.timestamp);
+    all_bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.symbol.cmp(&b.symbol)));
 
     info!(
         files = files.len(),
