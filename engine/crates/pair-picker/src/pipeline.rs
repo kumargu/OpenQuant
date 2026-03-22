@@ -352,6 +352,83 @@ pub fn run_pipeline_from_candidates(
     Ok(results)
 }
 
+/// Minimum bars for beta refresh (much less than full validation).
+const MIN_REFRESH_BARS: usize = 30;
+
+/// Lightweight beta/alpha refresh — only runs OLS on existing pairs.
+///
+/// Unlike full validation (which requires 200+ bars, ADF, half-life, etc.),
+/// this only needs ~30 bars to compute a reliable hedge ratio. Useful when
+/// you have insufficient data for full validation but want to keep
+/// alpha/beta current.
+///
+/// Reads existing `active_pairs.json`, re-estimates OLS on available price
+/// data, and writes updated file. Pairs that don't have enough data are
+/// left unchanged.
+pub fn refresh_beta(
+    active_pairs_path: &Path,
+    provider: &dyn PriceProvider,
+) -> Result<usize, PipelineError> {
+    let contents = fs::read_to_string(active_pairs_path).map_err(PipelineError::Io)?;
+    let mut file: crate::types::ActivePairsFile =
+        serde_json::from_str(&contents).map_err(PipelineError::Json)?;
+
+    let mut refreshed = 0;
+
+    for pair in &mut file.pairs {
+        let prices_a = match provider.get_prices(&pair.leg_a) {
+            Some(p) if p.len() >= MIN_REFRESH_BARS => p,
+            _ => continue,
+        };
+        let prices_b = match provider.get_prices(&pair.leg_b) {
+            Some(p) if p.len() >= MIN_REFRESH_BARS => p,
+            _ => continue,
+        };
+
+        let n = prices_a.len().min(prices_b.len());
+        let pa = &prices_a[prices_a.len() - n..];
+        let pb = &prices_b[prices_b.len() - n..];
+
+        // Guard non-positive prices
+        if pa.iter().any(|&p| !p.is_finite() || p <= 0.0)
+            || pb.iter().any(|&p| !p.is_finite() || p <= 0.0)
+        {
+            continue;
+        }
+
+        let log_a: Vec<f64> = pa.iter().map(|p| p.ln()).collect();
+        let log_b: Vec<f64> = pb.iter().map(|p| p.ln()).collect();
+
+        if let Some(ols) = ols_simple(&log_b, &log_a) {
+            let old_beta = pair.beta;
+            let old_alpha = pair.alpha;
+            pair.alpha = ols.alpha;
+            pair.beta = ols.beta;
+            refreshed += 1;
+
+            info!(
+                pair = format!("{}/{}", pair.leg_a, pair.leg_b).as_str(),
+                old_beta = format!("{old_beta:.4}").as_str(),
+                new_beta = format!("{:.4}", ols.beta).as_str(),
+                old_alpha = format!("{old_alpha:.4}").as_str(),
+                new_alpha = format!("{:.4}", ols.alpha).as_str(),
+                r_squared = format!("{:.3}", ols.r_squared).as_str(),
+                bars = n,
+                "Beta refreshed via OLS"
+            );
+        }
+    }
+
+    // Update timestamp and write back
+    file.generated_at = Utc::now();
+    let json = serde_json::to_string_pretty(&file).map_err(PipelineError::Json)?;
+    fs::write(active_pairs_path, json).map_err(PipelineError::Io)?;
+
+    info!(refreshed, total = file.pairs.len(), "Beta refresh complete");
+
+    Ok(refreshed)
+}
+
 #[derive(Debug)]
 pub enum PipelineError {
     Io(std::io::Error),
