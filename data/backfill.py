@@ -149,10 +149,31 @@ def backfill(date_str: str, symbols: list[str], feed: str = "iex") -> Path:
         warnings = validate_bars(sym, bars, date_str)
         all_warnings.extend(warnings)
 
-    # Save
+    # Append to merged experiment_bars.json
+    merged_path = DATA_DIR / "experiment_bars.json"
+    if merged_path.exists():
+        with open(merged_path) as f:
+            merged = json.load(f)
+        # Check if this date already exists
+        existing_dates = {d["date"] for d in merged}
+        if safe_date not in existing_dates:
+            merged.append({"date": safe_date, "symbols": data})
+            merged.sort(key=lambda d: d["date"])
+            with open(merged_path, "w") as f:
+                json.dump(merged, f)
+            print(f"\nAppended to {merged_path} ({len(merged)} days)")
+        else:
+            print(f"\nDate {safe_date} already in {merged_path}, skipped append")
+    else:
+        # Create new merged file
+        with open(merged_path, "w") as f:
+            json.dump([{"date": safe_date, "symbols": data}], f)
+        print(f"\nCreated {merged_path}")
+
+    # Also save individual file (backup)
     with open(out_path, "w") as f:
         json.dump(data, f)
-    print(f"\nSaved to {out_path}")
+    print(f"Saved to {out_path}")
 
     # Summary
     print(f"\n{'='*50}")

@@ -98,9 +98,23 @@ pub fn load_day(path: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, Strin
     Ok(bars)
 }
 
-/// Load bars from all matching files in a directory.
-/// Glob pattern: experiment_bars_*.json (excluding 5min/15min variants).
+/// A single day's entry in the merged experiment_bars.json.
+#[derive(Deserialize)]
+struct DayEntry {
+    date: String,
+    symbols: HashMap<String, Vec<RawBar>>,
+}
+
+/// Load bars from experiment_bars.json (merged single file, one entry per day ascending).
+///
+/// Falls back to per-day files (experiment_bars_YYYYMMDD.json) if merged file not found.
 pub fn load_days(dir: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, String> {
+    let merged_path = dir.join("experiment_bars.json");
+    if merged_path.exists() {
+        return load_merged(&merged_path, data_config);
+    }
+
+    // Fallback: load individual per-day files
     let mut all_bars = Vec::new();
     let mut files: Vec<_> = fs::read_dir(dir)
         .map_err(|e| format!("Failed to read dir {}: {e}", dir.display()))?
@@ -135,6 +149,52 @@ pub fn load_days(dir: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, Strin
         files = files.len(),
         total_bars = all_bars.len(),
         "Loaded all bar files"
+    );
+
+    Ok(all_bars)
+}
+
+/// Load from merged experiment_bars.json (array of day entries, ascending by date).
+fn load_merged(path: &Path, data_config: &DataConfig) -> Result<Vec<Bar>, String> {
+    let contents =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+
+    let days: Vec<DayEntry> = serde_json::from_str(&contents)
+        .map_err(|e| format!("Failed to parse {}: {e}", path.display()))?;
+
+    let mut all_bars = Vec::new();
+    let mut filtered_count = 0usize;
+
+    for day in &days {
+        for (symbol, raw_bars) in &day.symbols {
+            for rb in raw_bars {
+                if !rb.open.is_finite() || !rb.close.is_finite() || rb.close <= 0.0 {
+                    continue;
+                }
+                if !is_regular_hours(rb.timestamp, data_config) {
+                    filtered_count += 1;
+                    continue;
+                }
+                all_bars.push(Bar {
+                    symbol: symbol.clone(),
+                    timestamp: rb.timestamp,
+                    open: rb.open,
+                    high: rb.high,
+                    low: rb.low,
+                    close: rb.close,
+                    volume: rb.volume,
+                });
+            }
+        }
+    }
+
+    all_bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.symbol.cmp(&b.symbol)));
+
+    info!(
+        days = days.len(),
+        total_bars = all_bars.len(),
+        filtered = filtered_count,
+        "Loaded merged bar file"
     );
 
     Ok(all_bars)

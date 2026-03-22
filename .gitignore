@@ -22,7 +22,7 @@ data/journal/*.db-shm
 data/journal/engine.log
 
 # Bar data (too large for git — backfilled locally from Alpaca API)
-data/experiment_bars_*.json
+data/experiment_bars*.json
 data/active_pairs_v*.json
 
 # Runner output (regenerated on each run)
