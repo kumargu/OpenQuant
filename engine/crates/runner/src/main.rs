@@ -1,11 +1,63 @@
 //! openquant-runner — standalone trading engine binary.
 //!
-//! Reads bars from JSON files, runs both Engine (single-symbol) and
-//! PairsEngine (pairs), writes order intents and trade results to JSON.
+//! Processes historical 1-min bar data through the trading engine and produces
+//! deterministic P&L results. Functions as both a backtester and a walk-forward
+//! validator — bars are processed sequentially with rolling state, exactly as
+//! they would be in live trading, just faster.
 //!
-//! No Python bridge needed. Communication is filesystem-based:
-//! - Input:  data/experiment_bars_*.json, openquant.toml, data/active_pairs.json
-//! - Output: data/order_intents.json, data/trade_results.json
+//! # How it works
+//!
+//! 1. **Load config** — reads `config/*.toml` for trading mode (pairs/single/both),
+//!    strategy parameters, market hours, timezone.
+//! 2. **Load pairs** — reads `data/active_pairs.json` for pair identity (legs, beta).
+//!    Trading params (entry_z, exit_z, etc.) come from TOML, not the pair JSON.
+//! 3. **Load bars** — reads `data/experiment_bars_*.json`, filters pre-market/after-hours,
+//!    sorts by `(timestamp, symbol)` for deterministic ordering.
+//! 4. **Process bars** — feeds each bar to the engine(s) sequentially. State carries
+//!    across days (spread rolling stats, positions, warmup). This is walk-forward
+//!    by design — no look-ahead bias, no train/test split needed.
+//! 5. **Track P&L** — matches entry/exit pair intents, applies configurable cost
+//!    (3 bps/leg = 12 bps round-trip), writes `data/trade_results.json`.
+//! 6. **Log everything** — appends to `data/journal/engine.log` with run IDs
+//!    (`git_commit-timestamp`) for audit trail. Every ENTRY, EXIT, P&L, stop loss,
+//!    and config change is logged with structured tracing fields.
+//!
+//! # Walk-forward validation
+//!
+//! The runner naturally performs walk-forward testing because:
+//! - Bars are processed in chronological order (no shuffling)
+//! - Spread statistics warm up from scratch on first run, carry across days
+//! - No parameters are optimized during the run (all from TOML)
+//! - Day boundaries trigger daily resets (risk state, VWAP)
+//! - Results can be sliced into time windows post-hoc for stability analysis
+//!
+//! # Determinism
+//!
+//! Identical config + data = identical results every time. Achieved by:
+//! - Sorting bars by `(timestamp, symbol)` (not HashMap iteration order)
+//! - No randomness in the engine (no Monte Carlo, no random seeds)
+//! - P&L tracker uses deterministic entry/exit matching
+//!
+//! # Usage
+//!
+//! ```bash
+//! ./run.sh pairs              # build + run pairs trading
+//! ./run.sh single             # build + run single-symbol
+//! ./run.sh test               # build + run with test config
+//!
+//! # Or directly:
+//! cargo run -p openquant-runner --release -- \
+//!   --config config/pairs.toml \
+//!   --data-dir data \
+//!   --output-dir data \
+//!   --warmup-bars 0
+//! ```
+//!
+//! # Input/Output
+//!
+//! - Input:  `config/*.toml`, `data/active_pairs.json`, `data/experiment_bars_*.json`
+//! - Output: `data/order_intents.json`, `data/trade_results.json`
+//! - Logs:   `data/journal/engine.log` (append mode, run IDs for correlation)
 
 mod bars;
 mod intents;
