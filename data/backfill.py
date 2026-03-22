@@ -23,7 +23,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DATA_DIR = Path(__file__).parent
-SYMBOLS = ["AAPL", "NVDA", "TSLA", "MU", "GOOGL", "CVX", "GLD", "XOM", "AMZN", "JPM", "LLY", "INTC"]
+SYMBOLS = [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "ORCL", "TSLA",
+    "AMD", "AVGO", "INTC", "QCOM", "TXN", "MU",
+    "JPM", "BAC", "GS", "MS", "C",
+    "XOM", "CVX", "COP", "SLB",
+    "WMT", "COST", "HD", "MCD", "NKE",
+    "JNJ", "LLY", "PFE", "ABBV", "MRK", "UNH",
+    "BA", "CAT", "GE", "RTX",
+    "GLD", "SLV", "XLE", "XLF",
+    "COIN", "PLTR", "SOFI",
+]
 
 ET = ZoneInfo("America/New_York")
 MARKET_OPEN_HOUR, MARKET_OPEN_MIN = 9, 30
