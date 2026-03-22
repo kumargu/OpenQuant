@@ -31,8 +31,12 @@ if $RUN; then
   mkdir -p "$DATA/journal"
   RUST_LOG=warn "$ENGINE/target/release/openquant-runner" backtest \
     --config "$ROOT/config/pairs.toml" \
-    --data-dir "$DATA" --output-dir "$DATA" --warmup-bars 0 2>/dev/null
+    --data-dir "$DATA" --trading-dir "$ROOT/trading" --output-dir "$DATA" --warmup-bars 0 2>/dev/null
 fi
+
+# Save results to history (indexed by commit)
+echo -e "${GREEN}Saving to backtest history...${NC}"
+python3 "$ROOT/save_results.py"
 
 echo -e "${GREEN}Generating dashboard data...${NC}"
 python3 << 'PYEOF'

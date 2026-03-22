@@ -1,0 +1,21 @@
+[
+  {
+    "run_id": "b7aea2c-20260322-145815",
+    "commit": "b7aea2c",
+    "timestamp": "2026-03-22T14:58:15.901177Z",
+    "trading_days": 241,
+    "total_trades": 1494,
+    "total_pnl_bps": -5133.3,
+    "dollar_pnl": -10266.62,
+    "dollar_per_day": -42.6,
+    "win_rate": 39.0,
+    "pairs": {
+      "AMD/INTC": {
+        "trades": 1494,
+        "total_bps": -5133.3,
+        "dollar_pnl": -10266.62,
+        "win_rate": 39.0
+      }
+    }
+  }
+]

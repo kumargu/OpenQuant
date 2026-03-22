@@ -196,7 +196,7 @@ fn main() {
             );
 
             // ── Step 5: Thompson sampling ranking ──
-            let mut thompson = ThompsonState::load(&data_dir);
+            let mut thompson = ThompsonState::load(&trading_dir);
 
             // Load trade history for feedback
             let history_path = data_dir.join("pair_trading_history.json");
@@ -255,7 +255,7 @@ fn main() {
             }
 
             // Save Thompson state
-            if let Err(e) = thompson.save(&data_dir) {
+            if let Err(e) = thompson.save(&trading_dir) {
                 error!("Failed to save Thompson state: {e}");
             }
 
