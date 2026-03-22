@@ -48,6 +48,33 @@ fn main() {
         }
     }
 
+    // --refresh-beta: lightweight OLS refresh without full validation
+    if args.iter().any(|a| a == "--refresh-beta") {
+        let active_path = data_dir.join("active_pairs.json");
+        let price_file = data_dir.join("pair_picker_prices.json");
+        if !active_path.exists() {
+            error!("No active_pairs.json to refresh");
+            std::process::exit(1);
+        }
+        let provider = if price_file.exists() {
+            match load_prices_from_file(&price_file) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("Failed to load prices: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            error!("No price data for beta refresh");
+            std::process::exit(1);
+        };
+        match pipeline::refresh_beta(&active_path, &provider) {
+            Ok(n) => info!("Refreshed {n} pairs"),
+            Err(e) => error!("Beta refresh failed: {e}"),
+        }
+        return;
+    }
+
     // --force: skip lock file check
     let force = args.iter().any(|a| a == "--force");
 
