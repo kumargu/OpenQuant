@@ -1,53 +1,107 @@
 # OpenQuant
 
-A research-first quantitative trading system. Rust core engine, Python orchestration, Claude-assisted evaluation.
+A research-first quantitative trading system. Rust core engine, Python sidecar, pairs trading focus.
+
+## Quick Start
+
+```bash
+# Build and run pairs trading
+./run.sh pairs
+
+# Check results
+./run.sh summary
+
+# View status
+./run.sh status
+
+# Tail logs
+./run.sh logs
+```
+
+## Architecture
+
+```
+openquant.toml / config/*.toml     ← trading parameters (no recompile needed)
+data/active_pairs.json             ← which pairs to trade (from pair-picker)
+data/experiment_bars_*.json        ← 1-min bar data (45 symbols, 48 days)
+
+engine/crates/
+  core/       ← Rust: spread computation, z-scores, entry/exit logic, risk
+  runner/     ← Rust: standalone binary, bar loading, P&L tracking, logging
+  pair-picker/← Rust: statistical pair validation (ADF, OLS, beta stability)
+  pybridge/   ← PyO3 bridge (optional, for Python integration)
+
+paper_trading/  ← Python sidecar: Alpaca API, bar fetching, order submission
+config/         ← TOML configs per mode (pairs, single, test)
+data/journal/   ← engine.log (append mode, run IDs for audit)
+```
+
+## Trading Modes
+
+| Mode | Config | Description |
+|------|--------|-------------|
+| `pairs` | `config/pairs.toml` | Pairs trading only (GLD/SLV, GS/MS, AMD/INTC) |
+| `single` | `config/single.toml` | Single-symbol mean-reversion + momentum |
+| `test` | `config/test.toml` | Integration testing (pairs, no stale bar check) |
+
+```bash
+./run.sh pairs          # default
+./run.sh single
+./run.sh test
+```
+
+## Key Design Decisions
+
+- **Rust-first**: All math, statistics, and trading logic in Rust. Python only for external APIs (Alpaca)
+- **Deterministic**: Bars sorted by `(timestamp, symbol)`. Same config = same results every time
+- **No overnight risk**: `last_entry_hour=14` blocks entries after 14:00 ET
+- **Persistent logs**: `data/journal/engine.log` appends across runs with `run_id=git_commit-timestamp`
+- **Config separation**: Pair identity (from JSON) vs trading params (from TOML)
+- **Clean builds**: `./run.sh` always rebuilds from clean to avoid stale binaries
 
 ## Core Tenets
 
 ### Discipline
-
-This is a research system first and a trading system second. No strategy goes live without passing through observation, hypothesis, backtest, out-of-sample validation, and paper trading — in that order. No-trade is always a valid outcome. Risk limits override signal strength, every override is logged, and the system is built to be comfortable doing nothing when the evidence is not there.
+Research system first, trading system second. No strategy goes live without: observation → hypothesis → backtest → OOS validation → paper trade.
 
 ### Mathematics
-
-Every decision in the system must reduce to measurable quantities — values, windows, thresholds, scores, and constraints. Features must have explicit formulas, defined units, and documented warm-up rules. All evaluation is net of costs, never gross. Movement is always judged relative to context: a 0.5% move means nothing without volatility normalization. Complexity is earned only after simpler math has shown signal.
+Every decision reduces to measurable quantities. All evaluation is net of costs. Movement is judged relative to volatility. Complexity is earned after simpler math shows signal.
 
 ### Truth
 - Backtests are filters, not proof
 - Losses are logged clearly, never hidden
-- Weak evidence is never rebranded as edge
-- The system exists to discover truth, not manufacture confidence
+- The system discovers truth, not manufactures confidence
 
 ### Survival
 - Risk management is the main strategy
-- Protect small capital like large capital
 - A dead strategy cannot improve
-- Sloppy small-scale behavior becomes catastrophic large-scale behavior
 
-### Process
-- Strategies earn promotion: observe → hypothesize → backtest → validate OOS → paper trade → tiny live → scale
-- Every parameter change is a new version
-- Repeatability matters more than brilliance
-- Focus on decision quality, not prediction fantasy
+## Build Commands
 
-## Architecture
+```bash
+./run.sh build          # clean build
+./run.sh pairs          # build + run pairs
+./run.sh clean          # clean artifacts + logs
+./run.sh summary        # last run P&L
+./run.sh status         # git, pairs, configs overview
+./run.sh logs           # tail engine.log
 
-- **Rust** — deterministic engine: features, signals, risk gates, backtesting, portfolio accounting, execution
-- **Python** — orchestration: data ingestion, monitoring, alerts, dashboards, scheduling
-- **Claude skills** — structured reasoning: hypothesis critique, evaluation, journaling, self-learning
+# Manual
+cd engine && cargo test --workspace
+cd engine && cargo bench -p pair-picker
+```
 
-## Skills
+## Logging
 
-System specs live in `.claude/skills/`:
+Every run appends to `data/journal/engine.log` with:
+- **Run ID**: `git_commit-timestamp` (maps logs to code)
+- **Startup**: full config dump, pairs loaded, market hours
+- **Every trade**: ENTRY/EXIT with timestamp, prices, z-score, bars held
+- **P&L**: gross/net bps, dollar amount, exit reason
+- **Summary**: total trades, win rate, $/day
 
-| Skill | Purpose |
-|---|---|
-| `quant-core-principles` | Non-negotiable principles and readiness ladder |
-| `quant-mathematical-foundations` | Feature design, scoring, risk math, validation math |
-| `rust-quant-engine` | Rust engine architecture and performance guidelines |
-| `rust-backtesting-engine` | Deterministic replay, fill simulation, walk-forward |
-| `market-data-architecture` | Canonical schemas, source adapters, data quality |
-| `execution-broker-layer` | Order management, fill reconciliation, failover |
-| `python-orchestration` | Ingestion, monitoring, alerts, deployment |
-| `strategy-lifecycle` | Promotion, decay detection, versioning, retirement |
-| `claude-eval-self-learn` | Evaluation, journaling, pattern recognition, learning |
+```
+grep "run_id=70d94da" data/journal/engine.log    # isolate one run
+grep "STOP LOSS" data/journal/engine.log          # find risk events
+grep "P&L summary" data/journal/engine.log        # all run summaries
+```
