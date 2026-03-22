@@ -38,6 +38,7 @@ pub mod shadow;
 
 use crate::features::rolling_stats::RollingStats;
 use crate::signals::{Side, SignalReason};
+use std::collections::VecDeque;
 use tracing::{debug, error, info, warn};
 
 /// Trading parameters for the pairs strategy. Loaded from `[pairs_trading]` in `openquant.toml`.
@@ -181,6 +182,14 @@ pub struct PairState {
     pub exit_z_override: Option<f64>,
     /// Per-pair stop_z override (for graceful exit of removed pairs).
     pub stop_z_override: Option<f64>,
+    /// Recent trade P&L in bps (for regime gate). Tracks last 10 trades.
+    trade_pnl_history: VecDeque<f64>,
+    /// Whether entries are paused due to consecutive losses.
+    paused: bool,
+    /// Bars since pause started (for cooldown-based resume).
+    pause_bars: usize,
+    /// Number of consecutive stop-loss exits.
+    consecutive_stops: u8,
 }
 
 impl Default for PairState {
@@ -203,6 +212,10 @@ impl PairState {
             bar_count: 0,
             exit_z_override: None,
             stop_z_override: None,
+            trade_pnl_history: VecDeque::with_capacity(10),
+            paused: false,
+            pause_bars: 0,
+            consecutive_stops: 0,
         }
     }
 
@@ -368,6 +381,44 @@ impl PairState {
                     "pairs: EXIT"
                 );
 
+                // Record trade P&L for regime gate
+                let ret_a = (price_a - self.entry_price_a) / self.entry_price_a;
+                let ret_b = (price_b - self.entry_price_b) / self.entry_price_b;
+                let gross_bps = match self.position {
+                    PairPosition::LongSpread => (ret_a - ret_b) * 10_000.0,
+                    PairPosition::ShortSpread => (ret_b - ret_a) * 10_000.0,
+                    PairPosition::Flat => 0.0,
+                };
+                let net_bps = gross_bps - 12.0; // 12 bps round-trip cost
+                if self.trade_pnl_history.len() >= 10 {
+                    self.trade_pnl_history.pop_front();
+                }
+                self.trade_pnl_history.push_back(net_bps);
+
+                if stopped {
+                    self.consecutive_stops += 1;
+                } else {
+                    self.consecutive_stops = 0;
+                }
+
+                // Check regime gate: pause if last 5 trades all negative or 3 consecutive stops
+                let recent_all_negative = self.trade_pnl_history.len() >= 5
+                    && self
+                        .trade_pnl_history
+                        .iter()
+                        .rev()
+                        .take(5)
+                        .all(|&p| p < 0.0);
+                if (recent_all_negative || self.consecutive_stops >= 3) && !self.paused {
+                    self.paused = true;
+                    warn!(
+                        pair = pair_id.as_str(),
+                        consecutive_stops = self.consecutive_stops,
+                        last_5_negative = recent_all_negative,
+                        "pairs: REGIME GATE — pausing entries (recent trades losing)"
+                    );
+                }
+
                 let intents = self.close_position(config, trading, reason, z, spread);
                 self.position = PairPosition::Flat;
                 return intents;
@@ -386,6 +437,25 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
+        // Regime gate: block entries when paused due to consecutive losses.
+        // Cooldown: unpause after 500 bars (~2 trading days) to retry.
+        // If still losing after retry, will re-pause within 5 more trades.
+        if self.paused {
+            self.pause_bars += 1;
+            let cooldown = 500; // ~2 trading days of bars
+            if self.pause_bars >= cooldown {
+                self.paused = false;
+                self.consecutive_stops = 0;
+                self.pause_bars = 0;
+                info!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    cooldown, "pairs: REGIME GATE lifted — cooldown expired, retrying"
+                );
+            } else {
+                return vec![];
+            }
+        }
+
         // Block entries after last_entry_hour (avoid overnight risk)
         if et_hour >= trading.last_entry_hour {
             debug!(

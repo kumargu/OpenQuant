@@ -156,12 +156,12 @@ mod tests {
 
     #[test]
     fn test_half_life_score() {
-        assert_eq!(half_life_score(0.5), 0.0);   // below MIN_HALF_LIFE
+        assert_eq!(half_life_score(0.5), 0.0); // below MIN_HALF_LIFE
         assert!(half_life_score(1.5) > 0.0 && half_life_score(1.5) < 1.0); // ramp-up
-        assert_eq!(half_life_score(2.0), 1.0);   // ideal range
-        assert_eq!(half_life_score(10.0), 1.0);  // ideal range
+        assert_eq!(half_life_score(2.0), 1.0); // ideal range
+        assert_eq!(half_life_score(10.0), 1.0); // ideal range
         assert!(half_life_score(30.0) > 0.0 && half_life_score(30.0) < 1.0); // ramp-down
-        assert_eq!(half_life_score(50.0), 0.0);  // above MAX_HALF_LIFE
+        assert_eq!(half_life_score(50.0), 0.0); // above MAX_HALF_LIFE
     }
 
     #[test]

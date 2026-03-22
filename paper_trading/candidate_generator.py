@@ -52,6 +52,22 @@ DEFAULT_UNIVERSE: list[str] = [
     "FDX", "UPS",
     # Precious metals ETFs
     "GLD", "SLV",
+    # Consumer staples
+    "KO", "PEP", "PG", "CL",
+    # Waste management
+    "WM", "RSG",
+    # REITs
+    "O", "NNN",
+    # Defense
+    "LMT", "NOC",
+    # Utilities
+    "DUK", "SO",
+    # Credit ratings
+    "MCO", "SPGI",
+    # Medical devices
+    "ABT", "MDT",
+    # Health insurance
+    "ELV", "CI",
     # Sector ETFs (for reference, not as pair legs)
     "XLF", "XLE", "XLK", "SMH", "QQQ",
 ]

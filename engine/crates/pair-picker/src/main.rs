@@ -52,7 +52,9 @@ fn main() {
                 if td.exists() {
                     return td;
                 }
-                if !dir.pop() { break; }
+                if !dir.pop() {
+                    break;
+                }
             }
             data_dir.clone() // fallback to data_dir for backward compat
         });

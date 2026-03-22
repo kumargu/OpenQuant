@@ -114,7 +114,10 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
 
     // Use the most recent observations. If more data is available than needed,
     // cap to MAX_VALIDATION_WINDOW to focus on the recent regime.
-    let n = prices_a.len().min(prices_b.len()).min(MAX_VALIDATION_WINDOW);
+    let n = prices_a
+        .len()
+        .min(prices_b.len())
+        .min(MAX_VALIDATION_WINDOW);
     let prices_a = &prices_a[prices_a.len() - n..];
     let prices_b = &prices_b[prices_b.len() - n..];
 
@@ -223,7 +226,11 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
                     reasons.push(format!("Beta CV={:.3} >= 0.20", bs.cv));
                 }
                 if bs.structural_break {
-                    reasons.push("Structural break detected in hedge ratio".into());
+                    reasons.push(format!(
+                        "Structural break: shift={:.1}% > threshold={:.1}%",
+                        bs.max_shift_pct * 100.0,
+                        crate::stats::beta_stability::structural_break_threshold() * 100.0,
+                    ));
                 }
                 result.rejection_reasons.extend(reasons);
             }
