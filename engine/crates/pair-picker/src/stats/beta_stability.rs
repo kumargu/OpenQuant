@@ -21,6 +21,8 @@ pub struct BetaStabilityResult {
     pub is_stable: bool,
     /// Whether a structural break was detected in the hedge ratio.
     pub structural_break: bool,
+    /// Max mean-shift percentage (for logging/calibration).
+    pub max_shift_pct: f64,
     /// Number of rolling windows computed.
     pub n_windows: usize,
 }
@@ -84,7 +86,9 @@ pub fn check_beta_stability(
         f64::INFINITY
     };
 
-    let structural_break = structural_break_test(&rolling_betas);
+    let shift = max_mean_shift(&rolling_betas);
+    let threshold = structural_break_threshold();
+    let structural_break = shift > threshold;
 
     let is_stable = cv < MAX_BETA_CV && !structural_break;
 
@@ -95,49 +99,52 @@ pub fn check_beta_stability(
         cv,
         is_stable,
         structural_break,
+        max_shift_pct: shift,
         n_windows: rolling_betas.len(),
     })
 }
 
-/// Structural break detection for hedge ratio via maximum mean-shift test.
+/// Structural break threshold calibrated by rolling window size.
 ///
-/// We chose a mean-shift test over classical CUSUM or Chow F-test because
-/// rolling-window betas have strong serial correlation (overlapping windows),
-/// which inflates CUSUM statistics and Chow F-statistics, producing false
-/// positives on stable relationships. A mean-shift test with an *economic*
-/// significance threshold avoids this.
+/// Shorter rolling windows produce noisier beta estimates, inflating the
+/// apparent max mean-shift. The threshold scales with estimation noise:
+/// - 60-bar windows: 15% (original, low noise)
+/// - 30-bar windows: 45% (higher noise floor from smaller OLS samples)
 ///
-/// Algorithm: for each candidate split point k (20%-80% of series), compute
-/// |mean(series[..k]) - mean(series[k..])| / |overall_mean|. If this ratio
-/// exceeds the threshold, the beta has shifted enough to invalidate the pair.
+/// Calibrated on known-good/known-bad pairs (#168):
+/// - DUK/SO (stable utility): 41.8% at 30-bar → should PASS
+/// - BAC/WFC (stable bank): 42.3% at 30-bar → should PASS
+/// - LMT/NOC (unstable): 155.9% → should FAIL
+/// - KO/PEP (drifting): 73.0% → should FAIL
+pub fn structural_break_threshold() -> f64 {
+    // Scale threshold with rolling window noise:
+    // At 60 bars: 0.15 (tight). At 30 bars: 0.45 (loose).
+    // Linear interpolation: threshold = 0.75 - 0.01 * ROLLING_WINDOW
+    (0.75 - 0.01 * ROLLING_WINDOW as f64).clamp(0.15, 0.50)
+}
+
+/// Compute max mean-shift percentage across split points.
 ///
-/// The 15% threshold was chosen empirically:
-/// - A beta shift from 1.5 to 1.3 (13%) is noise in rolling windows
-/// - A beta shift from 1.5 to 1.2 (20%) means the pair relationship changed
-/// - 15% balances sensitivity vs false positives on backtested pairs
-///
-/// A proper Chow F-test would require correcting for autocorrelation in
-/// overlapping windows (Newey-West HAC), adding complexity with minimal
-/// benefit since the economic significance filter already handles the
-/// relevant failure mode (silent regime shifts that lose money).
-fn structural_break_test(series: &[f64]) -> bool {
+/// Returns the maximum |mean(left) - mean(right)| / |overall_mean|
+/// across all candidate split points (20%-80% of series).
+fn max_mean_shift(series: &[f64]) -> f64 {
     let n = series.len();
     if n < 20 {
-        return false;
+        return 0.0;
     }
 
     let n_f = n as f64;
     let mean: f64 = series.iter().sum::<f64>() / n_f;
 
     if mean.abs() < 1e-15 {
-        return false;
+        return 0.0;
     }
 
     // Check max shift across multiple split points (20%-80%)
     let start = (n_f * 0.2) as usize;
     let end = (n_f * 0.8) as usize;
     let total_sum: f64 = series.iter().sum();
-    let mut max_shift_pct = 0.0_f64;
+    let mut max_shift = 0.0_f64;
 
     let mut prefix_sum = 0.0;
     for (i, val) in series.iter().enumerate() {
@@ -147,20 +154,12 @@ fn structural_break_test(series: &[f64]) -> bool {
             let n2 = (n - i - 1) as f64;
             let mean1 = prefix_sum / n1;
             let mean2 = (total_sum - prefix_sum) / n2;
-            // Economic significance: shift as fraction of mean
             let shift_pct = ((mean1 - mean2) / mean.abs()).abs();
-            max_shift_pct = max_shift_pct.max(shift_pct);
+            max_shift = max_shift.max(shift_pct);
         }
     }
 
-    // Break detected if beta shifts by more than 45% of its mean value.
-    // With ROLLING_WINDOW=30 on 150-day data, rolling OLS betas are noisy —
-    // even stable pairs (DUK/SO, BAC/WFC) show 40-42% apparent shifts from
-    // estimation variance alone (#168). Calibrated to:
-    // - Pass stable pairs (DUK/SO 41.8%, BAC/WFC 42.3%)
-    // - Reject unstable pairs (LMT/NOC 155.9%, KO/PEP 73.0%)
-    // Long-term: Kalman filter for smoother beta estimation (#168)
-    max_shift_pct > 0.45
+    max_shift
 }
 
 #[cfg(test)]
@@ -244,16 +243,49 @@ mod tests {
 
     #[test]
     fn test_no_structural_break() {
-        // Constant series
+        // Constant series — zero shift
         let series = vec![1.0; 50];
-        assert!(!structural_break_test(&series));
+        assert!(max_mean_shift(&series) < 0.01);
     }
 
     #[test]
     fn test_structural_break_detected() {
-        // Clear level shift
-        let mut series = vec![0.0; 50];
+        // Clear level shift — should be very large
+        let mut series = vec![1.0; 50];
         series.extend(vec![5.0; 50]);
-        assert!(structural_break_test(&series));
+        let shift = max_mean_shift(&series);
+        assert!(shift > 1.0, "expected large shift, got {shift}");
+    }
+
+    #[test]
+    fn test_threshold_scales_with_window() {
+        // At ROLLING_WINDOW=30: threshold = 0.75 - 0.30 = 0.45
+        let t = structural_break_threshold();
+        assert!(
+            (t - 0.45).abs() < 0.01,
+            "expected ~0.45 for ROLLING_WINDOW={}, got {t}",
+            ROLLING_WINDOW
+        );
+    }
+
+    #[test]
+    fn test_max_shift_pct_exposed() {
+        // Verify max_shift_pct is populated in BetaStabilityResult
+        let n = 200;
+        let mut log_a = Vec::with_capacity(n);
+        let mut log_b = Vec::with_capacity(n);
+        let mut state: u64 = 42;
+        let mut b_val = 4.0;
+        for _ in 0..n {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let noise = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.01;
+            b_val += noise;
+            log_b.push(b_val);
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let noise_a = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.005;
+            log_a.push(1.5 * b_val + noise_a);
+        }
+        let result = check_beta_stability(&log_a, &log_b).unwrap();
+        assert!(result.max_shift_pct >= 0.0, "max_shift_pct should be non-negative");
     }
 }

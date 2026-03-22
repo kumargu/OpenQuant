@@ -223,7 +223,11 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
                     reasons.push(format!("Beta CV={:.3} >= 0.20", bs.cv));
                 }
                 if bs.structural_break {
-                    reasons.push("Structural break detected in hedge ratio".into());
+                    reasons.push(format!(
+                        "Structural break: shift={:.1}% > threshold={:.1}%",
+                        bs.max_shift_pct * 100.0,
+                        crate::stats::beta_stability::structural_break_threshold() * 100.0,
+                    ));
                 }
                 result.rejection_reasons.extend(reasons);
             }
