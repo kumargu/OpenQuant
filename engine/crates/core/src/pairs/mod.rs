@@ -403,7 +403,12 @@ impl PairState {
 
                 // Check regime gate: pause if last 5 trades all negative or 3 consecutive stops
                 let recent_all_negative = self.trade_pnl_history.len() >= 5
-                    && self.trade_pnl_history.iter().rev().take(5).all(|&p| p < 0.0);
+                    && self
+                        .trade_pnl_history
+                        .iter()
+                        .rev()
+                        .take(5)
+                        .all(|&p| p < 0.0);
                 if recent_all_negative || self.consecutive_stops >= 3 {
                     if !self.paused {
                         self.paused = true;
@@ -446,8 +451,7 @@ impl PairState {
                 self.pause_bars = 0;
                 info!(
                     pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
-                    cooldown,
-                    "pairs: REGIME GATE lifted — cooldown expired, retrying"
+                    cooldown, "pairs: REGIME GATE lifted — cooldown expired, retrying"
                 );
             } else {
                 return vec![];

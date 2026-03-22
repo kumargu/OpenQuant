@@ -114,7 +114,10 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
 
     // Use the most recent observations. If more data is available than needed,
     // cap to MAX_VALIDATION_WINDOW to focus on the recent regime.
-    let n = prices_a.len().min(prices_b.len()).min(MAX_VALIDATION_WINDOW);
+    let n = prices_a
+        .len()
+        .min(prices_b.len())
+        .min(MAX_VALIDATION_WINDOW);
     let prices_a = &prices_a[prices_a.len() - n..];
     let prices_b = &prices_b[prices_b.len() - n..];
 

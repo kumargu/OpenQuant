@@ -277,15 +277,22 @@ mod tests {
         let mut state: u64 = 42;
         let mut b_val = 4.0;
         for _ in 0..n {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let noise = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.01;
             b_val += noise;
             log_b.push(b_val);
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let noise_a = ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.005;
             log_a.push(1.5 * b_val + noise_a);
         }
         let result = check_beta_stability(&log_a, &log_b).unwrap();
-        assert!(result.max_shift_pct >= 0.0, "max_shift_pct should be non-negative");
+        assert!(
+            result.max_shift_pct >= 0.0,
+            "max_shift_pct should be non-negative"
+        );
     }
 }
