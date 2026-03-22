@@ -42,6 +42,16 @@ DEFAULT_SYMBOLS: list[str] = [
     "FDX", "UPS",
     "GLD", "SLV",
     "COIN", "PLTR",
+    # Boring duopoly candidates (stable relationships)
+    "KO", "PEP",       # beverages
+    "PG", "CL",        # household products
+    "WM", "RSG",       # waste management
+    "O", "NNN",        # net-lease REITs
+    "LMT", "NOC",      # defense
+    "DUK", "SO",       # regulated utilities
+    "MCO", "SPGI",     # credit ratings
+    "ABT", "MDT",      # medical devices
+    "ELV", "CI",       # health insurance
 ]
 
 MIN_BARS = 200

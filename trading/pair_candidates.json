@@ -99,6 +99,51 @@
       "leg_a": "SBUX",
       "leg_b": "MCD",
       "economic_rationale": "Quick-service restaurant leaders. Both franchise-heavy models, correlated via consumer traffic, food costs, and labor inflation."
+    },
+    {
+      "leg_a": "KO",
+      "leg_b": "PEP",
+      "economic_rationale": "Beverage duopoly. Domestic revenue, stable organic growth, minimal tariff exposure. Canonical pairs trade."
+    },
+    {
+      "leg_a": "PG",
+      "leg_b": "CL",
+      "economic_rationale": "Household products duopoly. Similar pricing power, tariff exposure, and consumer traffic drivers."
+    },
+    {
+      "leg_a": "WM",
+      "leg_b": "RSG",
+      "economic_rationale": "Waste management duopoly. Essential domestic service, zero tariff risk, landfill scarcity pricing."
+    },
+    {
+      "leg_a": "O",
+      "leg_b": "NNN",
+      "economic_rationale": "Net-lease REIT duopoly. Share top tenants, similar yields (5.5-5.7%), Dividend Aristocrats."
+    },
+    {
+      "leg_a": "LMT",
+      "leg_b": "NOC",
+      "economic_rationale": "Defense prime contractors. 95% US govt revenue, cost-plus contracts, zero tariff risk."
+    },
+    {
+      "leg_a": "DUK",
+      "leg_b": "SO",
+      "economic_rationale": "Pure regulated utilities. Rate-regulated, similar growth, domestic-only. No AI hype distortion."
+    },
+    {
+      "leg_a": "MCO",
+      "leg_b": "SPGI",
+      "economic_rationale": "Credit rating duopoly. 80% combined market share, both earn from debt issuance cycles."
+    },
+    {
+      "leg_a": "ABT",
+      "leg_b": "MDT",
+      "economic_rationale": "Medical devices duopoly. Aging population tailwind, recurring revenue from implantables."
+    },
+    {
+      "leg_a": "ELV",
+      "leg_b": "CI",
+      "economic_rationale": "Health insurance duopoly. Stable Medicare/Medicaid enrollment, avoids UNH DOJ issues."
     }
   ]
 }
