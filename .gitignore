@@ -21,6 +21,10 @@ data/journal/*.db-shm
 # Engine logs (append-mode, local only)
 data/journal/engine.log
 
+# Bar data (too large for git — backfilled locally from Alpaca API)
+data/experiment_bars_*.json
+data/active_pairs_v*.json
+
 # Runner output (regenerated on each run)
 data/order_intents.json
 data/trade_results.json
