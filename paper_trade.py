@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 """
-OpenQuant Paper Trading — live intraday pairs trading via Alpaca.
+OpenQuant Paper Trading Sidecar — thin Python wrapper for Rust engine.
 
-Fetches 1-min bars, runs the Rust engine, executes order intents.
-Designed for GLD/SLV pairs trading with regime gate.
+Python handles ONLY:
+  1. Fetching bars from Alpaca (stdin → Rust)
+  2. Executing order intents from Rust (stdout → Alpaca)
+
+All trading logic (z-scores, regime gate, entry/exit) lives in Rust.
+
+Architecture:
+  [Alpaca API] → bars → [this script] → stdin pipe → [Rust runner live] → stdout pipe → [this script] → [Alpaca API]
 
 Usage:
-    python3 paper_trade.py                 # run with defaults
-    python3 paper_trade.py --dry-run       # log signals, don't place orders
-    python3 paper_trade.py --interval 60   # poll every 60 seconds
+    python3 paper_trade.py              # live paper trading
+    python3 paper_trade.py --dry-run    # log intents, don't place orders
 """
 
 import argparse
 import json
 import logging
 import os
-import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -31,29 +36,34 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-log = logging.getLogger("paper_trade")
+log = logging.getLogger("sidecar")
 
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
 TRADING_DIR = ROOT / "trading"
 CONFIG = ROOT / "config" / "pairs.toml"
 BINARY = ROOT / "engine" / "target" / "release" / "openquant-runner"
-
 ET = ZoneInfo("America/New_York")
 
 
 def is_market_open() -> bool:
-    """Check if US equity market is currently open (9:30-16:00 ET, Mon-Fri)."""
     now = datetime.now(ET)
-    if now.weekday() >= 5:  # weekend
+    if now.weekday() >= 5:
         return False
-    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    return market_open <= now <= market_close
+    return now.replace(hour=9, minute=30, second=0) <= now <= now.replace(hour=16, minute=0, second=0)
 
 
-def fetch_latest_bars(symbols: list[str]) -> dict:
-    """Fetch the most recent 1-min bars from Alpaca."""
+def get_symbols() -> list[str]:
+    with open(TRADING_DIR / "active_pairs.json") as f:
+        pairs = json.load(f)
+    symbols = set()
+    for p in pairs["pairs"]:
+        symbols.add(p["leg_a"])
+        symbols.add(p["leg_b"])
+    return sorted(symbols)
+
+
+def fetch_bars(symbols: list[str], lookback_minutes: int = 5) -> list[dict]:
+    """Fetch recent 1-min bars from Alpaca, return as list of bar dicts."""
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
@@ -65,8 +75,7 @@ def fetch_latest_bars(symbols: list[str]) -> dict:
     )
 
     now = datetime.now(timezone.utc)
-    # Fetch last 60 minutes of bars
-    start = now - __import__("datetime").timedelta(minutes=60)
+    start = now - timedelta(minutes=lookback_minutes)
 
     request = StockBarsRequest(
         symbol_or_symbols=symbols,
@@ -77,204 +86,127 @@ def fetch_latest_bars(symbols: list[str]) -> dict:
     )
 
     barset = client.get_stock_bars(request)
-    result = {}
+    bars = []
     for sym in symbols:
-        bars = barset.data.get(sym, [])
-        result[sym] = [
-            {
+        for b in barset.data.get(sym, []):
+            bars.append({
+                "symbol": sym,
                 "timestamp": int(b.timestamp.timestamp() * 1000),
                 "open": float(b.open),
                 "high": float(b.high),
                 "low": float(b.low),
                 "close": float(b.close),
                 "volume": float(b.volume),
-            }
-            for b in bars
-        ]
-    return result
+            })
+
+    # Sort by timestamp then symbol for deterministic ordering
+    bars.sort(key=lambda b: (b["timestamp"], b["symbol"]))
+    return bars
 
 
-def run_engine(bars_path: Path) -> list[dict]:
-    """Run the Rust engine on the bars and return order intents."""
-    output_dir = DATA_DIR / "live"
-    output_dir.mkdir(exist_ok=True)
+def execute_intent(intent: dict, dry_run: bool = False):
+    """Execute a single order intent via Alpaca."""
+    from paper_trading.alpaca_client import buy, sell
 
-    intents_path = output_dir / "order_intents.json"
-    intents_path.unlink(missing_ok=True)
+    symbol = intent["symbol"]
+    side = intent["side"]
+    qty = intent["qty"]
+    pair_id = intent.get("pair_id", "")
+    z = intent.get("z_score", 0)
 
-    result = subprocess.run(
-        [
-            str(BINARY), "backtest",
-            "--config", str(CONFIG),
-            "--data-dir", str(bars_path.parent),
-            "--trading-dir", str(TRADING_DIR),
-            "--output-dir", str(output_dir),
-            "--warmup-bars", "0",
-        ],
-        capture_output=True, text=True,
-        env={**os.environ, "RUST_LOG": "warn"},
-    )
+    action = f"{side.upper()} {qty:.0f} {symbol} (pair={pair_id}, z={z:.2f})"
 
-    if result.returncode != 0:
-        log.error("Engine failed: %s", result.stderr[-500:])
-        return []
-
-    if intents_path.exists():
-        with open(intents_path) as f:
-            return json.load(f)
-    return []
-
-
-def execute_intents(intents: list[dict], dry_run: bool = False):
-    """Execute order intents via Alpaca."""
-    from paper_trading.alpaca_client import buy, sell, get_positions
-
-    if not intents:
+    if dry_run:
+        log.info("DRY RUN: %s", action)
         return
 
-    # Get current positions to avoid duplicates
-    current = {p["symbol"]: p for p in get_positions()}
-
-    for intent in intents:
-        symbol = intent.get("symbol", "")
-        side = intent.get("side", "")
-        qty = intent.get("qty", 0)
-        pair_id = intent.get("pair_id", "")
-        reason = intent.get("reason", "")
-
-        if qty <= 0:
-            continue
-
-        action = f"{side} {qty} {symbol} (pair={pair_id}, reason={reason})"
-
-        if dry_run:
-            log.info("DRY RUN: %s", action)
-            continue
-
-        try:
-            if side == "buy":
-                result = buy(symbol, qty)
-            elif side == "sell":
-                result = sell(symbol, qty)
-            else:
-                log.warning("Unknown side: %s", side)
-                continue
-
-            log.info("EXECUTED: %s → %s", action, result["status"])
-        except Exception as e:
-            log.error("FAILED: %s → %s", action, e)
-
-
-def close_all_positions():
-    """Close all open positions (EOD cleanup)."""
-    from paper_trading.alpaca_client import get_positions, sell
-
-    positions = get_positions()
-    for p in positions:
-        try:
-            sell(p["symbol"], abs(p["qty"]))
-            log.info("CLOSED: %s %s", p["symbol"], p["qty"])
-        except Exception as e:
-            log.error("CLOSE FAILED: %s → %s", p["symbol"], e)
+    try:
+        result = buy(symbol, qty) if side == "buy" else sell(symbol, qty)
+        log.info("EXECUTED: %s → %s", action, result["status"])
+    except Exception as e:
+        log.error("FAILED: %s → %s", action, e)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenQuant Paper Trading")
-    parser.add_argument("--dry-run", action="store_true", help="Log signals without placing orders")
-    parser.add_argument("--interval", type=int, default=120, help="Poll interval in seconds (default: 120)")
-    parser.add_argument("--once", action="store_true", help="Run once and exit (don't loop)")
+    parser = argparse.ArgumentParser(description="OpenQuant Paper Trading Sidecar")
+    parser.add_argument("--dry-run", action="store_true", help="Log intents without placing orders")
+    parser.add_argument("--interval", type=int, default=60, help="Bar fetch interval (seconds)")
     args = parser.parse_args()
 
-    # Load pair config
-    with open(TRADING_DIR / "active_pairs.json") as f:
-        pairs = json.load(f)
-
-    symbols = set()
-    for p in pairs["pairs"]:
-        symbols.add(p["leg_a"])
-        symbols.add(p["leg_b"])
-    symbols = sorted(symbols)
-
-    log.info("OpenQuant Paper Trading starting")
-    log.info("  Pairs: %s", [(p["leg_a"] + "/" + p["leg_b"]) for p in pairs["pairs"]])
-    log.info("  Symbols: %s", symbols)
-    log.info("  Interval: %ds", args.interval)
-    log.info("  Dry run: %s", args.dry_run)
-
     if not BINARY.exists():
-        log.error("Binary not found: %s — run: cd engine && cargo build -p openquant-runner --release", BINARY)
+        log.error("Build the runner first: cd engine && cargo build -p openquant-runner --release")
         sys.exit(1)
 
-    # Graceful shutdown
-    running = True
-    def handle_signal(sig, frame):
-        nonlocal running
-        log.info("Shutting down...")
-        running = False
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
+    symbols = get_symbols()
+    log.info("Sidecar starting — symbols: %s, interval: %ds, dry_run: %s",
+             symbols, args.interval, args.dry_run)
 
-    # Accumulate bars across the session for the engine
-    session_bars = {sym: [] for sym in symbols}
-    bars_dir = DATA_DIR / "live"
-    bars_dir.mkdir(exist_ok=True)
+    # Start the Rust engine in live mode
+    proc = subprocess.Popen(
+        [str(BINARY), "live", "--config", str(CONFIG), "--trading-dir", str(TRADING_DIR)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=sys.stderr,  # engine logs go to stderr
+        text=True,
+        bufsize=1,  # line-buffered
+    )
 
-    while running:
-        now_et = datetime.now(ET)
+    log.info("Rust engine started (pid=%d)", proc.pid)
 
-        if not is_market_open():
-            if now_et.hour >= 16 and session_bars.get(symbols[0]):
-                # Market just closed — close all positions
-                log.info("Market closed — closing all positions")
-                if not args.dry_run:
-                    close_all_positions()
-                session_bars = {sym: [] for sym in symbols}
+    # Read intents from engine stdout in a background thread
+    def read_intents():
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                intent = json.loads(line)
+                log.info("INTENT: %s %s %.0f %s z=%.2f",
+                         intent["side"], intent["symbol"], intent["qty"],
+                         intent["pair_id"], intent["z_score"])
+                execute_intent(intent, dry_run=args.dry_run)
+            except json.JSONDecodeError:
+                log.warning("Non-JSON from engine: %s", line[:100])
 
-            log.info("Market closed (%s ET). Waiting...", now_et.strftime("%H:%M"))
-            if args.once:
-                break
-            time.sleep(60)
-            continue
+    intent_thread = threading.Thread(target=read_intents, daemon=True)
+    intent_thread.start()
 
-        # Fetch latest bars
-        try:
-            new_bars = fetch_latest_bars(symbols)
-            for sym in symbols:
-                existing_ts = {b["timestamp"] for b in session_bars[sym]}
-                for bar in new_bars.get(sym, []):
-                    if bar["timestamp"] not in existing_ts:
-                        session_bars[sym].append(bar)
+    # Track seen timestamps to avoid feeding duplicates
+    seen_ts = set()
 
-            total_bars = sum(len(v) for v in session_bars.values())
-            log.info("Bars: %d total (%s)", total_bars,
-                     ", ".join(f"{s}={len(session_bars[s])}" for s in symbols))
-        except Exception as e:
-            log.error("Bar fetch failed: %s", e)
+    try:
+        while proc.poll() is None:
+            if not is_market_open():
+                now_et = datetime.now(ET)
+                log.info("Market closed (%s ET)", now_et.strftime("%H:%M"))
+                time.sleep(60)
+                continue
+
+            # Fetch bars
+            try:
+                bars = fetch_bars(symbols, lookback_minutes=args.interval // 60 + 2)
+                new_bars = [b for b in bars if (b["symbol"], b["timestamp"]) not in seen_ts]
+
+                for b in new_bars:
+                    seen_ts.add((b["symbol"], b["timestamp"]))
+                    # Pipe to Rust engine
+                    proc.stdin.write(json.dumps(b) + "\n")
+                    proc.stdin.flush()
+
+                if new_bars:
+                    log.info("Fed %d new bars to engine (%d total seen)", len(new_bars), len(seen_ts))
+            except Exception as e:
+                log.error("Bar fetch error: %s", e)
+
             time.sleep(args.interval)
-            continue
 
-        # Write bars for engine
-        today = now_et.strftime("%Y%m%d")
-        bars_file = bars_dir / "experiment_bars.json"
-        with open(bars_file, "w") as f:
-            json.dump([{"date": today, "symbols": session_bars}], f)
+    except KeyboardInterrupt:
+        log.info("Shutting down...")
 
-        # Run engine
-        intents = run_engine(bars_file)
-        if intents:
-            log.info("Engine produced %d intents", len(intents))
-            # Only execute the most recent intents (last 2 = one pair trade)
-            recent = intents[-2:] if len(intents) >= 2 else intents
-            execute_intents(recent, dry_run=args.dry_run)
-        else:
-            log.info("No intents (warmup or no signals)")
-
-        if args.once:
-            break
-
-        time.sleep(args.interval)
-
-    log.info("Paper trading stopped")
+    # Close engine
+    proc.stdin.close()
+    proc.wait(timeout=5)
+    log.info("Engine stopped. Sidecar done.")
 
 
 if __name__ == "__main__":

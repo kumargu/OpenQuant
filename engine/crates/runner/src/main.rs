@@ -68,7 +68,7 @@ use intents::{write_intents, write_trade_results, OrderIntentRecord};
 use openquant_core::config::ConfigFile;
 use openquant_core::engine::Engine;
 use openquant_core::pairs::engine::PairsEngine;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
@@ -140,12 +140,7 @@ fn main() {
                 "Walk-forward complete — slice trade_results.json by date windows for per-window P&L"
             );
         }
-        Command::Live(_args) => {
-            eprintln!("Live trading mode — not yet implemented.");
-            eprintln!("The runner will connect to the Python sidecar for Alpaca bar streaming.");
-            eprintln!("For now, use `backtest` mode with historical data.");
-            std::process::exit(1);
-        }
+        Command::Live(args) => run_live(args),
     }
 }
 
@@ -398,6 +393,126 @@ fn run_backtest(args: RunArgs) {
         "========== OPENQUANT RUN END =========="
     );
     info!("================================================================");
+}
+
+/// Live trading mode — reads bars from stdin, writes intents to stdout.
+///
+/// Protocol:
+///   stdin:  one JSON bar per line: {"symbol":"GLD","timestamp":123,"open":1,"high":2,"low":0.5,"close":1.5,"volume":100}
+///   stdout: one JSON intent per line: {"symbol":"GLD","side":"buy","qty":23,"pair_id":"GLD/SLV","z_score":-2.1}
+///   stderr: tracing logs
+///
+/// Usage with Python sidecar:
+///   python3 bar_streamer.py | openquant-runner live --config config/pairs.toml | python3 order_executor.py
+fn run_live(args: RunArgs) {
+    // Log to stderr only (stdout is for intents)
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .init();
+
+    info!("========== OPENQUANT LIVE MODE ==========");
+
+    // Load config
+    let cfg_file = match ConfigFile::load(&args.config) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("failed to load config: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let trading_dir = if args.trading_dir.exists() {
+        args.trading_dir.clone()
+    } else {
+        args.data_dir.clone()
+    };
+
+    let mut pairs_trading_config = cfg_file.pairs_trading.clone();
+    pairs_trading_config.tz_offset_hours = cfg_file.data.timezone_offset_hours;
+
+    let active_pairs_path = trading_dir.join("active_pairs.json");
+    let history_path = trading_dir.join("pair_trading_history.json");
+
+    let mut pairs_engine = if active_pairs_path.exists() {
+        info!(path = %active_pairs_path.display(), "loading active pairs");
+        PairsEngine::from_active_pairs(
+            &active_pairs_path,
+            &history_path,
+            vec![],
+            pairs_trading_config,
+        )
+    } else {
+        error!("no active_pairs.json found");
+        std::process::exit(1);
+    };
+
+    info!(pairs = pairs_engine.pair_count(), "live engine ready — reading bars from stdin");
+
+    // Read bars from stdin, process, write intents to stdout
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                error!("stdin read error: {e}");
+                break;
+            }
+        };
+
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Parse bar
+        let bar: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("invalid bar JSON: {e}");
+                continue;
+            }
+        };
+
+        let symbol = bar["symbol"].as_str().unwrap_or("");
+        let timestamp = bar["timestamp"].as_i64().unwrap_or(0);
+        let close = bar["close"].as_f64().unwrap_or(0.0);
+
+        if symbol.is_empty() || timestamp == 0 || close <= 0.0 {
+            continue;
+        }
+
+        // Feed to pairs engine
+        let intents = pairs_engine.on_bar(symbol, timestamp, close);
+
+        // Write intents to stdout as JSON lines
+        for intent in &intents {
+            let out = serde_json::json!({
+                "symbol": intent.symbol,
+                "side": format!("{:?}", intent.side).to_lowercase(),
+                "qty": intent.qty,
+                "pair_id": intent.pair_id,
+                "reason": format!("{:?}", intent.reason),
+                "z_score": intent.z_score,
+                "spread": intent.spread,
+                "timestamp": timestamp,
+            });
+            if let Err(e) = writeln!(stdout, "{}", out) {
+                error!("stdout write error: {e}");
+                return;
+            }
+            let _ = stdout.flush();
+        }
+    }
+
+    info!("========== OPENQUANT LIVE END ==========");
 }
 
 /// Writer that tees output to both stderr and a file.
