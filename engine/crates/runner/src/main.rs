@@ -451,7 +451,10 @@ fn run_live(args: RunArgs) {
         std::process::exit(1);
     };
 
-    info!(pairs = pairs_engine.pair_count(), "live engine ready — reading bars from stdin");
+    info!(
+        pairs = pairs_engine.pair_count(),
+        "live engine ready — reading bars from stdin"
+    );
 
     // Read bars from stdin, process, write intents to stdout
     let stdin = std::io::stdin();
