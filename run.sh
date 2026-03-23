@@ -2,9 +2,11 @@
 # OpenQuant Runner — build, run, manage the trading engine
 #
 # Usage:
-#   ./run.sh pairs          # run pairs trading (default)
-#   ./run.sh single         # run single-symbol trading
+#   ./run.sh pairs          # run pairs trading backtest (default)
+#   ./run.sh single         # run single-symbol backtest
 #   ./run.sh test           # run integration test config
+#   ./run.sh live           # paper trade (Alpaca bars → Rust engine → Alpaca orders)
+#   ./run.sh live --dry-run # paper trade dry run (log signals, no orders)
 #   ./run.sh build          # build only (no run)
 #   ./run.sh clean          # clean build artifacts + logs
 #   ./run.sh logs           # tail the engine log
@@ -117,12 +119,66 @@ summary() {
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
 }
 
+run_live() {
+    local dry_run="$1"
+    local config_path="$ROOT/config/pairs.toml"
+
+    if [ ! -f "$BINARY" ]; then
+        echo -e "${YELLOW}Binary not found, building...${NC}"
+        build
+    fi
+
+    # Extract symbols from active_pairs.json
+    local symbols
+    symbols=$(python3 -c "
+import json
+d = json.load(open('$ROOT/trading/active_pairs.json'))
+syms = set()
+for p in d['pairs']:
+    syms.add(p['leg_a']); syms.add(p['leg_b'])
+print(' '.join(sorted(syms)))
+" 2>/dev/null)
+
+    if [ -z "$symbols" ]; then
+        echo -e "${RED}No pairs in trading/active_pairs.json${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo -e "${GREEN}  LIVE PAPER TRADING${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo -e "  Config:  config/pairs.toml"
+    echo -e "  Pairs:   $(python3 -c "import json; d=json.load(open('$ROOT/trading/active_pairs.json')); print(', '.join(p['leg_a']+'/'+p['leg_b'] for p in d['pairs']))")"
+    echo -e "  Symbols: $symbols"
+    echo -e "  Dry run: ${dry_run:-no}"
+    echo -e ""
+    echo -e "  Architecture:"
+    echo -e "    [Alpaca] → bars → stream_bars.py → stdin → ${YELLOW}Rust engine (live)${NC} → stdout → exec_intents.py → [Alpaca]"
+    echo -e ""
+    echo -e "  Press Ctrl+C to stop"
+    echo -e "${GREEN}═══════════════════════════════════════${NC}"
+    echo ""
+
+    local exec_flag=""
+    if [ "$dry_run" = "--dry-run" ]; then
+        exec_flag="--dry-run"
+    fi
+
+    # Pipeline: Python streams bars → Rust processes → Python executes orders
+    cd "$ROOT"
+    python3 scripts/stream_bars.py $symbols \
+        | RUST_LOG=info "$BINARY" live \
+            --config "$config_path" \
+            --trading-dir "$ROOT/trading" \
+        | python3 scripts/exec_intents.py $exec_flag
+}
+
 status() {
     echo -e "${YELLOW}OpenQuant Status${NC}"
     echo "  Git commit: $(git -C "$ROOT" rev-parse --short HEAD)"
     echo "  Branch:     $(git -C "$ROOT" branch --show-current)"
     echo "  Configs:    $(ls "$ROOT"/config/*.toml 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
-    echo "  Pairs:      $(python3 -c "import json; d=json.load(open('$DATA/active_pairs.json')); print(', '.join(f\"{p['leg_a']}/{p['leg_b']}\" for p in d['pairs']))" 2>/dev/null || echo 'none')"
+    echo "  Pairs:      $(python3 -c "import json; d=json.load(open('$ROOT/trading/active_pairs.json')); print(', '.join(f\"{p['leg_a']}/{p['leg_b']}\" for p in d['pairs']))" 2>/dev/null || echo 'none')"
     echo "  Binary:     $([ -f "$BINARY" ] && echo 'built' || echo 'not built')"
 
     if [ -f "$JOURNAL/engine.log" ]; then
@@ -139,13 +195,14 @@ case "${1:-pairs}" in
     pairs)    build && run_engine pairs ;;
     single)   build && run_engine single ;;
     test)     build && run_engine test ;;
+    live)     run_live "$2" ;;
     build)    build ;;
     clean)    clean ;;
     logs)     logs ;;
     summary)  summary ;;
     status)   status ;;
     *)
-        echo "Usage: ./run.sh {pairs|single|test|build|clean|logs|summary|status}"
+        echo "Usage: ./run.sh {pairs|single|test|live|build|clean|logs|summary|status}"
         exit 1
         ;;
 esac
