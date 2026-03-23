@@ -4,14 +4,18 @@
 //! Uses synthetic price data — no external dependencies.
 
 use pair_picker::lockfile;
-use pair_picker::pipeline::{self, InMemoryPrices};
+use pair_picker::pipeline::{self, InMemoryPrices, MAX_VALIDATION_WINDOW};
 use pair_picker::types::{ActivePairsFile, PairCandidate};
 use std::collections::HashMap;
 use tempfile::TempDir;
 
-/// Generate a cointegrated pair (prices move together with mean-reverting spread).
-fn cointegrated_prices(n: usize, beta: f64, seed: u64) -> (Vec<f64>, Vec<f64>) {
-    let phi = (-f64::ln(2.0) / 10.0).exp();
+// Note: These generators mirror pair_picker::test_utils::{cointegrated_pair, independent_walks}
+// which is behind #[cfg(test)] and thus unavailable to integration tests.
+
+/// Generate a cointegrated pair using an OU spread process.
+/// Matches the algorithm in test_utils::cointegrated_pair.
+fn cointegrated_pair(n: usize, beta: f64, half_life: f64, seed: u64) -> (Vec<f64>, Vec<f64>) {
+    let phi = (-f64::ln(2.0) / half_life).exp();
     let mut state = seed;
     let mut next = |scale: f64| -> f64 {
         state = state
@@ -40,7 +44,8 @@ fn cointegrated_prices(n: usize, beta: f64, seed: u64) -> (Vec<f64>, Vec<f64>) {
 }
 
 /// Generate independent random walks (not cointegrated).
-fn random_walk_prices(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
+/// Matches the algorithm in test_utils::independent_walks.
+fn independent_walks(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
     let mut state = seed;
     let mut next = || -> f64 {
         state = state
@@ -67,8 +72,10 @@ fn test_full_pipeline_cointegrated_passes_random_rejected() {
     let tmp = TempDir::new().unwrap();
     let output_path = tmp.path().join("active_pairs.json");
 
-    let (pa, pb) = cointegrated_prices(500, 1.5, 42);
-    let (px, py) = random_walk_prices(500, 99);
+    // Use MAX_VALIDATION_WINDOW bars — pipeline caps to this window,
+    // so generating more would just be truncated.
+    let (pa, pb) = cointegrated_pair(MAX_VALIDATION_WINDOW, 1.5, 10.0, 42);
+    let (px, py) = independent_walks(MAX_VALIDATION_WINDOW, 99);
 
     let provider = InMemoryPrices {
         data: HashMap::from([
@@ -101,22 +108,23 @@ fn test_full_pipeline_cointegrated_passes_random_rejected() {
     let contents = std::fs::read_to_string(&output_path).unwrap();
     let output: ActivePairsFile = serde_json::from_str(&contents).unwrap();
 
-    // Cointegrated pair should pass, random walks should be rejected
+    // Cointegrated pair must pass, random walks must be rejected
     let passed: Vec<_> = results.iter().filter(|r| r.passed).collect();
-    assert!(
-        passed.len() <= 1,
-        "at most 1 pair should pass (cointegrated)"
+    assert_eq!(
+        passed.len(),
+        1,
+        "exactly 1 pair (cointegrated) should pass, got {}",
+        passed.len()
     );
 
-    // If cointegrated pair passed, verify it's in output with correct fields
-    if !output.pairs.is_empty() {
-        let pair = &output.pairs[0];
-        assert_eq!(pair.leg_a, "GOOD_A");
-        assert_eq!(pair.leg_b, "GOOD_B");
-        assert!(pair.beta > 0.0, "beta should be positive");
-        assert!(pair.score > 0.0, "score should be positive");
-        assert!(pair.adf_pvalue < 1.0, "ADF p-value should be < 1.0");
-    }
+    // Verify the passing pair is in output with correct fields
+    assert_eq!(output.pairs.len(), 1);
+    let pair = &output.pairs[0];
+    assert_eq!(pair.leg_a, "GOOD_A");
+    assert_eq!(pair.leg_b, "GOOD_B");
+    assert!(pair.beta > 0.0, "beta should be positive");
+    assert!(pair.score > 0.0, "score should be positive");
+    assert!(pair.adf_pvalue < 1.0, "ADF p-value should be < 1.0");
 }
 
 #[test]
@@ -124,7 +132,7 @@ fn test_empty_output_when_all_fail() {
     let tmp = TempDir::new().unwrap();
     let output_path = tmp.path().join("active_pairs.json");
 
-    let (px, py) = random_walk_prices(500, 42);
+    let (px, py) = independent_walks(MAX_VALIDATION_WINDOW, 42);
 
     let provider = InMemoryPrices {
         data: HashMap::from([("X".to_string(), px), ("Y".to_string(), py)]),
@@ -181,7 +189,7 @@ fn test_etf_component_pair_rejected_before_validation() {
     let tmp = TempDir::new().unwrap();
     let output_path = tmp.path().join("active_pairs.json");
 
-    let (pa, pb) = cointegrated_prices(500, 1.5, 42);
+    let (pa, pb) = cointegrated_pair(MAX_VALIDATION_WINDOW, 1.5, 10.0, 42);
 
     let provider = InMemoryPrices {
         data: HashMap::from([("XLF".to_string(), pa), ("JPM".to_string(), pb)]),
@@ -248,7 +256,7 @@ fn test_insufficient_data_rejected() {
     let output_path = tmp.path().join("active_pairs.json");
 
     // Only 50 bars (below MIN_HISTORY_BARS=90)
-    let (pa, pb) = cointegrated_prices(50, 1.5, 42);
+    let (pa, pb) = cointegrated_pair(50, 1.5, 10.0, 42);
 
     let provider = InMemoryPrices {
         data: HashMap::from([("SHORT_A".to_string(), pa), ("SHORT_B".to_string(), pb)]),
@@ -286,7 +294,7 @@ fn test_output_schema_complete() {
     let tmp = TempDir::new().unwrap();
     let output_path = tmp.path().join("active_pairs.json");
 
-    let (pa, pb) = cointegrated_prices(500, 1.5, 42);
+    let (pa, pb) = cointegrated_pair(MAX_VALIDATION_WINDOW, 1.5, 10.0, 42);
 
     let provider = InMemoryPrices {
         data: HashMap::from([("A".to_string(), pa), ("B".to_string(), pb)]),
@@ -359,7 +367,7 @@ fn test_output_schema_complete() {
 
 #[test]
 fn test_deterministic_output() {
-    let (pa, pb) = cointegrated_prices(500, 1.5, 42);
+    let (pa, pb) = cointegrated_pair(MAX_VALIDATION_WINDOW, 1.5, 10.0, 42);
 
     let candidates = vec![PairCandidate {
         leg_a: "A".into(),
