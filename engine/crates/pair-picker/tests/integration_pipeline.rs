@@ -9,11 +9,12 @@ use pair_picker::types::{ActivePairsFile, PairCandidate};
 use std::collections::HashMap;
 use tempfile::TempDir;
 
-// Note: These generators mirror pair_picker::test_utils::{cointegrated_pair, independent_walks}
-// which is behind #[cfg(test)] and thus unavailable to integration tests.
+// Generators mirror pair_picker::test_utils::{cointegrated_pair, independent_walks}.
+// Integration tests don't get #[cfg(test)] on the library crate, so we can't
+// import test_utils directly. The test-support feature flag enables access
+// for external test crates that opt in.
 
 /// Generate a cointegrated pair using an OU spread process.
-/// Matches the algorithm in test_utils::cointegrated_pair.
 fn cointegrated_pair(n: usize, beta: f64, half_life: f64, seed: u64) -> (Vec<f64>, Vec<f64>) {
     let phi = (-f64::ln(2.0) / half_life).exp();
     let mut state = seed;
@@ -23,28 +24,25 @@ fn cointegrated_pair(n: usize, beta: f64, half_life: f64, seed: u64) -> (Vec<f64
             .wrapping_add(1442695040888963407);
         ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * scale
     };
-
     let mut log_b = Vec::with_capacity(n);
     let mut b_val = 4.0;
     for _ in 0..n {
         b_val += next(0.02);
         log_b.push(b_val);
     }
-
     let mut spread = 0.0;
     let mut log_a = Vec::with_capacity(n);
     for lb in &log_b {
         spread = phi * spread + next(0.01);
         log_a.push(beta * lb + 1.0 + spread);
     }
-
-    let pa: Vec<f64> = log_a.iter().map(|x| x.exp()).collect();
-    let pb: Vec<f64> = log_b.iter().map(|x| x.exp()).collect();
-    (pa, pb)
+    (
+        log_a.iter().map(|x| x.exp()).collect(),
+        log_b.iter().map(|x| x.exp()).collect(),
+    )
 }
 
 /// Generate independent random walks (not cointegrated).
-/// Matches the algorithm in test_utils::independent_walks.
 fn independent_walks(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
     let mut state = seed;
     let mut next = || -> f64 {
@@ -53,11 +51,9 @@ fn independent_walks(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
             .wrapping_add(1442695040888963407);
         ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * 0.02
     };
-
+    let (mut va, mut vb) = (4.0, 4.0);
     let mut a = Vec::with_capacity(n);
     let mut b = Vec::with_capacity(n);
-    let mut va = 4.0;
-    let mut vb = 4.0;
     for _ in 0..n {
         va += next();
         vb += next();
@@ -379,9 +375,10 @@ fn test_deterministic_output() {
     for _ in 0..2 {
         let tmp = TempDir::new().unwrap();
         let output_path = tmp.path().join("active_pairs.json");
-        let provider = InMemoryPrices {
-            data: HashMap::from([("A".to_string(), pa.clone()), ("B".to_string(), pb.clone())]),
-        };
+        let mut data: HashMap<String, Vec<f64>> = HashMap::new();
+        data.insert("A".to_string(), pa.clone());
+        data.insert("B".to_string(), pb.clone());
+        let provider = InMemoryPrices { data };
         pipeline::run_pipeline_from_candidates(&candidates, &output_path, &provider).unwrap();
 
         let contents = std::fs::read_to_string(&output_path).unwrap();

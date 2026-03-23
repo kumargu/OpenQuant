@@ -282,20 +282,25 @@ fn pnl_cost_deduction() {
     );
 
     let results_path = dir.path().join("trade_results.json");
-    if results_path.exists() {
-        let contents = std::fs::read_to_string(&results_path).unwrap();
-        let trades: Vec<serde_json::Value> = serde_json::from_str(&contents).unwrap();
+    assert!(results_path.exists(), "trade_results.json must be created");
 
-        for trade in &trades {
-            let return_bps = trade["return_bps"].as_f64().unwrap();
-            // All trades with no price change should have negative return (cost only)
-            // gross = 0, cost = 12 bps → net = -12 bps
-            // But some trades may have slight spread changes, so check cost is deducted
-            assert!(
-                return_bps < 100.0, // reasonable upper bound
-                "return_bps suspiciously high: {return_bps}"
-            );
-        }
+    let contents = std::fs::read_to_string(&results_path).unwrap();
+    let trades: Vec<serde_json::Value> = serde_json::from_str(&contents).unwrap();
+
+    assert!(
+        !trades.is_empty(),
+        "should produce at least one closed trade"
+    );
+
+    for trade in &trades {
+        let return_bps = trade["return_bps"].as_f64().unwrap();
+        // Entry at A=90, hold at A=90 for max_hold bars, exit at A=90.
+        // Gross ≈ 0 (no price change), cost = 3 bps × 4 legs = 12 bps.
+        // Net = gross - 12 ≈ -12 bps. Must be negative (cost always deducted).
+        assert!(
+            return_bps <= 0.0,
+            "zero-change trade should have negative return after cost deduction, got {return_bps}"
+        );
     }
 }
 

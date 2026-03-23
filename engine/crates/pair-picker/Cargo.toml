@@ -12,6 +12,9 @@ path = "src/main.rs"
 name = "pair_picker"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

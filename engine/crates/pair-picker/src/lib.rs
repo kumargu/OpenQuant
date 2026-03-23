@@ -25,7 +25,7 @@ pub mod pipeline;
 pub mod regime;
 pub mod scorer;
 pub mod stats;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_utils;
 pub mod thompson;
 pub mod types;
