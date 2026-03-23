@@ -1,19 +1,4 @@
 {
-  "generated_at": "2026-03-22T19:16:15Z",
-  "pairs": [
-    {
-      "leg_a": "GLD",
-      "leg_b": "SLV",
-      "alpha": 4.5805,
-      "beta": 0.3507,
-      "half_life_days": 8.3,
-      "adf_statistic": -1.32,
-      "adf_pvalue": 0.47,
-      "beta_cv": 0.33,
-      "structural_break": true,
-      "regime_robustness": -1.0,
-      "economic_rationale": "Precious metals \u2014 intraday noise harvesting, NOT cointegrated. Regime gate active.",
-      "score": 0.0
-    }
-  ]
+  "generated_at": "2026-03-23T20:30:07Z",
+  "pairs": []
 }
