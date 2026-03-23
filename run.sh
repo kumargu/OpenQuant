@@ -168,11 +168,17 @@ print(' '.join(sorted(syms)))
     # Latency: ~700ms total (500ms bar fetch + 5μs Rust engine + 200ms order submit)
     # Bottleneck is Alpaca API, not our code. For sub-second latency,
     # replace stream_bars.py with Alpaca WebSocket streaming.
+    mkdir -p "$JOURNAL"
+    local log_file="$JOURNAL/engine.log"
+    echo -e "  Log:     $log_file"
+    echo ""
+
     cd "$ROOT"
     python3 scripts/stream_bars.py $symbols \
         | RUST_LOG=info "$BINARY" live \
             --config "$config_path" \
             --trading-dir "$ROOT/trading" \
+            2> >(tee -a "$log_file" >&2) \
         | python3 scripts/exec_intents.py $exec_flag
 }
 
