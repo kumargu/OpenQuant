@@ -18,6 +18,7 @@
 //! pair-picker --check  # exit 0 if already run today, 1 if not
 //! ```
 
+pub mod daily_scanner;
 pub mod etf_filter;
 pub mod graph;
 pub mod lockfile;
