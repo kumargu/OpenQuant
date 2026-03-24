@@ -45,7 +45,7 @@ CAPITAL_PER_LEG = 10_000  # $ per leg
 MIN_R2 = 0.30             # minimum R² for OLS
 COST_BPS = 12             # round-trip cost in bps
 MIN_R2_ENTRY = 0.85       # tighter R² for actual entry (scan can be looser)
-MAX_HL_ENTRY = 4.0        # tighter HL for entry — faster reversion pairs only
+MAX_HL_ENTRY = 5.0        # loosened from 4.0: HL 4-5d pairs add +$591/90d with 75% win rate
 MIN_ADF_ENTRY = -2.5      # tighter ADF for entry (more negative = stronger)
 EARNINGS_BLACKOUT = 5     # skip entry if either leg has earnings within ±N trading days
 
