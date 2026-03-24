@@ -843,7 +843,7 @@ def main():
         logger.info(f"  {pair:<15} ${pair_pnl[pair]:+.2f}")
     logger.info("=" * 60)
 
-    output = root / "data" / "walkforward_dashboard.html"
+    output = root / "dashboards" / "walkforward_dashboard.html"
     generate_dashboard(day_records, closed_trades, output)
     logger.info(f"Dashboard: file://{output}")
     logger.info(f"Full log:  {LOG_FILE}")

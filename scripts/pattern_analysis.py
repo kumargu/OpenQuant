@@ -458,7 +458,7 @@ def main():
         logger.info(f"  TOP: {r['pair']:<15} AC1={r['autocorr_1']:+.3f} "
                     f"best_hold={best_hold[0]}d win={best_hold[1]['win_rate']*100:.0f}%")
 
-    output = root / "data" / "patterns_dashboard.html"
+    output = root / "dashboards" / "patterns_dashboard.html"
     generate_pattern_dashboard(results, output)
     logger.info(f"\nDashboard: file://{output}")
     logger.info(f"Log: {LOG_FILE}")

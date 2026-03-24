@@ -50,6 +50,25 @@ When scoring pair candidates, consider:
 - **Liquidity** — both legs must be liquid enough to trade
 - **Sector alignment** — same-sector pairs often have stronger economic rationale
 
+## Pair Selection Learnings (from backtesting — see `docs/pair_selection_learnings.md`)
+
+**Always consult `docs/pair_selection_learnings.md` when selecting or evaluating pairs.** Key points:
+
+- **Autocorrelation AC(1) < -0.10** is the best pre-filter for mean-reverting pairs. Run `python3 scripts/pattern_analysis.py` to compute for all candidates
+- **R² ≥ 0.85** is the quality floor — loosening to 0.75 halves the win rate
+- **Beta must be positive (> 0.1) and stable (CV < 0.30)** — negative or unstable beta means the pair relationship is broken
+- **Half-life 2-5 days** matches the observed 4-7 day hold period for winners
+- **|z| > 3.0 at entry is a structural break**, not a reversion signal (0/3 reverted)
+- **Earnings blackout ±5 days** — check `data/earnings_calendar.json`
+- **NOW pairs are the strongest mean-reverters** in our universe (AC1 < -0.42)
+- **SHORT spread trades outperform LONG** (88% vs 59% win rate, confirmed by Stambaugh et al. 2012)
+
+## Pattern Analysis Tools
+
+- `scripts/pattern_analysis.py` — autocorrelation, day-of-week effects, holding curves for all 265 pairs → `dashboards/patterns_dashboard.html`
+- `scripts/daily_walkforward_dashboard.py` — full walk-forward simulation with logging → `dashboards/walkforward_dashboard.html`
+- `scripts/pair_deep_dive.py` — single-pair deep dive with per-bar logging → `data/journal/walkforward.log`
+
 ## Guard Rails
 
 - Exclude ETFs from pair universe (they're baskets, not individual names)
