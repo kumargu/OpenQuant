@@ -183,6 +183,12 @@ def scan_pair(leg_a, leg_b, prices_a, prices_b, formation_end):
         return None
     alpha, beta, r2 = result
     if r2 < MIN_R2:
+        logger.debug(f"[scan] {leg_a}/{leg_b} REJECT r2={r2:.4f} < {MIN_R2}")
+        return None
+
+    # FIX #1: Guard negative/near-zero beta — nonsensical relationship
+    if beta < 0.1:
+        logger.debug(f"[scan] {leg_a}/{leg_b} REJECT beta={beta:.4f} < 0.1 (non-economic)")
         return None
 
     spread = [log_a[i] - alpha - beta * log_b[i] for i in range(n)]
@@ -193,6 +199,7 @@ def scan_pair(leg_a, leg_b, prices_a, prices_b, formation_end):
 
     adf = adf_simple(spread)
     if adf > -2.0:
+        logger.debug(f"[scan] {leg_a}/{leg_b} REJECT adf={adf:.4f} > -2.0")
         return None
 
     # Z-score on last 30 days of formation window
@@ -200,6 +207,15 @@ def scan_pair(leg_a, leg_b, prices_a, prices_b, formation_end):
     mean = sum(window) / len(window)
     std = math.sqrt(sum((s - mean) ** 2 for s in window) / (len(window) - 1))
     if std < 1e-10:
+        return None
+
+    # FIX #3: Guard against tiny spread_std — if spread volatility is too small
+    # relative to the current deviation, the z-score will be extreme and never
+    # cross the exit threshold within max_hold days. Require spread_std to be
+    # at least 50 bps (0.005 in log space).
+    if std < 0.005:
+        logger.debug(f"[scan] {leg_a}/{leg_b} REJECT spread_std={std:.6f} < 0.005 "
+                     f"(too narrow — z will never revert in max_hold)")
         return None
 
     return PairParams(
@@ -241,6 +257,8 @@ def run_simulation(prices, candidates):
     open_trades: list[OpenTrade] = []
     closed_trades: list[ClosedTrade] = []
     day_records: list[DayRecord] = []
+    # FIX #2: Track last known beta per pair to detect instability
+    last_beta: dict[tuple[str, str], float] = {}
     cumulative_pnl = 0.0
 
     for day in range(start_day, total_bars):
@@ -323,6 +341,18 @@ def run_simulation(prices, candidates):
                 params = scan_pair(leg_a, leg_b, prices[leg_a], prices[leg_b], day)
                 if params is None:
                     continue
+
+                # FIX #2: Beta stability — reject if beta changed > 30% from last known
+                pair_key = (leg_a, leg_b)
+                if pair_key in last_beta:
+                    prev = last_beta[pair_key]
+                    if prev > 0 and abs(params.beta - prev) / prev > 0.30:
+                        logger.debug(f"[Day {day:>3}] [BETA_UNSTABLE] {leg_a}/{leg_b} "
+                                     f"beta={params.beta:.4f} prev={prev:.4f} "
+                                     f"change={abs(params.beta - prev) / prev * 100:.1f}%")
+                        continue
+                last_beta[pair_key] = params.beta
+
                 pa = prices[leg_a][day]
                 pb = prices[leg_b][day]
                 z = compute_z(params, pa, pb)

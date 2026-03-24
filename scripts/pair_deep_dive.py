@@ -78,6 +78,11 @@ def log_scan_detail(day, leg_a, leg_b, prices_a, prices_b):
         log(day, "SCAN:REJECT", f"R² too low", r2=f"{r2:.4f}", min=MIN_R2)
         return None
 
+    # FIX #1: Guard negative/near-zero beta
+    if beta < 0.1:
+        log(day, "SCAN:REJECT", f"beta={beta:.4f} < 0.1 (non-economic)")
+        return None
+
     # Spread
     spread = [log_a[i] - alpha - beta * log_b[i] for i in range(n)]
     log(day, "SPREAD", f"last_5_spread=[{', '.join(f'{s:.6f}' for s in spread[-5:])}]")
@@ -108,6 +113,11 @@ def log_scan_detail(day, leg_a, leg_b, prices_a, prices_b):
 
     log(day, "Z-SCORE", f"z={z:.4f}", spread_mean=f"{mean:.6f}", spread_std=f"{std:.6f}",
         current_spread=f"{current_spread:.6f}")
+
+    # FIX #3: Guard against tiny spread_std
+    if std < 0.005:
+        log(day, "SCAN:REJECT", f"spread_std={std:.6f} < 0.005 (too narrow)")
+        return None
 
     params = PairParams(
         leg_a=leg_a, leg_b=leg_b, beta=beta, alpha=alpha,
