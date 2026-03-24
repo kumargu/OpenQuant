@@ -1,0 +1,204 @@
+{
+  "pairs": [
+    {
+      "leg_a": "GOOG",
+      "leg_b": "GOOGL",
+      "economic_rationale": "S&P500 Communication Services: AC1=-0.358"
+    },
+    {
+      "leg_a": "ADSK",
+      "leg_b": "NOW",
+      "economic_rationale": "S&P500 Information Technology: AC1=-0.462"
+    },
+    {
+      "leg_a": "FITB",
+      "leg_b": "PNC",
+      "economic_rationale": "S&P500 Financials: AC1=-0.129"
+    },
+    {
+      "leg_a": "CMS",
+      "leg_b": "DUK",
+      "economic_rationale": "S&P500 Utilities: AC1=-0.137"
+    },
+    {
+      "leg_a": "NTRS",
+      "leg_b": "STT",
+      "economic_rationale": "S&P500 Financials: AC1=-0.193"
+    },
+    {
+      "leg_a": "AZO",
+      "leg_b": "ORLY",
+      "economic_rationale": "S&P500 Consumer Discretionary: AC1=-0.496"
+    },
+    {
+      "leg_a": "AEE",
+      "leg_b": "XEL",
+      "economic_rationale": "S&P500 Utilities: AC1=-0.144"
+    },
+    {
+      "leg_a": "CPRT",
+      "leg_b": "FAST",
+      "economic_rationale": "S&P500 Industrials: AC1=-0.430"
+    },
+    {
+      "leg_a": "DHI",
+      "leg_b": "PHM",
+      "economic_rationale": "S&P500 Consumer Discretionary: AC1=-0.109"
+    },
+    {
+      "leg_a": "INCY",
+      "leg_b": "MTD",
+      "economic_rationale": "S&P500 Health Care: AC1=-0.114"
+    },
+    {
+      "leg_a": "AME",
+      "leg_b": "PH",
+      "economic_rationale": "S&P500 Industrials: AC1=-0.118"
+    },
+    {
+      "leg_a": "BK",
+      "leg_b": "C",
+      "economic_rationale": "S&P500 Financials: AC1=-0.128"
+    },
+    {
+      "leg_a": "MCO",
+      "leg_b": "SPGI",
+      "economic_rationale": "S&P500 Financials: AC1=-0.083"
+    },
+    {
+      "leg_a": "COF",
+      "leg_b": "SYF",
+      "economic_rationale": "S&P500 Financials: AC1=-0.112"
+    },
+    {
+      "leg_a": "APD",
+      "leg_b": "DD",
+      "economic_rationale": "S&P500 Materials: AC1=-0.415"
+    },
+    {
+      "leg_a": "LNT",
+      "leg_b": "NI",
+      "economic_rationale": "S&P500 Utilities: AC1=-0.063"
+    },
+    {
+      "leg_a": "ANET",
+      "leg_b": "NVDA",
+      "economic_rationale": "S&P500 Information Technology: AC1=-0.298"
+    },
+    {
+      "leg_a": "LYV",
+      "leg_b": "NFLX",
+      "economic_rationale": "S&P500 Communication Services: AC1=-0.477"
+    },
+    {
+      "leg_a": "CDNS",
+      "leg_b": "PTC",
+      "economic_rationale": "S&P500 Information Technology: AC1=-0.183"
+    },
+    {
+      "leg_a": "A",
+      "leg_b": "WST",
+      "economic_rationale": "S&P500 Health Care: AC1=-0.181"
+    },
+    {
+      "leg_a": "KVUE",
+      "leg_b": "TAP",
+      "economic_rationale": "S&P500 Consumer Staples: AC1=-0.260"
+    },
+    {
+      "leg_a": "AXP",
+      "leg_b": "BAC",
+      "economic_rationale": "S&P500 Financials: AC1=-0.081"
+    },
+    {
+      "leg_a": "BRO",
+      "leg_b": "MRSH",
+      "economic_rationale": "S&P500 Financials: AC1=-0.063"
+    },
+    {
+      "leg_a": "HBAN",
+      "leg_b": "USB",
+      "economic_rationale": "S&P500 Financials: AC1=-0.087"
+    },
+    {
+      "leg_a": "LRCX",
+      "leg_b": "MU",
+      "economic_rationale": "S&P500 Information Technology: AC1=-0.040"
+    },
+    {
+      "leg_a": "PWR",
+      "leg_b": "TT",
+      "economic_rationale": "S&P500 Industrials: AC1=-0.189"
+    },
+    {
+      "leg_a": "EME",
+      "leg_b": "ETN",
+      "economic_rationale": "S&P500 Industrials: AC1=-0.156"
+    },
+    {
+      "leg_a": "IEX",
+      "leg_b": "UPS",
+      "economic_rationale": "S&P500 Industrials: AC1=-0.131"
+    },
+    {
+      "leg_a": "COIN",
+      "leg_b": "PYPL",
+      "economic_rationale": "S&P500 Financials: AC1=-0.089"
+    },
+    {
+      "leg_a": "RF",
+      "leg_b": "TFC",
+      "economic_rationale": "S&P500 Financials: AC1=-0.048"
+    },
+    {
+      "leg_a": "AEP",
+      "leg_b": "EVRG",
+      "economic_rationale": "S&P500 Utilities: AC1=-0.080"
+    },
+    {
+      "leg_a": "KLAC",
+      "leg_b": "SNDK",
+      "economic_rationale": "S&P500 Information Technology: AC1=-0.088"
+    },
+    {
+      "leg_a": "DOV",
+      "leg_b": "JBHT",
+      "economic_rationale": "S&P500 Industrials: AC1=-0.175"
+    },
+    {
+      "leg_a": "CFG",
+      "leg_b": "KEY",
+      "economic_rationale": "S&P500 Financials: AC1=-0.144"
+    },
+    {
+      "leg_a": "AON",
+      "leg_b": "WTW",
+      "economic_rationale": "S&P500 Financials: AC1=-0.081"
+    },
+    {
+      "leg_a": "IP",
+      "leg_b": "SW",
+      "economic_rationale": "S&P500 Materials: AC1=-0.121"
+    },
+    {
+      "leg_a": "DXCM",
+      "leg_b": "SYK",
+      "economic_rationale": "S&P500 Health Care: AC1=-0.207"
+    },
+    {
+      "leg_a": "ADP",
+      "leg_b": "PAYX",
+      "economic_rationale": "S&P500 Industrials: AC1=-0.008"
+    },
+    {
+      "leg_a": "CIEN",
+      "leg_b": "MPWR",
+      "economic_rationale": "S&P500 Information Technology: AC1=-0.227"
+    },
+    {
+      "leg_a": "HAS",
+      "leg_b": "HLT",
+      "economic_rationale": "S&P500 Consumer Discretionary: AC1=-0.133"
+    }
+  ]
+}
