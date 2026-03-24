@@ -47,6 +47,54 @@ COST_BPS = 12             # round-trip cost in bps
 MIN_R2_ENTRY = 0.85       # tighter R² for actual entry (scan can be looser)
 MAX_HL_ENTRY = 4.0        # tighter HL for entry — faster reversion pairs only
 MIN_ADF_ENTRY = -2.5      # tighter ADF for entry (more negative = stronger)
+EARNINGS_BLACKOUT = 5     # skip entry if either leg has earnings within ±N trading days
+
+
+# ── Earnings calendar ─────────────────────────────────────────────────────────
+
+def load_earnings_calendar():
+    """Load earnings dates from static JSON. Returns {symbol: [day_indices]}."""
+    cal_path = Path(__file__).resolve().parent.parent / "data" / "earnings_calendar.json"
+    if not cal_path.exists():
+        logger.debug("[earnings] No earnings_calendar.json found — filter disabled")
+        return {}
+    with open(cal_path) as f:
+        raw = json.load(f)
+    # raw format: {"AAPL": ["2026-01-30", "2026-05-01"], ...}
+    # We need to convert dates to day indices in our price series.
+    # For now, return raw dates — conversion happens at scan time.
+    return raw
+
+
+def is_near_earnings(symbol, day_idx, total_bars, earnings_cal, blackout=EARNINGS_BLACKOUT):
+    """Check if a day index is within ±blackout days of an earnings date."""
+    dates = earnings_cal.get(symbol, [])
+    if not dates:
+        return False
+    # Map day_idx to approximate date: assume bars are consecutive trading days
+    # starting from ~14 months ago. Day 0 ≈ 2025-01-02, Day 358 ≈ 2026-03-24
+    # 359 bars over ~14.5 months. Approximate: day_idx / 252 years from start.
+    from datetime import datetime, timedelta
+    # End date is approximately today (2026-03-24), bar 0 is ~359 trading days before
+    end_date = datetime(2026, 3, 24)
+    # Trading days ≈ calendar days * 252/365
+    cal_days_back = int(total_bars * 365 / 252)
+    start_date = end_date - timedelta(days=cal_days_back)
+    # Approximate date for this day_idx
+    approx_date = start_date + timedelta(days=int(day_idx * 365 / 252))
+    approx_str = approx_date.strftime("%Y-%m-%d")
+
+    for earn_date_str in dates:
+        try:
+            earn_date = datetime.strptime(earn_date_str, "%Y-%m-%d")
+            diff = abs((approx_date - earn_date).days)
+            # Convert calendar days to approximate trading days
+            trading_diff = int(diff * 252 / 365)
+            if trading_diff <= blackout:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 # ── Data types ────────────────────────────────────────────────────────────────
@@ -264,6 +312,9 @@ def run_simulation(prices, candidates):
     # FIX #2: Track last known beta per pair to detect instability
     last_beta: dict[tuple[str, str], float] = {}
     cumulative_pnl = 0.0
+    earnings_cal = load_earnings_calendar()
+    if earnings_cal:
+        logger.info(f"Earnings calendar loaded: {len(earnings_cal)} symbols")
 
     for day in range(start_day, total_bars):
         daily_pnl = 0.0
@@ -354,6 +405,15 @@ def run_simulation(prices, candidates):
             for leg_a, leg_b in candidates:
                 if leg_a not in prices or leg_b not in prices:
                     continue
+                # Earnings blackout: skip if either leg near earnings
+                if earnings_cal and (
+                    is_near_earnings(leg_a, day, total_bars, earnings_cal) or
+                    is_near_earnings(leg_b, day, total_bars, earnings_cal)
+                ):
+                    logger.debug(f"[Day {day:>3}] [EARNINGS    ] {leg_a}/{leg_b} "
+                                 f"near earnings window — skipping")
+                    continue
+
                 params = scan_pair(leg_a, leg_b, prices[leg_a], prices[leg_b], day)
                 if params is None:
                     continue
