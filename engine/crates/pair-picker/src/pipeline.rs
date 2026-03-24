@@ -647,8 +647,7 @@ mod tests {
             economic_rationale: "cointegrated".into(),
         }];
 
-        let results =
-            run_pipeline_from_candidates(&candidates, &output_path, &provider).unwrap();
+        let results = run_pipeline_from_candidates(&candidates, &output_path, &provider).unwrap();
         let passed: Vec<_> = results.iter().filter(|r| r.passed).collect();
 
         if passed.is_empty() {
@@ -658,7 +657,10 @@ mod tests {
 
         let contents = fs::read_to_string(&output_path).unwrap();
         let output: ActivePairsFile = serde_json::from_str(&contents).unwrap();
-        assert!(!output.pairs.is_empty(), "Expected at least one active pair");
+        assert!(
+            !output.pairs.is_empty(),
+            "Expected at least one active pair"
+        );
 
         let pair = &output.pairs[0];
         let hl = pair.half_life_days;
