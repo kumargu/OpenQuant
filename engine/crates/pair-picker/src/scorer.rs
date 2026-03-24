@@ -6,6 +6,63 @@
 //! - Beta stability: lower CV → higher score
 //! - R² of hedge ratio: higher → higher score
 
+/// Configuration for HL-adaptive max hold time.
+///
+/// OU theory: after `k` half-lives, the expected reversion is `1 - 2^{-k}`.
+/// Setting `max_hold = multiplier * half_life` targets a fixed fraction of
+/// expected reversion before the timeout.  The cap prevents excessive hold
+/// times for slow pairs.
+///
+/// Default: 2.5× half-life, capped at 10 days → ~82% expected reversion.
+///
+/// Reference: Ornstein-Uhlenbeck process theory; see also Krauss (2017),
+/// "Statistical Arbitrage Pairs Trading Strategies: Review and Outlook".
+#[derive(Debug, Clone)]
+pub struct MaxHoldConfig {
+    /// Multiplier applied to the OU half-life to derive max hold duration.
+    /// Default: 2.5 (targets ~82% reversion: 1 - 2^{-2.5} ≈ 0.82).
+    pub hold_multiplier: f64,
+    /// Hard cap on max hold in days regardless of half-life.
+    /// Default: 10 days.
+    pub max_hold_cap: usize,
+}
+
+impl Default for MaxHoldConfig {
+    fn default() -> Self {
+        Self {
+            hold_multiplier: 2.5,
+            max_hold_cap: 10,
+        }
+    }
+}
+
+/// Compute per-pair max hold days from OU half-life.
+///
+/// Formula: `min(ceil(hold_multiplier * half_life), max_hold_cap)`
+///
+/// # Panics / edge cases
+/// - `half_life` must be finite and > 0; returns `max_hold_cap` otherwise
+///   (guards against NaN/Inf propagating into the trading engine).
+/// - Fractional results are rounded **up** (`ceil`) so the pair always gets
+///   at least the full expected reversion window.
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::{MaxHoldConfig, compute_max_hold_days};
+/// let cfg = MaxHoldConfig::default(); // multiplier=2.5, cap=10
+/// assert_eq!(compute_max_hold_days(2.0, &cfg), 5);  // 2.5*2.0=5.0 → 5
+/// assert_eq!(compute_max_hold_days(5.0, &cfg), 10); // 2.5*5.0=12.5 → capped at 10
+/// ```
+pub fn compute_max_hold_days(half_life: f64, config: &MaxHoldConfig) -> usize {
+    if !half_life.is_finite() || half_life <= 0.0 {
+        // Defensive: bad half-life → use the cap (safe upper bound)
+        return config.max_hold_cap;
+    }
+    let raw = config.hold_multiplier * half_life;
+    let days = raw.ceil() as usize;
+    days.min(config.max_hold_cap)
+}
+
 /// Configurable scoring weights. Will be superseded by Thompson sampling (#119),
 /// but kept configurable so they can be tuned via CLI or config file in the meantime.
 #[derive(Debug, Clone)]
@@ -199,5 +256,74 @@ mod tests {
     fn test_nan_r_squared() {
         let score = compute_score(0.01, 10.0, 0.05, f64::NAN, false);
         assert!(score.is_finite(), "NaN R² should not produce NaN score");
+    }
+
+    // -----------------------------------------------------------------------
+    // MaxHoldConfig / compute_max_hold_days tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_max_hold_hl2_gives_5() {
+        // HL=2d → 2.5*2=5.0 → ceil(5.0)=5 (no cap)
+        let cfg = MaxHoldConfig::default();
+        assert_eq!(compute_max_hold_days(2.0, &cfg), 5);
+    }
+
+    #[test]
+    fn test_max_hold_hl5_capped_at_10() {
+        // HL=5d → 2.5*5=12.5 → ceil=13, capped at 10
+        let cfg = MaxHoldConfig::default();
+        assert_eq!(compute_max_hold_days(5.0, &cfg), 10);
+    }
+
+    #[test]
+    fn test_max_hold_hl3_rounds_up() {
+        // HL=3d → 2.5*3=7.5 → ceil(7.5)=8
+        let cfg = MaxHoldConfig::default();
+        assert_eq!(compute_max_hold_days(3.0, &cfg), 8);
+    }
+
+    #[test]
+    fn test_max_hold_exactly_at_cap() {
+        // HL=4d → 2.5*4=10.0 → ceil=10, cap=10 → exactly 10
+        let cfg = MaxHoldConfig::default();
+        assert_eq!(compute_max_hold_days(4.0, &cfg), 10);
+    }
+
+    #[test]
+    fn test_max_hold_nan_halflife_uses_cap() {
+        let cfg = MaxHoldConfig::default();
+        assert_eq!(compute_max_hold_days(f64::NAN, &cfg), 10);
+    }
+
+    #[test]
+    fn test_max_hold_inf_halflife_uses_cap() {
+        let cfg = MaxHoldConfig::default();
+        assert_eq!(compute_max_hold_days(f64::INFINITY, &cfg), 10);
+    }
+
+    #[test]
+    fn test_max_hold_zero_halflife_uses_cap() {
+        let cfg = MaxHoldConfig::default();
+        assert_eq!(compute_max_hold_days(0.0, &cfg), 10);
+    }
+
+    #[test]
+    fn test_max_hold_negative_halflife_uses_cap() {
+        let cfg = MaxHoldConfig::default();
+        assert_eq!(compute_max_hold_days(-1.0, &cfg), 10);
+    }
+
+    #[test]
+    fn test_max_hold_custom_config() {
+        // multiplier=3.0, cap=15
+        let cfg = MaxHoldConfig {
+            hold_multiplier: 3.0,
+            max_hold_cap: 15,
+        };
+        // HL=4d → 3*4=12 → ceil=12 (under cap)
+        assert_eq!(compute_max_hold_days(4.0, &cfg), 12);
+        // HL=6d → 3*6=18 → capped at 15
+        assert_eq!(compute_max_hold_days(6.0, &cfg), 15);
     }
 }

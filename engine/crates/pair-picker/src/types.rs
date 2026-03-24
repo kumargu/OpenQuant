@@ -6,6 +6,7 @@
 //! ## Output: `active_pairs.json`
 //! Validated pairs with statistical properties, ready for the trading engine.
 
+use crate::scorer::{compute_max_hold_days, MaxHoldConfig};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,15 @@ pub struct ActivePair {
     pub economic_rationale: String,
     /// Composite score [0, 1] combining all statistical properties.
     pub score: f64,
+    /// HL-adaptive max hold duration in days.
+    ///
+    /// Derived from `half_life_days` via `MaxHoldConfig`:
+    /// `min(ceil(hold_multiplier * half_life_days), max_hold_cap)`.
+    ///
+    /// The trading engine should use this per-pair limit instead of a fixed
+    /// global cap so that fast pairs (HL=2d) are not held too long and slow
+    /// pairs (HL=4.8d) are given enough time to revert.
+    pub max_hold_days: usize,
 }
 
 /// Output file format.
@@ -123,15 +133,25 @@ impl ValidationResult {
     }
 
     pub fn to_active_pair(&self) -> Option<ActivePair> {
+        self.to_active_pair_with_config(&MaxHoldConfig::default())
+    }
+
+    /// Convert to `ActivePair` with a custom `MaxHoldConfig`.
+    ///
+    /// `max_hold_days` is derived from `half_life_days` using the provided config:
+    /// `min(ceil(hold_multiplier * half_life), max_hold_cap)`.
+    pub fn to_active_pair_with_config(&self, max_hold_cfg: &MaxHoldConfig) -> Option<ActivePair> {
         if !self.passed {
             return None;
         }
+        let half_life_days = self.half_life.unwrap_or(0.0);
+        let max_hold_days = compute_max_hold_days(half_life_days, max_hold_cfg);
         Some(ActivePair {
             leg_a: self.leg_a.clone(),
             leg_b: self.leg_b.clone(),
             alpha: self.alpha.unwrap_or(0.0),
             beta: self.beta.unwrap_or(0.0),
-            half_life_days: self.half_life.unwrap_or(0.0),
+            half_life_days,
             adf_statistic: self.adf_statistic.unwrap_or(0.0),
             adf_pvalue: self.adf_pvalue.unwrap_or(1.0),
             beta_cv: self.beta_cv.unwrap_or(1.0),
@@ -139,6 +159,7 @@ impl ValidationResult {
             regime_robustness: self.regime_robustness.unwrap_or(-1.0),
             economic_rationale: self.economic_rationale.clone(),
             score: self.score,
+            max_hold_days,
         })
     }
 }

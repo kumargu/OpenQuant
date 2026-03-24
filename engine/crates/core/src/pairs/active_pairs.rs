@@ -31,6 +31,16 @@ pub struct ActivePairEntry {
     pub regime_robustness: f64,
     pub economic_rationale: String,
     pub score: f64,
+    /// HL-adaptive max hold duration in days.
+    ///
+    /// Derived by pair-picker from `half_life_days` via `MaxHoldConfig`:
+    /// `min(ceil(hold_multiplier * half_life_days), max_hold_cap)`.
+    ///
+    /// Defaults to 0 when loading legacy `active_pairs.json` files that
+    /// pre-date this field.  The engine should treat 0 as "use global
+    /// `max_hold_bars` from config" for backward compatibility.
+    #[serde(default)]
+    pub max_hold_days: usize,
 }
 
 /// The active_pairs.json file format.
