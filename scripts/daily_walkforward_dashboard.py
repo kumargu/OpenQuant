@@ -40,16 +40,12 @@ ENTRY_Z = 2.0             # |z| > this to enter
 ENTRY_Z_CAP = 3.0         # |z| > this is structural break, NOT reversion (research #192)
 EXIT_Z = 0.5              # |z| < this to exit (at entry; decays over hold period)
 MAX_HOLD = 10             # 10d optimal — shorter hold cuts winners more than losers
-STOP_LOSS_Z = 99.0        # disabled — stops hurt more than they help (crystallize recoverable losses)
-MAX_PAIRS = 5             # increased from 3 to fill expanded universe
-ROTATE = True             # rotation mode: swap weakest held position for stronger signal
-ROTATE_MIN_HOLD = 2       # minimum hold before a position can be rotated out
-ROTATE_Z_ADVANTAGE = 0.0  # swap any loser for any new signal (0.5 was too strict)
+MAX_PAIRS = 3             # max simultaneous pairs
 CAPITAL_PER_LEG = 10_000  # $ per leg
 MIN_R2 = 0.30             # minimum R² for OLS
 COST_BPS = 12             # round-trip cost in bps
 MIN_R2_ENTRY = 0.85       # tighter R² for actual entry (scan can be looser)
-MAX_HL_ENTRY = 5.0        # loosened from 4.0: HL 4-5d pairs add +$591/90d with 75% win rate
+MAX_HL_ENTRY = 4.0        # tighter HL for entry — faster reversion pairs only
 MIN_ADF_ENTRY = -2.5      # tighter ADF for entry (more negative = stronger)
 EARNINGS_BLACKOUT = 5     # skip entry if either leg has earnings within ±N trading days
 
@@ -367,12 +363,7 @@ def run_simulation(prices, candidates):
             effective_exit_z = EXIT_Z - (EXIT_Z - EXIT_Z_FLOOR) * decay_frac  # 0.5 → 0.3
 
             reason = None
-            # Stop-loss: spread diverged WAY further — structural break, cut losses
-            if trade.direction == 1 and z < -STOP_LOSS_Z:
-                reason = "stop_loss"
-            elif trade.direction == -1 and z > STOP_LOSS_Z:
-                reason = "stop_loss"
-            elif bars_held >= MAX_HOLD:
+            if bars_held >= MAX_HOLD:
                 reason = "max_hold"
             elif trade.direction == 1 and z > -effective_exit_z:
                 reason = "reversion"
@@ -407,138 +398,94 @@ def run_simulation(prices, candidates):
         for i in sorted(to_close, reverse=True):
             open_trades.pop(i)
 
-        # ── Scan ALL candidates for signals ──
-        scanned = []
-        for leg_a, leg_b in candidates:
-            if leg_a not in prices or leg_b not in prices:
-                continue
-            if earnings_cal and (
-                is_near_earnings(leg_a, day, total_bars, earnings_cal) or
-                is_near_earnings(leg_b, day, total_bars, earnings_cal)
-            ):
-                continue
-
-            params = scan_pair(leg_a, leg_b, prices[leg_a], prices[leg_b], day)
-            if params is None:
-                continue
-
-            pair_key = (leg_a, leg_b)
-            if pair_key in last_beta:
-                prev = last_beta[pair_key]
-                if prev > 0 and abs(params.beta - prev) / prev > 0.30:
+        # ── Scan for new entries (only if we have capacity) ──
+        n_selected = 0
+        if len(open_trades) < MAX_PAIRS:
+            scanned = []
+            for leg_a, leg_b in candidates:
+                if leg_a not in prices or leg_b not in prices:
                     continue
-            last_beta[pair_key] = params.beta
+                # Earnings blackout: skip if either leg near earnings
+                if earnings_cal and (
+                    is_near_earnings(leg_a, day, total_bars, earnings_cal) or
+                    is_near_earnings(leg_b, day, total_bars, earnings_cal)
+                ):
+                    logger.debug(f"[Day {day:>3}] [EARNINGS    ] {leg_a}/{leg_b} "
+                                 f"near earnings window — skipping")
+                    continue
 
-            if params.r2 < MIN_R2_ENTRY or params.half_life > MAX_HL_ENTRY or params.adf_stat > MIN_ADF_ENTRY:
-                continue
+                params = scan_pair(leg_a, leg_b, prices[leg_a], prices[leg_b], day)
+                if params is None:
+                    continue
 
-            pa = prices[leg_a][day]
-            pb = prices[leg_b][day]
-            z = compute_z(params, pa, pb)
-            if abs(z) > ENTRY_Z and abs(z) <= ENTRY_Z_CAP:
-                scanned.append((params, z, pa, pb))
+                # FIX #2: Beta stability — reject if beta changed > 30% from last known
+                pair_key = (leg_a, leg_b)
+                if pair_key in last_beta:
+                    prev = last_beta[pair_key]
+                    if prev > 0 and abs(params.beta - prev) / prev > 0.30:
+                        logger.debug(f"[Day {day:>3}] [BETA_UNSTABLE] {leg_a}/{leg_b} "
+                                     f"beta={params.beta:.4f} prev={prev:.4f} "
+                                     f"change={abs(params.beta - prev) / prev * 100:.1f}%")
+                        continue
+                last_beta[pair_key] = params.beta
 
-        n_selected = len(scanned)
-        scanned.sort(key=lambda x: abs(x[1]), reverse=True)
-        held_pairs = {(t.pair.leg_a, t.pair.leg_b) for t in open_trades}
+                # Quality gate: tighter filters at entry time
+                # Log analysis showed winning trades have R²>0.85, HL<4d, ADF<-2.5
+                if params.r2 < MIN_R2_ENTRY:
+                    logger.debug(f"[Day {day:>3}] [QUALITY_GATE] {leg_a}/{leg_b} "
+                                 f"r2={params.r2:.4f} < {MIN_R2_ENTRY} (too weak for entry)")
+                    continue
+                if params.half_life > MAX_HL_ENTRY:
+                    logger.debug(f"[Day {day:>3}] [QUALITY_GATE] {leg_a}/{leg_b} "
+                                 f"hl={params.half_life:.2f} > {MAX_HL_ENTRY} (too slow for entry)")
+                    continue
+                if params.adf_stat > MIN_ADF_ENTRY:
+                    logger.debug(f"[Day {day:>3}] [QUALITY_GATE] {leg_a}/{leg_b} "
+                                 f"adf={params.adf_stat:.4f} > {MIN_ADF_ENTRY} (weak stationarity)")
+                    continue
 
-        # ── Fill empty slots ──
-        capacity = MAX_PAIRS - len(open_trades)
-        for params, z, pa, pb in scanned:
-            if capacity <= 0:
-                break
-            if (params.leg_a, params.leg_b) in held_pairs:
-                continue
-            direction = 1 if z < -ENTRY_Z else -1
-            dir_str = "LONG_SPREAD" if direction == 1 else "SHORT_SPREAD"
-            trade = OpenTrade(
-                pair=params, direction=direction,
-                entry_day=day, entry_price_a=pa, entry_price_b=pb,
-                entry_spread=math.log(pa) - params.alpha - params.beta * math.log(pb),
-                entry_z=z,
-            )
-            open_trades.append(trade)
-            held_pairs.add((params.leg_a, params.leg_b))
-            capacity -= 1
+                pa = prices[leg_a][day]
+                pb = prices[leg_b][day]
+                z = compute_z(params, pa, pb)
+                if abs(z) > ENTRY_Z:
+                    # Z-cap: |z| > 2.8 is structural break, not reversion
+                    # Research: OU P(|z|>3) = 0.27%, 0/3 reversions in our data
+                    if abs(z) > ENTRY_Z_CAP:
+                        logger.debug(f"[Day {day:>3}] [Z_CAP       ] {leg_a}/{leg_b} "
+                                     f"|z|={abs(z):.2f} > {ENTRY_Z_CAP} (structural break, skip)")
+                        continue
+                    scanned.append((params, z, pa, pb))
 
-            logger.info(f"[Day {day:>3}] [ENTRY       ] {params.leg_a}/{params.leg_b} {dir_str} | "
-                        f"z={z:.4f} | beta={params.beta:.4f} | r2={params.r2:.4f} | "
-                        f"hl={params.half_life:.2f}d | adf={params.adf_stat:.4f} | "
-                        f"spread_mean={params.spread_mean:.6f} | spread_std={params.spread_std:.6f} | "
-                        f"price_a={pa:.2f} | price_b={pb:.2f}")
+            n_selected = len(scanned)
+            scanned.sort(key=lambda x: abs(x[1]), reverse=True)
+            capacity = MAX_PAIRS - len(open_trades)
 
-        # ── Rotation: swap weakest held position for stronger new signal ──
-        if ROTATE and len(open_trades) >= MAX_PAIRS and scanned:
-            # Score each held position: how much has it reverted? (closer to 0 = better)
-            # A position that's barely moved is a candidate for swap
+            if scanned:
+                logger.debug(f"[Day {day:>3}] [SCAN        ] {n_selected} signals found, capacity={capacity}")
+
+            held_pairs = {(t.pair.leg_a, t.pair.leg_b) for t in open_trades}
             for params, z, pa, pb in scanned:
+                if capacity <= 0:
+                    break
                 if (params.leg_a, params.leg_b) in held_pairs:
                     continue
+                direction = 1 if z < -ENTRY_Z else -1
+                dir_str = "LONG_SPREAD" if direction == 1 else "SHORT_SPREAD"
+                trade = OpenTrade(
+                    pair=params, direction=direction,
+                    entry_day=day, entry_price_a=pa, entry_price_b=pb,
+                    entry_spread=math.log(pa) - params.alpha - params.beta * math.log(pb),
+                    entry_z=z,
+                )
+                open_trades.append(trade)
+                held_pairs.add((params.leg_a, params.leg_b))
+                capacity -= 1
 
-                # Find the weakest held position (held long enough, worst unrealized P&L)
-                worst_idx = None
-                worst_score = float('inf')
-                for i, trade in enumerate(open_trades):
-                    bars_held = day - trade.entry_day
-                    if bars_held < ROTATE_MIN_HOLD:
-                        continue  # too fresh to rotate
-                    # Score = how attractive is keeping this position?
-                    # Use unrealized P&L — negative = losing = candidate for swap
-                    t_pa = prices[trade.pair.leg_a][day]
-                    t_pb = prices[trade.pair.leg_b][day]
-                    unrealized = compute_trade_pnl(trade, t_pa, t_pb)
-                    t_z = abs(compute_z(trade.pair, t_pa, t_pb))
-                    # Only swap if the held position is losing AND the new signal is stronger
-                    if unrealized < 0 and t_z < abs(z) - ROTATE_Z_ADVANTAGE:
-                        if unrealized < worst_score:
-                            worst_score = unrealized
-                            worst_idx = i
-
-                if worst_idx is not None:
-                    # Close the weak position
-                    old = open_trades[worst_idx]
-                    old_pa = prices[old.pair.leg_a][day]
-                    old_pb = prices[old.pair.leg_b][day]
-                    old_pnl = compute_trade_pnl(old, old_pa, old_pb)
-                    old_id = f"{old.pair.leg_a}/{old.pair.leg_b}"
-                    old_dir = "LONG" if old.direction == 1 else "SHORT"
-                    old_held = day - old.entry_day
-
-                    logger.info(f"[Day {day:>3}] [ROTATE_OUT  ] {old_id} {old_dir} | "
-                                f"pnl=${old_pnl:+.2f} | bars_held={old_held} | "
-                                f"replacing with {params.leg_a}/{params.leg_b} |z|={abs(z):.2f}")
-
-                    ct = ClosedTrade(
-                        leg_a=old.pair.leg_a, leg_b=old.pair.leg_b,
-                        direction=old.direction,
-                        entry_day=old.entry_day, exit_day=day,
-                        entry_price_a=old.entry_price_a, exit_price_a=old_pa,
-                        entry_price_b=old.entry_price_b, exit_price_b=old_pb,
-                        pnl_usd=old_pnl, exit_reason="rotation",
-                    )
-                    closed_trades.append(ct)
-                    trades_today.append(ct)
-                    daily_pnl += old_pnl
-
-                    # Open the new position
-                    open_trades.pop(worst_idx)
-                    held_pairs.discard((old.pair.leg_a, old.pair.leg_b))
-
-                    direction = 1 if z < -ENTRY_Z else -1
-                    dir_str = "LONG_SPREAD" if direction == 1 else "SHORT_SPREAD"
-                    new_trade = OpenTrade(
-                        pair=params, direction=direction,
-                        entry_day=day, entry_price_a=pa, entry_price_b=pb,
-                        entry_spread=math.log(pa) - params.alpha - params.beta * math.log(pb),
-                        entry_z=z,
-                    )
-                    open_trades.append(new_trade)
-                    held_pairs.add((params.leg_a, params.leg_b))
-
-                    logger.info(f"[Day {day:>3}] [ROTATE_IN   ] {params.leg_a}/{params.leg_b} {dir_str} | "
-                                f"z={z:.4f} | r2={params.r2:.4f} | hl={params.half_life:.2f}d | "
-                                f"price_a={pa:.2f} | price_b={pb:.2f}")
-                    break  # one rotation per day to avoid churn
+                logger.info(f"[Day {day:>3}] [ENTRY       ] {params.leg_a}/{params.leg_b} {dir_str} | "
+                            f"z={z:.4f} | beta={params.beta:.4f} | r2={params.r2:.4f} | "
+                            f"hl={params.half_life:.2f}d | adf={params.adf_stat:.4f} | "
+                            f"spread_mean={params.spread_mean:.6f} | spread_std={params.spread_std:.6f} | "
+                            f"price_a={pa:.2f} | price_b={pb:.2f}")
 
         cumulative_pnl += daily_pnl
         day_records.append(DayRecord(
