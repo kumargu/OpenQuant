@@ -29,3 +29,4 @@ pub mod stats;
 pub mod test_utils;
 pub mod thompson;
 pub mod types;
+pub mod walk_forward;
