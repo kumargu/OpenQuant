@@ -40,7 +40,8 @@ ENTRY_Z = 2.0             # |z| > this to enter
 ENTRY_Z_CAP = 3.0         # |z| > this is structural break, NOT reversion (research #192)
 EXIT_Z = 0.5              # |z| < this to exit (at entry; decays over hold period)
 MAX_HOLD = 10             # 10d optimal — shorter hold cuts winners more than losers
-MAX_PAIRS = 3             # max simultaneous pairs
+STOP_LOSS_Z = 4.0         # exit if fixed_z diverges beyond ±4σ from entry (structural break)
+MAX_PAIRS = 5             # increased from 3 to fill expanded universe
 CAPITAL_PER_LEG = 10_000  # $ per leg
 MIN_R2 = 0.30             # minimum R² for OLS
 COST_BPS = 12             # round-trip cost in bps
@@ -363,7 +364,12 @@ def run_simulation(prices, candidates):
             effective_exit_z = EXIT_Z - (EXIT_Z - EXIT_Z_FLOOR) * decay_frac  # 0.5 → 0.3
 
             reason = None
-            if bars_held >= MAX_HOLD:
+            # Stop-loss: spread diverged WAY further — structural break, cut losses
+            if trade.direction == 1 and z < -STOP_LOSS_Z:
+                reason = "stop_loss"
+            elif trade.direction == -1 and z > STOP_LOSS_Z:
+                reason = "stop_loss"
+            elif bars_held >= MAX_HOLD:
                 reason = "max_hold"
             elif trade.direction == 1 and z > -effective_exit_z:
                 reason = "reversion"
