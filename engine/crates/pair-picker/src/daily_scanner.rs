@@ -7,6 +7,7 @@
 //!
 //! Outputs actionable signals: which pairs to enter tomorrow at market open.
 
+use crate::stats::adf::adf_test;
 use crate::stats::halflife::estimate_half_life;
 use crate::stats::ols::ols_simple;
 use serde::Serialize;
@@ -28,6 +29,16 @@ pub struct ScannerConfig {
     /// This is intentionally looser than the pipeline gate (`MIN_R_SQUARED = 0.50`):
     /// the scanner is a broad pre-filter, the pipeline is the strict gate.
     pub min_r_squared: f64,
+    /// Maximum ADF test statistic allowed (default: -2.0).
+    ///
+    /// ADF statistics are negative — a more negative value indicates stronger
+    /// evidence of stationarity. Pairs with `adf_stat > max_adf_stat` are
+    /// rejected as lacking cointegration evidence.
+    ///
+    /// Note: the threshold is "maximum allowed" (not "minimum") because ADF
+    /// stats are negative. -2.0 means "must be more negative than -2.0".
+    /// Ref: Engle-Granger two-step cointegration test.
+    pub max_adf_stat: f64,
 }
 
 impl Default for ScannerConfig {
@@ -38,6 +49,7 @@ impl Default for ScannerConfig {
             entry_z: 2.0,
             lookback: 30,
             min_r_squared: 0.30,
+            max_adf_stat: -2.0,
         }
     }
 }
@@ -53,6 +65,9 @@ pub struct ScanResult {
     pub z_score: f64,
     pub spread_std_bps: f64,
     pub r_squared: f64,
+    /// ADF test statistic on the spread (Engle-Granger mode).
+    /// More negative = stronger stationarity evidence.
+    pub adf_statistic: f64,
     pub signal: ScanSignal,
 }
 
@@ -115,6 +130,13 @@ pub fn scan_pair(
         return None;
     }
 
+    // ADF stationarity filter — Engle-Granger mode for cointegration residuals.
+    // Ref: Engle & Granger (1987), "Co-integration and Error Correction".
+    let adf = adf_test(&spread, None, true)?;
+    if adf.test_statistic > config.max_adf_stat {
+        return None; // insufficient stationarity evidence
+    }
+
     // Z-score on rolling window
     let window = &spread[spread.len() - config.lookback..];
     let mean: f64 = window.iter().sum::<f64>() / window.len() as f64;
@@ -151,6 +173,7 @@ pub fn scan_pair(
         z_score: z,
         spread_std_bps,
         r_squared: ols.r_squared,
+        adf_statistic: adf.test_statistic,
         signal,
     })
 }
@@ -180,6 +203,7 @@ pub fn scan_all(
                     z = format!("{:.2}", result.z_score).as_str(),
                     hl = format!("{:.1}d", result.half_life).as_str(),
                     std_bps = format!("{:.0}", result.spread_std_bps).as_str(),
+                    adf = format!("{:.3}", result.adf_statistic).as_str(),
                     signal = ?result.signal,
                     "SIGNAL: pair in sweet spot"
                 );
@@ -243,6 +267,37 @@ mod tests {
         (pa, pb)
     }
 
+    /// Generate two independent random-walk price series.
+    ///
+    /// Two independent I(1) processes are not cointegrated: OLS residuals
+    /// remain I(1) and ADF should fail to reject the unit root.
+    fn independent_random_walk_prices(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
+        let mut state = seed;
+        let mut next = |scale: f64| -> f64 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) as f64 / u32::MAX as f64 - 0.5) * scale
+        };
+
+        // Two independent log-price random walks, different starting values
+        // so OLS regression has non-trivial R² but spurious cointegration.
+        let mut log_a = Vec::with_capacity(n);
+        let mut log_b = Vec::with_capacity(n);
+        let mut a_val = 5.0f64;
+        let mut b_val = 4.0f64;
+        for _ in 0..n {
+            a_val += next(0.03);
+            b_val += next(0.03);
+            log_a.push(a_val);
+            log_b.push(b_val);
+        }
+
+        let pa: Vec<f64> = log_a.iter().map(|x| x.exp()).collect();
+        let pb: Vec<f64> = log_b.iter().map(|x| x.exp()).collect();
+        (pa, pb)
+    }
+
     #[test]
     fn test_scan_pair_in_sweet_spot() {
         let (pa, pb) = ou_prices(200, 3.0, 42);
@@ -258,6 +313,66 @@ mod tests {
             r.r_squared >= 0.30,
             "r_squared={:.3} should be >= 0.30",
             r.r_squared
+        );
+        // ADF statistic must be more negative than -2.0
+        assert!(
+            r.adf_statistic <= -2.0,
+            "adf_statistic={:.3} should be <= -2.0 for stationary OU spread",
+            r.adf_statistic
+        );
+    }
+
+    #[test]
+    fn test_scan_pair_adf_field_populated() {
+        // Verify the adf_statistic field is present and finite on a passing result
+        let (pa, pb) = ou_prices(200, 3.0, 42);
+        let config = ScannerConfig::default();
+        let result = scan_pair("A", "B", &pa, &pb, &config).expect("OU pair should pass");
+        assert!(
+            result.adf_statistic.is_finite(),
+            "adf_statistic must be finite, got {}",
+            result.adf_statistic
+        );
+        assert!(
+            result.adf_statistic < 0.0,
+            "adf_statistic should be negative for a stationary spread, got {}",
+            result.adf_statistic
+        );
+    }
+
+    #[test]
+    fn test_scan_pair_random_walk_spread_rejected() {
+        // Two independent random walks: OLS residuals are I(1) (spurious regression).
+        // The ADF filter must reject pairs lacking stationarity evidence.
+        // We use 500 observations for statistical power and the Engle-Granger -2.0 threshold.
+        let (pa, pb) = independent_random_walk_prices(500, 123);
+        // Disable all other filters so we isolate the ADF gate
+        let config = ScannerConfig {
+            min_half_life: 0.1,
+            max_half_life: 1000.0,
+            min_r_squared: 0.0,
+            max_adf_stat: -2.0, // keep the ADF gate active
+            ..ScannerConfig::default()
+        };
+        let result = scan_pair("X", "Y", &pa, &pb, &config);
+        assert!(
+            result.is_none(),
+            "random-walk spread should be rejected by ADF filter"
+        );
+    }
+
+    #[test]
+    fn test_scan_pair_adf_threshold_enforced() {
+        // Set max_adf_stat impossibly tight so even a stationary OU pair is rejected
+        let (pa, pb) = ou_prices(200, 3.0, 42);
+        let config = ScannerConfig {
+            max_adf_stat: -100.0, // nothing can be this stationary
+            ..ScannerConfig::default()
+        };
+        let result = scan_pair("A", "B", &pa, &pb, &config);
+        assert!(
+            result.is_none(),
+            "pair should be rejected when max_adf_stat is set below its actual ADF stat"
         );
     }
 
