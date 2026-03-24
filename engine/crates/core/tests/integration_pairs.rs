@@ -45,6 +45,8 @@ fn test_pair(leg_a: &str, leg_b: &str, alpha: f64, beta: f64) -> ActivePairEntry
         regime_robustness: 0.9,
         economic_rationale: "test".into(),
         score: 0.9,
+        // hl=10d → min(ceil(2.5*10), 10) = 10 (capped)
+        max_hold_days: 10,
     }
 }
 

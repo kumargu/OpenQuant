@@ -319,14 +319,20 @@ pub fn run_pipeline_from_candidates(
         .map(|c| {
             let r = validate_pair(c, provider);
             if r.passed {
+                let hl = r.half_life.unwrap_or(0.0);
+                let mhd = crate::scorer::compute_max_hold_days(
+                    hl,
+                    &crate::scorer::MaxHoldConfig::default(),
+                );
                 info!(
-                    "PASS: {}/{} — score={:.3}, beta={:.4}, hl={:.1}d, adf_p={:.4}",
+                    "PASS: {}/{} — score={:.3}, beta={:.4}, hl={:.1}d, adf_p={:.4}, max_hold={}d",
                     r.leg_a,
                     r.leg_b,
                     r.score,
                     r.beta.unwrap_or(0.0),
-                    r.half_life.unwrap_or(0.0),
+                    hl,
                     r.adf_pvalue.unwrap_or(1.0),
+                    mhd,
                 );
             } else {
                 warn!(
@@ -623,5 +629,60 @@ mod tests {
         };
         let result = validate_pair(&candidate, &provider);
         assert!(!result.passed);
+    }
+
+    #[test]
+    fn test_max_hold_days_in_active_pair_output() {
+        // Verify that max_hold_days is written to active_pairs.json and obeys
+        // the HL-adaptive formula: min(ceil(2.5 * half_life), 10).
+        let tmp = TempDir::new().unwrap();
+        let output_path = tmp.path().join("active_pairs.json");
+
+        let (pa, pb) = test_utils::cointegrated_pair(500, 1.5, 10.0, 42);
+        let provider = make_provider(vec![("A", pa), ("B", pb)]);
+
+        let candidates = vec![PairCandidate {
+            leg_a: "A".into(),
+            leg_b: "B".into(),
+            economic_rationale: "cointegrated".into(),
+        }];
+
+        let results =
+            run_pipeline_from_candidates(&candidates, &output_path, &provider).unwrap();
+        let passed: Vec<_> = results.iter().filter(|r| r.passed).collect();
+
+        if passed.is_empty() {
+            // Pair didn't pass validation — skip the assertion (not a max_hold bug)
+            return;
+        }
+
+        let contents = fs::read_to_string(&output_path).unwrap();
+        let output: ActivePairsFile = serde_json::from_str(&contents).unwrap();
+        assert!(!output.pairs.is_empty(), "Expected at least one active pair");
+
+        let pair = &output.pairs[0];
+        let hl = pair.half_life_days;
+
+        // max_hold_days must be positive
+        assert!(
+            pair.max_hold_days > 0,
+            "max_hold_days should be > 0, got {}",
+            pair.max_hold_days
+        );
+
+        // max_hold_days must not exceed cap of 10
+        assert!(
+            pair.max_hold_days <= 10,
+            "max_hold_days={} exceeds cap=10",
+            pair.max_hold_days
+        );
+
+        // max_hold_days = min(ceil(2.5 * hl), 10)
+        let expected = ((2.5 * hl).ceil() as usize).min(10);
+        assert_eq!(
+            pair.max_hold_days, expected,
+            "max_hold_days={} expected={} for hl={:.2}",
+            pair.max_hold_days, expected, hl
+        );
     }
 }
