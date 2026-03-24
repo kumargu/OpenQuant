@@ -1,14 +1,16 @@
 {
-  "trades": 29,
+  "trades": 30,
   "winners": 20,
-  "win_rate": 69.0,
-  "total_pnl": 3396.89,
-  "reversion_exits": 14,
-  "maxhold_exits": 15,
+  "win_rate": 66.7,
+  "total_pnl": 1843.26,
+  "reversion_exits": 12,
+  "maxhold_exits": 18,
   "config": {
     "formation_days": 90,
     "entry_z": 2.0,
+    "entry_z_cap": 3.0,
     "exit_z": 0.5,
+    "exit_z_floor": 0.3,
     "max_hold": 10,
     "max_pairs": 3,
     "capital_per_leg": 10000,
@@ -19,20 +21,40 @@
     "cost_bps": 12
   },
   "per_pair": {
-    "DAL/UAL": {
-      "trades": 3,
-      "pnl": 650.49,
-      "winners": 2
+    "MCO/SPGI": {
+      "trades": 7,
+      "pnl": 926.47,
+      "winners": 6
     },
     "V/MA": {
-      "trades": 3,
-      "pnl": 173.8,
-      "winners": 2
+      "trades": 1,
+      "pnl": -51.46,
+      "winners": 0
     },
-    "MCO/SPGI": {
-      "trades": 6,
-      "pnl": 834.09,
-      "winners": 5
+    "DAL/UAL": {
+      "trades": 4,
+      "pnl": 1101.25,
+      "winners": 3
+    },
+    "C/JPM": {
+      "trades": 1,
+      "pnl": -233.04,
+      "winners": 0
+    },
+    "HD/LOW": {
+      "trades": 4,
+      "pnl": -730.12,
+      "winners": 1
+    },
+    "XOM/CVX": {
+      "trades": 1,
+      "pnl": 77.15,
+      "winners": 1
+    },
+    "FDX/UPS": {
+      "trades": 1,
+      "pnl": 8.02,
+      "winners": 1
     },
     "GS/MS": {
       "trades": 1,
@@ -49,25 +71,10 @@
       "pnl": 58.95,
       "winners": 1
     },
-    "MU/TXN": {
-      "trades": 1,
-      "pnl": 1772.81,
-      "winners": 1
-    },
-    "WM/RSG": {
-      "trades": 1,
-      "pnl": 124.23,
-      "winners": 1
-    },
     "PSX/VLO": {
-      "trades": 4,
-      "pnl": 658.49,
-      "winners": 3
-    },
-    "HD/LOW": {
       "trades": 3,
-      "pnl": -622.59,
-      "winners": 1
+      "pnl": 939.42,
+      "winners": 3
     },
     "BAC/WFC": {
       "trades": 4,
@@ -80,5 +87,5 @@
       "winners": 1
     }
   },
-  "sharpe": 4.479
+  "sharpe": 3.577
 }

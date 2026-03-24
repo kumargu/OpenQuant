@@ -37,8 +37,9 @@ logger.addHandler(_sh)
 
 FORMATION_DAYS = 90       # lookback for pair selection
 ENTRY_Z = 2.0             # |z| > this to enter
-EXIT_Z = 0.5              # |z| < this to exit
-MAX_HOLD = 10             # max days in a trade
+ENTRY_Z_CAP = 3.0         # |z| > this is structural break, NOT reversion (research #192)
+EXIT_Z = 0.5              # |z| < this to exit (at entry; decays over hold period)
+MAX_HOLD = 10             # 10d optimal — shorter hold cuts winners more than losers
 MAX_PAIRS = 3             # max simultaneous pairs
 CAPITAL_PER_LEG = 10_000  # $ per leg
 MIN_R2 = 0.30             # minimum R² for OLS
@@ -293,17 +294,29 @@ def run_simulation(prices, candidates):
                 current_spread = math.log(pa) - trade.pair.alpha - trade.pair.beta * math.log(pb)
                 rolling_z = (current_spread - rm) / rs if rs > 1e-10 else 0
 
+            # Time-decay preview for logging
+            _decay = min(bars_held / MAX_HOLD, 1.0)
+            _eff_exit = EXIT_Z * (1.0 - _decay)
+
             logger.debug(f"[Day {day:>3}] [HOLDING     ] {dir_str} {pair_id} | "
                          f"bars_held={bars_held} | fixed_z={z:.4f} | rolling_z={rolling_z:.4f} | "
-                         f"drift={abs(z - rolling_z):.4f} | unrealized=${unrealized:+.2f} | "
-                         f"price_a={pa:.2f} | price_b={pb:.2f}")
+                         f"drift={abs(z - rolling_z):.4f} | exit_thresh={_eff_exit:.3f} | "
+                         f"unrealized=${unrealized:+.2f} | price_a={pa:.2f} | price_b={pb:.2f}")
+
+            # Time-decay exit: tighten exit_z from EXIT_Z → EXIT_Z_FLOOR over holding period
+            # Rationale (Leung & Li 2015): conditional reversion probability decreases
+            # with elapsed time. If it hasn't reverted yet, lower the bar for exiting.
+            # Floor at 0.3 — don't exit just because z is slightly non-zero.
+            EXIT_Z_FLOOR = 0.3
+            decay_frac = min(bars_held / MAX_HOLD, 1.0)
+            effective_exit_z = EXIT_Z - (EXIT_Z - EXIT_Z_FLOOR) * decay_frac  # 0.5 → 0.3
 
             reason = None
             if bars_held >= MAX_HOLD:
                 reason = "max_hold"
-            elif trade.direction == 1 and z > -EXIT_Z:
+            elif trade.direction == 1 and z > -effective_exit_z:
                 reason = "reversion"
-            elif trade.direction == -1 and z < EXIT_Z:
+            elif trade.direction == -1 and z < effective_exit_z:
                 reason = "reversion"
 
             if reason:
@@ -314,7 +327,7 @@ def run_simulation(prices, candidates):
 
                 logger.info(f"[Day {day:>3}] [EXIT:{reason.upper():<7}] {pair_id} {dir_str} | "
                             f"pnl=${pnl:+.2f} | raw_pnl=${pnl + cost:+.2f} | cost=${cost:.2f} | "
-                            f"fixed_z={z:.4f} | bars_held={bars_held} | "
+                            f"fixed_z={z:.4f} | exit_thresh={effective_exit_z:.3f} | bars_held={bars_held} | "
                             f"ret_a={ret_a:+.2f}% | ret_b={ret_b:+.2f}% | "
                             f"beta={trade.pair.beta:.4f}")
 
@@ -375,6 +388,12 @@ def run_simulation(prices, candidates):
                 pb = prices[leg_b][day]
                 z = compute_z(params, pa, pb)
                 if abs(z) > ENTRY_Z:
+                    # Z-cap: |z| > 2.8 is structural break, not reversion
+                    # Research: OU P(|z|>3) = 0.27%, 0/3 reversions in our data
+                    if abs(z) > ENTRY_Z_CAP:
+                        logger.debug(f"[Day {day:>3}] [Z_CAP       ] {leg_a}/{leg_b} "
+                                     f"|z|={abs(z):.2f} > {ENTRY_Z_CAP} (structural break, skip)")
+                        continue
                     scanned.append((params, z, pa, pb))
 
             n_selected = len(scanned)
