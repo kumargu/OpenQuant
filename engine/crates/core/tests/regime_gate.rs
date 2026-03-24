@@ -37,7 +37,13 @@ fn easy_trading() -> PairsTradingConfig {
 }
 
 /// Feed both legs at stable-ish prices to warm up or re-center rolling stats.
-/// Adds tiny jitter to prevent std_dev = 0 (which blocks z-score computation).
+///
+/// Uses realistic spread oscillation (±5%) so that `entry_std` at the end of warmup
+/// is proportional to the entry spread magnitude (A=90 → spread ≈ -0.105). With
+/// tiny jitter (±0.1%), entry_std ≈ 0.001 and the entry at A=90 would be ≈100σ —
+/// far beyond any reasonable stop-loss threshold — triggering a stop on the very
+/// first hold bar. Realistic oscillation gives entry_std ≈ 0.05, so entry at A=90
+/// produces exit_z ≈ -2, within the normal [-stop_z, -entry_z] operating range.
 fn feed_neutral(
     state: &mut PairState,
     config: &PairConfig,
@@ -46,8 +52,9 @@ fn feed_neutral(
     count: usize,
 ) {
     for i in 0..count {
-        // Tiny oscillation: ±0.1% so spread has nonzero std dev
-        let jitter = 0.001 * ((i as f64 * 0.7).sin());
+        // Realistic oscillation: ±5% so spread std_dev ≈ 0.05
+        // With A=90 entry, spread ≈ -0.105, entry_z ≈ -0.105/0.05 ≈ -2.1
+        let jitter = 0.05 * ((i as f64 * 0.7).sin());
         state.on_price(&config.leg_a, 100.0 * (1.0 + jitter), config, trading, *ts);
         state.on_price(&config.leg_b, 100.0, config, trading, *ts);
         *ts += 60_000;
