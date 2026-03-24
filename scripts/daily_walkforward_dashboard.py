@@ -43,6 +43,9 @@ MAX_PAIRS = 3             # max simultaneous pairs
 CAPITAL_PER_LEG = 10_000  # $ per leg
 MIN_R2 = 0.30             # minimum R² for OLS
 COST_BPS = 12             # round-trip cost in bps
+MIN_R2_ENTRY = 0.85       # tighter R² for actual entry (scan can be looser)
+MAX_HL_ENTRY = 4.0        # tighter HL for entry — faster reversion pairs only
+MIN_ADF_ENTRY = -2.5      # tighter ADF for entry (more negative = stronger)
 
 
 # ── Data types ────────────────────────────────────────────────────────────────
@@ -352,6 +355,21 @@ def run_simulation(prices, candidates):
                                      f"change={abs(params.beta - prev) / prev * 100:.1f}%")
                         continue
                 last_beta[pair_key] = params.beta
+
+                # Quality gate: tighter filters at entry time
+                # Log analysis showed winning trades have R²>0.85, HL<4d, ADF<-2.5
+                if params.r2 < MIN_R2_ENTRY:
+                    logger.debug(f"[Day {day:>3}] [QUALITY_GATE] {leg_a}/{leg_b} "
+                                 f"r2={params.r2:.4f} < {MIN_R2_ENTRY} (too weak for entry)")
+                    continue
+                if params.half_life > MAX_HL_ENTRY:
+                    logger.debug(f"[Day {day:>3}] [QUALITY_GATE] {leg_a}/{leg_b} "
+                                 f"hl={params.half_life:.2f} > {MAX_HL_ENTRY} (too slow for entry)")
+                    continue
+                if params.adf_stat > MIN_ADF_ENTRY:
+                    logger.debug(f"[Day {day:>3}] [QUALITY_GATE] {leg_a}/{leg_b} "
+                                 f"adf={params.adf_stat:.4f} > {MIN_ADF_ENTRY} (weak stationarity)")
+                    continue
 
                 pa = prices[leg_a][day]
                 pb = prices[leg_b][day]
