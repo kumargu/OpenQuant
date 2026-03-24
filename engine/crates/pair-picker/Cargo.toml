@@ -8,6 +8,10 @@ description = "Statistical validation binary for pairs trading candidate selecti
 name = "pair-picker"
 path = "src/main.rs"
 
+[[bin]]
+name = "walk-forward"
+path = "src/bin/walk_forward_main.rs"
+
 [lib]
 name = "pair_picker"
 path = "src/lib.rs"
