@@ -22,6 +22,12 @@ pub struct ScannerConfig {
     pub entry_z: f64,
     /// Rolling window for z-score computation (default: 30 days).
     pub lookback: usize,
+    /// Minimum OLS R² for the spread regression (default: 0.30).
+    ///
+    /// Pairs below this threshold have insufficient linear relationship.
+    /// This is intentionally looser than the pipeline gate (`MIN_R_SQUARED = 0.50`):
+    /// the scanner is a broad pre-filter, the pipeline is the strict gate.
+    pub min_r_squared: f64,
 }
 
 impl Default for ScannerConfig {
@@ -31,6 +37,7 @@ impl Default for ScannerConfig {
             max_half_life: 5.0,
             entry_z: 2.0,
             lookback: 30,
+            min_r_squared: 0.30,
         }
     }
 }
@@ -91,8 +98,8 @@ pub fn scan_pair(
 
     // OLS regression
     let ols = ols_simple(&log_b, &log_a)?;
-    if ols.r_squared < 0.2 {
-        return None; // too weak
+    if ols.r_squared < config.min_r_squared {
+        return None; // too weak — insufficient linear relationship
     }
 
     // Compute spread
@@ -246,6 +253,28 @@ mod tests {
         assert!(result.is_some(), "pair with HL=3 should be in sweet spot");
         let r = result.unwrap();
         assert!(r.half_life > 1.5 && r.half_life < 6.0, "hl={}", r.half_life);
+        // R² must clear the 0.30 threshold (the sweet-spot spec from #178)
+        assert!(
+            r.r_squared >= 0.30,
+            "r_squared={:.3} should be >= 0.30",
+            r.r_squared
+        );
+    }
+
+    #[test]
+    fn test_scan_pair_weak_r_squared_rejected() {
+        // Set min_r_squared higher than what the default OU process achieves
+        // to verify the threshold is actually enforced via config.
+        let (pa, pb) = ou_prices(200, 3.0, 42);
+        let config = ScannerConfig {
+            min_r_squared: 0.9999, // impossibly high — should reject every pair
+            ..ScannerConfig::default()
+        };
+        let result = scan_pair("A", "B", &pa, &pb, &config);
+        assert!(
+            result.is_none(),
+            "pair should be rejected when min_r_squared is set above its actual R²"
+        );
     }
 
     #[test]
