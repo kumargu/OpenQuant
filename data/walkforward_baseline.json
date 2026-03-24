@@ -1,0 +1,84 @@
+{
+  "trades": 29,
+  "winners": 20,
+  "win_rate": 69.0,
+  "total_pnl": 3396.89,
+  "reversion_exits": 14,
+  "maxhold_exits": 15,
+  "config": {
+    "formation_days": 90,
+    "entry_z": 2.0,
+    "exit_z": 0.5,
+    "max_hold": 10,
+    "max_pairs": 3,
+    "capital_per_leg": 10000,
+    "min_r2": 0.3,
+    "min_r2_entry": 0.85,
+    "max_hl_entry": 4.0,
+    "min_adf_entry": -2.5,
+    "cost_bps": 12
+  },
+  "per_pair": {
+    "DAL/UAL": {
+      "trades": 3,
+      "pnl": 650.49,
+      "winners": 2
+    },
+    "V/MA": {
+      "trades": 3,
+      "pnl": 173.8,
+      "winners": 2
+    },
+    "MCO/SPGI": {
+      "trades": 6,
+      "pnl": 834.09,
+      "winners": 5
+    },
+    "GS/MS": {
+      "trades": 1,
+      "pnl": -474.52,
+      "winners": 0
+    },
+    "COST/WMT": {
+      "trades": 1,
+      "pnl": -152.77,
+      "winners": 0
+    },
+    "UBER/LYFT": {
+      "trades": 1,
+      "pnl": 58.95,
+      "winners": 1
+    },
+    "MU/TXN": {
+      "trades": 1,
+      "pnl": 1772.81,
+      "winners": 1
+    },
+    "WM/RSG": {
+      "trades": 1,
+      "pnl": 124.23,
+      "winners": 1
+    },
+    "PSX/VLO": {
+      "trades": 4,
+      "pnl": 658.49,
+      "winners": 3
+    },
+    "HD/LOW": {
+      "trades": 3,
+      "pnl": -622.59,
+      "winners": 1
+    },
+    "BAC/WFC": {
+      "trades": 4,
+      "pnl": 290.63,
+      "winners": 3
+    },
+    "LMT/NOC": {
+      "trades": 1,
+      "pnl": 83.24,
+      "winners": 1
+    }
+  },
+  "sharpe": 4.479
+}

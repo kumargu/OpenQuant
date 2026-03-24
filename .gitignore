@@ -20,6 +20,11 @@ data/journal/*.db-shm
 
 # Engine logs (append-mode, local only)
 data/journal/engine.log
+data/journal/engine.log.*
+data/journal/walkforward.log
+
+# Generated dashboards
+data/*.html
 
 # Bar data (too large for git — backfilled locally from Alpaca API)
 data/experiment_bars*.json
