@@ -125,13 +125,20 @@ class ClosedTrade:
 
 
 def compute_pnl(trade, exit_pa, exit_pb):
+    """Dollar-neutral P&L: equal $ per leg, no beta scaling in P&L.
+
+    Beta is used for spread z-score (entry signal), NOT for P&L.
+    Both legs get $capital_per_leg of actual exposure.
+    Previous bug: beta-scaling the B leg meant low-beta pairs had
+    40-50% of B-leg capital sitting idle in P&L terms.
+    """
     c = trade.capital_per_leg
     ret_a = (exit_pa - trade.entry_pa) / trade.entry_pa
     ret_b = (exit_pb - trade.entry_pb) / trade.entry_pb
-    if trade.direction == 1:
-        pnl = c * ret_a - c * trade.params.beta * ret_b
-    else:
-        pnl = -c * ret_a + c * trade.params.beta * ret_b
+    if trade.direction == 1:  # long A, short B
+        pnl = c * ret_a - c * ret_b
+    else:  # short A, long B
+        pnl = -c * ret_a + c * ret_b
     cost = 2 * c * COST_BPS / 10_000
     return pnl - cost
 
