@@ -85,7 +85,7 @@ MIN_ADF_ENTRY = -2.5
 # OU theory: after hold_multiplier half-lives, expected reversion is 1 - 2^{-multiplier}.
 # 2.5x gives ~82% reversion; 2.0x gives ~75%.  Default 2.5x matches pair-picker default.
 HOLD_MULTIPLIER = 2.5
-MAX_HOLD_CAP = 10           # hard cap in days regardless of half-life
+MAX_HOLD_CAP = 10           # sweep shows 7-10d tie at $13/d; longer = more reversions
 
 # Rotation parameters — passed to Rust should_rotate.
 # cost_per_day: one-way 5 bps * 2 legs / expected_hold_days (≈ 2.5d) ≈ 0.001/day
