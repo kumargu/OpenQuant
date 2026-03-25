@@ -90,11 +90,19 @@ pub fn load_active_pairs(path: &Path) -> Option<(ActivePairsFile, Vec<PairConfig
         .pairs
         .iter()
         .map(|p| {
+            // κ = ln(2) / half_life_days — derived from OU theory.
+            // Guards: half_life_days must be finite and > 0; 0.0 otherwise.
+            let kappa = if p.half_life_days.is_finite() && p.half_life_days > 0.0 {
+                f64::ln(2.0) / p.half_life_days
+            } else {
+                0.0
+            };
             info!(
                 pair = format!("{}/{}", p.leg_a, p.leg_b).as_str(),
                 beta = format!("{:.4}", p.beta).as_str(),
                 score = format!("{:.3}", p.score).as_str(),
                 half_life = format!("{:.1}", p.half_life_days).as_str(),
+                kappa = format!("{:.4}", kappa).as_str(),
                 "Loaded active pair"
             );
             PairConfig {
@@ -102,6 +110,7 @@ pub fn load_active_pairs(path: &Path) -> Option<(ActivePairsFile, Vec<PairConfig
                 leg_b: p.leg_b.clone(),
                 alpha: p.alpha,
                 beta: p.beta,
+                kappa,
             }
         })
         .collect();

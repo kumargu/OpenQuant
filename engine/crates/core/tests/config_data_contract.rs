@@ -22,6 +22,7 @@ fn test_pair() -> PairConfig {
         leg_b: "B".into(),
         alpha: 0.0,
         beta: 1.0,
+        kappa: 0.0,
     }
 }
 

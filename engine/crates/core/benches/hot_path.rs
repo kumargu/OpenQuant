@@ -225,6 +225,7 @@ fn bench_pairs_on_price_no_signal(c: &mut Criterion) {
         leg_b: "B".into(),
         alpha: 0.0,
         beta: 1.0,
+        kappa: f64::ln(2.0) / 10.0,
     };
     let trading = PairsTradingConfig::default();
     let mut state = PairState::new();
@@ -253,6 +254,7 @@ fn bench_pairs_on_price_with_signal(c: &mut Criterion) {
         leg_b: "B".into(),
         alpha: 0.0,
         beta: 1.0,
+        kappa: f64::ln(2.0) / 10.0,
     };
     let trading = PairsTradingConfig {
         entry_z: 1.5,

@@ -278,6 +278,7 @@ mod tests {
             leg_b: "SLV".into(),
             alpha: 0.0,
             beta: 0.37,
+            kappa: 0.0,
         }
     }
 
@@ -287,6 +288,7 @@ mod tests {
             leg_b: "JPM".into(),
             alpha: 0.0,
             beta: 1.39,
+            kappa: 0.0,
         }
     }
 
