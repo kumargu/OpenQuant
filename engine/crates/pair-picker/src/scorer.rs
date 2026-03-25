@@ -350,6 +350,183 @@ pub fn expected_return_per_dollar_per_day(
     numerator / denominator
 }
 
+// ---------------------------------------------------------------------------
+// Opportunity-cost rotation
+// ---------------------------------------------------------------------------
+//
+// When capital is locked in a slow-reverting trade, a better signal may be
+// waiting in the queue.  The rotation logic computes the **remaining expected
+// return per dollar per day** for each active trade and compares it against
+// the best queued signal's expected return per dollar per day.
+//
+// Rotation condition (Leung & Li 2015, adapted):
+//   REPLACE if: unrealized_return > 0          (i.e. the trade has positive P&L)
+//           AND remaining_per_day < best_queued_per_day - 2 × cost_per_day
+//
+// The 2× cost buffer prevents churning in marginal cases: we only rotate if
+// the new trade is clearly worth the round-trip transaction cost.
+//
+// References:
+//   Leung & Li (2015), "Optimal Mean Reversion Trading: Mathematical Analysis
+//   and Practical Applications", World Scientific Publishing.
+//   Avellaneda & Lee (2010), §4 (capital reallocation).
+
+/// Configuration for the opportunity-cost rotation engine.
+///
+/// All fields have `Default` impls so callers can override only what they need.
+#[derive(Debug, Clone)]
+pub struct RotationConfig {
+    /// Transaction cost per dollar deployed per day in the same units as
+    /// `remaining_per_day` (expected return / $ / day).
+    ///
+    /// Used as buffer: only rotate when the improvement exceeds `2 × cost_per_day`
+    /// to avoid churning on marginal improvements.
+    ///
+    /// Default: 5 basis points (0.0005) one-way, so 0.001/day round-trip.
+    /// Expressed as a daily rate: `COST_BPS / 10_000 * 2 / expected_hold_days`.
+    /// A conservative 0.001 corresponds to a 2-day expected hold and 5 bps/side.
+    pub cost_per_day: f64,
+    /// Maximum number of rotation evictions per day to limit churn.
+    ///
+    /// Even if many trades qualify for rotation, we cap at this many per day.
+    /// Default: 2 (limits daily turnover while still allowing opportunity capture).
+    pub max_rotations_per_day: usize,
+}
+
+impl Default for RotationConfig {
+    fn default() -> Self {
+        Self {
+            cost_per_day: 0.001,
+            max_rotations_per_day: 2,
+        }
+    }
+}
+
+/// Compute the remaining expected return per dollar per day for an active trade.
+///
+/// This is the **forward-looking** counterpart to `expected_return_per_dollar_per_day`:
+/// instead of computing the expected return over the full holding period from entry,
+/// it estimates how much additional return per day is still left to be captured
+/// given that the trade has already been held for `days_held` days and has
+/// accumulated `unrealized_return` (as a fraction of capital deployed).
+///
+/// Formula:
+/// ```text
+///   remaining_edge = expected_total_return - unrealized_return
+///   remaining_days = max(max_hold - days_held, 1)   // guard against exhausted hold
+///   remaining_per_day = remaining_edge / remaining_days
+/// ```
+///
+/// Where `expected_total_return` is approximated from entry-time signal metrics as:
+/// ```text
+///   expected_total_return = |z_entry| × sigma_spread
+/// ```
+/// This is the expected spread reversion magnitude: the spread was `z_entry` standard
+/// deviations displaced and is expected to revert to zero, capturing ≈ one sigma of
+/// spread move per standard deviation.
+///
+/// # Parameters
+/// - `z_entry`: z-score at trade entry (used to estimate total expected return)
+/// - `sigma_spread`: rolling spread standard deviation at entry
+/// - `unrealized_return`: fraction of capital already captured (can be negative)
+/// - `days_held`: number of bars since entry
+/// - `max_hold`: per-pair maximum hold duration in days
+///
+/// # Returns
+/// - `> 0.0` if there is positive remaining edge per day
+/// - `≤ 0.0` if the trade has exhausted its edge or is losing money
+/// - `0.0` on any non-finite input (guards NaN propagation)
+///
+/// Reference: Leung & Li (2015), §3.1 — remaining value of an open position.
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::compute_remaining_per_day;
+/// // z=2.5 at entry, sigma=0.02, no P&L yet, held 2 of 10 days
+/// let r = compute_remaining_per_day(2.5, 0.02, 0.0, 2, 10);
+/// assert!(r > 0.0);
+/// // Fully captured return → remaining ≈ 0 (or negative)
+/// let r2 = compute_remaining_per_day(2.5, 0.02, 0.05, 9, 10);
+/// // remaining_edge = 2.5*0.02 - 0.05 = 0.05 - 0.05 = 0.0 / 1 = 0.0
+/// assert!(r2.abs() < 1e-12);
+/// ```
+pub fn compute_remaining_per_day(
+    z_entry: f64,
+    sigma_spread: f64,
+    unrealized_return: f64,
+    days_held: usize,
+    max_hold: usize,
+) -> f64 {
+    if !z_entry.is_finite() || !sigma_spread.is_finite() || !unrealized_return.is_finite() {
+        return 0.0;
+    }
+    if sigma_spread <= 0.0 {
+        return 0.0;
+    }
+    // Expected total return from spread reversion: |z| × σ (linear approximation).
+    // This is the P&L potential if the spread fully reverts to zero.
+    let expected_total = z_entry.abs() * sigma_spread;
+    let remaining_edge = expected_total - unrealized_return;
+    // Remaining time: guard against zero (exhausted or over-held trade)
+    let remaining_days = (max_hold.saturating_sub(days_held)).max(1) as f64;
+    remaining_edge / remaining_days
+}
+
+/// Decide whether to rotate an active trade out to make room for a queued signal.
+///
+/// Rotation condition (Leung & Li 2015):
+/// ```text
+///   REPLACE if: unrealized_return > 0
+///           AND remaining_per_day < best_queued_per_day - 2 × cost_per_day
+/// ```
+///
+/// Both sides are in the same unit: **expected incremental return per dollar per day,
+/// net of costs**.  The `2 × cost_per_day` buffer prevents churning on marginal cases.
+///
+/// # Parameters
+/// - `unrealized_return`: fraction of capital already captured by the active trade
+/// - `remaining_per_day`: remaining expected return/$/day for the active trade
+///   (compute with `compute_remaining_per_day`)
+/// - `best_queued_per_day`: expected return/$/day for the best queued signal
+///   (compute with `expected_return_per_dollar_per_day`)
+/// - `config`: rotation parameters (cost buffer, max rotations per day)
+///
+/// # Returns
+/// `true` if the active trade should be evicted and replaced with the queued signal.
+///
+/// Reference: Leung & Li (2015) §3; Avellaneda & Lee (2010) §4.
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::{RotationConfig, should_rotate};
+/// let cfg = RotationConfig::default();
+/// // Good case: positive P&L, remaining edge much lower than queued signal
+/// assert!(should_rotate(0.005, 0.001, 0.015, &cfg));
+/// // No rotation if unrealized_return ≤ 0 (don't cut losing trades for rotation)
+/// assert!(!should_rotate(-0.001, 0.001, 0.015, &cfg));
+/// // No rotation if improvement is within cost buffer
+/// assert!(!should_rotate(0.005, 0.012, 0.013, &cfg));
+/// ```
+pub fn should_rotate(
+    unrealized_return: f64,
+    remaining_per_day: f64,
+    best_queued_per_day: f64,
+    config: &RotationConfig,
+) -> bool {
+    if !unrealized_return.is_finite()
+        || !remaining_per_day.is_finite()
+        || !best_queued_per_day.is_finite()
+    {
+        return false;
+    }
+    // Only rotate profitable trades — don't cut losses for reallocation
+    if unrealized_return <= 0.0 {
+        return false;
+    }
+    // Rotate if the improvement exceeds the round-trip cost buffer
+    remaining_per_day < best_queued_per_day - 2.0 * config.cost_per_day
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,5 +904,164 @@ mod tests {
             expected_return_per_dollar_per_day(2.5, 0.02, 0.069, 0.0),
             0.0
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // compute_remaining_per_day tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_remaining_per_day_typical() {
+        // z=2.5, σ=0.02 → expected_total = 0.05
+        // unrealized = 0.0, held=2, max_hold=10 → remaining = 0.05 / 8 ≈ 0.00625
+        let r = compute_remaining_per_day(2.5, 0.02, 0.0, 2, 10);
+        let expected = 0.05_f64 / 8.0;
+        assert!((r - expected).abs() < 1e-12, "r={r} expected={expected}");
+        assert!(r > 0.0);
+    }
+
+    #[test]
+    fn test_remaining_per_day_fully_captured() {
+        // z=2.5, σ=0.02 → expected_total = 0.05
+        // unrealized = 0.05 (fully captured), held=9, max_hold=10 → remaining = 0 / 1 = 0
+        let r = compute_remaining_per_day(2.5, 0.02, 0.05, 9, 10);
+        assert!(r.abs() < 1e-12, "r={r}");
+    }
+
+    #[test]
+    fn test_remaining_per_day_overshoot() {
+        // unrealized > expected_total → negative remaining edge (over-captured)
+        let r = compute_remaining_per_day(2.5, 0.02, 0.08, 5, 10);
+        assert!(r < 0.0, "r={r}");
+    }
+
+    #[test]
+    fn test_remaining_per_day_exhausted_hold() {
+        // days_held >= max_hold → remaining_days clamped to 1
+        let r = compute_remaining_per_day(2.5, 0.02, 0.0, 10, 10);
+        let expected = 0.05_f64 / 1.0; // remaining_days = max(0, 1) = 1
+        assert!((r - expected).abs() < 1e-12, "r={r} expected={expected}");
+    }
+
+    #[test]
+    fn test_remaining_per_day_over_held() {
+        // days_held > max_hold → saturating_sub gives 0, clamped to 1
+        let r = compute_remaining_per_day(2.5, 0.02, 0.0, 15, 10);
+        let expected = 0.05_f64 / 1.0;
+        assert!((r - expected).abs() < 1e-12, "r={r} expected={expected}");
+    }
+
+    #[test]
+    fn test_remaining_per_day_nan_z_returns_zero() {
+        assert_eq!(compute_remaining_per_day(f64::NAN, 0.02, 0.0, 2, 10), 0.0);
+    }
+
+    #[test]
+    fn test_remaining_per_day_nan_sigma_returns_zero() {
+        assert_eq!(compute_remaining_per_day(2.5, f64::NAN, 0.0, 2, 10), 0.0);
+    }
+
+    #[test]
+    fn test_remaining_per_day_nan_unrealized_returns_zero() {
+        assert_eq!(compute_remaining_per_day(2.5, 0.02, f64::NAN, 2, 10), 0.0);
+    }
+
+    #[test]
+    fn test_remaining_per_day_zero_sigma_returns_zero() {
+        assert_eq!(compute_remaining_per_day(2.5, 0.0, 0.0, 2, 10), 0.0);
+    }
+
+    #[test]
+    fn test_remaining_per_day_negative_sigma_returns_zero() {
+        assert_eq!(compute_remaining_per_day(2.5, -0.02, 0.0, 2, 10), 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // should_rotate tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_should_rotate_true_case() {
+        // Profitable trade, remaining edge low, queued signal much better
+        let cfg = RotationConfig::default(); // cost_per_day = 0.001
+                                             // remaining=0.001, queued=0.015 → 0.001 < 0.015 - 0.002 = 0.013 → rotate
+        assert!(should_rotate(0.005, 0.001, 0.015, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_false_if_losing() {
+        // Unrealized return is negative → do not rotate
+        let cfg = RotationConfig::default();
+        assert!(!should_rotate(-0.001, 0.001, 0.015, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_false_if_zero_unrealized() {
+        // Unrealized return is exactly 0 → do not rotate (boundary: must be > 0)
+        let cfg = RotationConfig::default();
+        assert!(!should_rotate(0.0, 0.001, 0.015, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_false_within_cost_buffer() {
+        // Improvement is within 2 × cost_per_day buffer → no rotation
+        let cfg = RotationConfig::default(); // cost_per_day = 0.001
+                                             // remaining=0.012, queued=0.013 → 0.012 < 0.013 - 0.002 = 0.011? NO (0.012 >= 0.011)
+        assert!(!should_rotate(0.005, 0.012, 0.013, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_false_equal_remaining_and_queued() {
+        // remaining == queued → no improvement, no rotation
+        let cfg = RotationConfig::default();
+        assert!(!should_rotate(0.005, 0.010, 0.010, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_false_active_better_than_queued() {
+        // Active trade remaining edge is better than queued signal
+        let cfg = RotationConfig::default();
+        assert!(!should_rotate(0.005, 0.020, 0.010, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_nan_inputs_return_false() {
+        let cfg = RotationConfig::default();
+        assert!(!should_rotate(f64::NAN, 0.001, 0.015, &cfg));
+        assert!(!should_rotate(0.005, f64::NAN, 0.015, &cfg));
+        assert!(!should_rotate(0.005, 0.001, f64::NAN, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_inf_inputs_return_false() {
+        let cfg = RotationConfig::default();
+        assert!(!should_rotate(f64::INFINITY, 0.001, 0.015, &cfg));
+        assert!(!should_rotate(0.005, f64::INFINITY, 0.015, &cfg));
+        assert!(!should_rotate(0.005, 0.001, f64::INFINITY, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_exactly_at_boundary() {
+        // remaining = queued - 2*cost exactly at boundary → should NOT rotate
+        // (condition is strictly less than)
+        let cfg = RotationConfig {
+            cost_per_day: 0.001,
+            max_rotations_per_day: 2,
+        };
+        // remaining_per_day = 0.013 = 0.015 - 2*0.001 = 0.013 → NOT < 0.013 → no rotate
+        assert!(!should_rotate(0.005, 0.013, 0.015, &cfg));
+    }
+
+    #[test]
+    fn test_should_rotate_custom_cost() {
+        // Higher cost → harder to trigger rotation
+        let cfg = RotationConfig {
+            cost_per_day: 0.005,
+            max_rotations_per_day: 2,
+        };
+        // remaining=0.001, queued=0.009 → 0.001 < 0.009 - 0.010 = -0.001? NO → no rotate
+        assert!(!should_rotate(0.005, 0.001, 0.009, &cfg));
+        // remaining=0.001, queued=0.020 → 0.001 < 0.020 - 0.010 = 0.010 → rotate
+        assert!(should_rotate(0.005, 0.001, 0.020, &cfg));
     }
 }

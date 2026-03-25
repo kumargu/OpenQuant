@@ -757,6 +757,94 @@ fn expected_return_per_dollar_per_day(
     z.abs() * sigma_spread * kappa / (1.0 + kappa * expected_hold_days)
 }
 
+/// Compute per-pair max hold days from OU half-life.
+///
+/// Formula: `min(ceil(hold_multiplier × half_life), max_hold_cap)`
+///
+/// - hold_multiplier: defaults to 2.5 (≈82% expected reversion: 1 - 2^{-2.5})
+/// - max_hold_cap: defaults to 10 days
+///
+/// Returns max_hold_cap if half_life is not finite or ≤ 0.
+///
+/// Reference: Ornstein-Uhlenbeck process theory; Krauss (2017).
+#[pyfunction]
+#[pyo3(signature = (half_life_days, hold_multiplier = 2.5, max_hold_cap = 10))]
+fn compute_max_hold_days(half_life_days: f64, hold_multiplier: f64, max_hold_cap: usize) -> usize {
+    if !half_life_days.is_finite() || half_life_days <= 0.0 {
+        return max_hold_cap;
+    }
+    let raw = hold_multiplier * half_life_days;
+    let days = raw.ceil() as usize;
+    days.min(max_hold_cap)
+}
+
+/// Compute the remaining expected return per dollar per day for an active trade.
+///
+/// Forward-looking metric for opportunity-cost rotation decisions.
+///
+/// Formula:
+///   expected_total = |z_entry| × sigma_spread
+///   remaining_edge = expected_total - unrealized_return
+///   remaining_days = max(max_hold - days_held, 1)
+///   remaining_per_day = remaining_edge / remaining_days
+///
+/// Returns 0.0 if any input is not finite or sigma_spread ≤ 0.
+///
+/// Reference: Leung & Li (2015), "Optimal Mean Reversion Trading", §3.1.
+#[pyfunction]
+#[pyo3(signature = (z_entry, sigma_spread, unrealized_return, days_held, max_hold))]
+fn compute_remaining_per_day(
+    z_entry: f64,
+    sigma_spread: f64,
+    unrealized_return: f64,
+    days_held: usize,
+    max_hold: usize,
+) -> f64 {
+    if !z_entry.is_finite() || !sigma_spread.is_finite() || !unrealized_return.is_finite() {
+        return 0.0;
+    }
+    if sigma_spread <= 0.0 {
+        return 0.0;
+    }
+    let expected_total = z_entry.abs() * sigma_spread;
+    let remaining_edge = expected_total - unrealized_return;
+    let remaining_days = (max_hold.saturating_sub(days_held)).max(1) as f64;
+    remaining_edge / remaining_days
+}
+
+/// Decide whether to rotate an active trade out for a better queued signal.
+///
+/// Rotation condition (Leung & Li 2015):
+///   REPLACE if: unrealized_return > 0
+///           AND remaining_per_day < best_queued_per_day - 2 × cost_per_day
+///
+/// Both sides are in the same unit: expected return per dollar per day.
+/// The 2× cost buffer prevents churning on marginal improvements.
+///
+/// Returns False on any non-finite input.
+///
+/// Reference: Leung & Li (2015) §3; Avellaneda & Lee (2010) §4.
+#[pyfunction]
+#[pyo3(signature = (unrealized_return, remaining_per_day, best_queued_per_day, cost_per_day = 0.001))]
+fn should_rotate(
+    unrealized_return: f64,
+    remaining_per_day: f64,
+    best_queued_per_day: f64,
+    cost_per_day: f64,
+) -> bool {
+    if !unrealized_return.is_finite()
+        || !remaining_per_day.is_finite()
+        || !best_queued_per_day.is_finite()
+        || !cost_per_day.is_finite()
+    {
+        return false;
+    }
+    if unrealized_return <= 0.0 {
+        return false;
+    }
+    remaining_per_day < best_queued_per_day - 2.0 * cost_per_day
+}
+
 /// Load and return the parsed TOML config as a JSON string (for Python inspection).
 #[pyfunction]
 #[pyo3(signature = (config_path))]
@@ -926,5 +1014,8 @@ fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_config, m)?)?;
     m.add_function(wrap_pyfunction!(compute_priority_score, m)?)?;
     m.add_function(wrap_pyfunction!(expected_return_per_dollar_per_day, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_max_hold_days, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_remaining_per_day, m)?)?;
+    m.add_function(wrap_pyfunction!(should_rotate, m)?)?;
     Ok(())
 }

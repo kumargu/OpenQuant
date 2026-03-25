@@ -7,21 +7,49 @@ Instead of fixed slots, manages a capital pool:
 - Each trade allocates capital_per_leg × 2 from the pool
 - When a trade closes, capital returns to pool
 - Next day, pool is re-allocated to best available signals
-- Capital per leg must be ≥ max stock price (to buy at least 1 share)
+- Capital per leg must be >= max stock price (to buy at least 1 share)
 - Same pair CAN re-enter immediately if it signals again
+
+Rotation (Leung & Li 2015):
+- Per-pair max_hold = ceil(hold_multiplier * half_life), capped at MAX_HOLD_CAP days.
+- Each day, active trades are scored for remaining edge vs best queued signal.
+- Profitable trades with low remaining edge are evicted to free capital for better signals.
+- Max MAX_ROTATIONS_PER_DAY rotations per day to limit churn.
+
+All rotation math (remaining_per_day, should_rotate, compute_max_hold_days) lives in
+Rust and is called via the openquant pybridge.  This file is orchestration only.
 """
 
 import argparse
 import json
 import logging
-import math
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root / "scripts"))
+
+# Rust bridge — all math lives here.
+# Paths: engine/.venv is the canonical venv for the project.
+_venv_site = root / "engine" / ".venv" / "lib"
+_site_pkgs = next(_venv_site.glob("python*/site-packages"), None)
+if _site_pkgs and str(_site_pkgs) not in sys.path:
+    sys.path.insert(0, str(_site_pkgs))
+
+try:
+    from openquant import openquant as _oq
+    _compute_priority_score = _oq.compute_priority_score
+    _expected_return_per_dollar_per_day = _oq.expected_return_per_dollar_per_day
+    _compute_max_hold_days = _oq.compute_max_hold_days
+    _compute_remaining_per_day = _oq.compute_remaining_per_day
+    _should_rotate = _oq.should_rotate
+except ImportError as _e:
+    raise ImportError(
+        "openquant pybridge not found. Run: cd engine && maturin develop --release"
+    ) from _e
+
 from daily_walkforward_dashboard import (
     scan_pair, compute_z, ols_simple, PairParams,
     FORMATION_DAYS, MIN_R2, COST_BPS,
@@ -52,24 +80,16 @@ MIN_R2_ENTRY = 0.70
 MAX_HL_ENTRY = 5.0
 MIN_ADF_ENTRY = -2.5
 
+# Dynamic max_hold parameters — passed to Rust compute_max_hold_days.
+# OU theory: after hold_multiplier half-lives, expected reversion is 1 - 2^{-multiplier}.
+# 2.5x gives ~82% reversion; 2.0x gives ~75%.  Default 2.5x matches pair-picker default.
+HOLD_MULTIPLIER = 2.5
+MAX_HOLD_CAP = 10           # hard cap in days regardless of half-life
 
-def compute_priority_score(params: "PairParams", z: float) -> float:
-    """Priority score for capital allocation ordering.
-
-    Formula: |z| × sqrt(kappa) / sigma_spread
-    where kappa = ln(2) / half_life  (OU mean-reversion speed, days^-1)
-
-    Source: Avellaneda & Lee (2010) — Statistical Arbitrage in the US Equities Market;
-            Lee, Leung & Ning (2023) — OU speed as allocation signal.
-
-    Higher score = stronger signal × faster reversion × less spread risk.
-    Returns 0.0 if inputs are not finite or half_life <= 0.
-    """
-    if not math.isfinite(z) or params.half_life <= 0 or params.spread_std <= 0:
-        return 0.0
-    kappa = math.log(2.0) / params.half_life
-    score = abs(z) * math.sqrt(kappa) / params.spread_std
-    return score if math.isfinite(score) else 0.0
+# Rotation parameters — passed to Rust should_rotate.
+# cost_per_day: one-way 5 bps * 2 legs / expected_hold_days (≈ 2.5d) ≈ 0.001/day
+ROTATION_COST_PER_DAY = 0.001
+MAX_ROTATIONS_PER_DAY = 2   # cap churn to 2 rotations per day
 
 
 @dataclass
@@ -115,12 +135,20 @@ def compute_pnl(trade, exit_pa, exit_pb):
     return pnl - cost
 
 
-def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_mode="priority"):
+def run_capital_sim(
+    prices,
+    pair_configs,
+    total_capital=TOTAL_CAPITAL,
+    scoring_mode="priority",
+    rotation_enabled=False,
+):
     """Run simulation with capital pool management.
 
     Args:
         scoring_mode: "priority"  — sort by |z|×sqrt(kappa)/sigma (Avellaneda-Lee)
                       "z_abs"     — sort by |z| only (legacy baseline)
+        rotation_enabled: if True, evict stale profitable trades when a better
+                          signal is available (Leung & Li 2015 opportunity-cost rotation).
     """
     total_bars = min(len(v) for v in prices.values() if len(v) >= 200)
     earnings_cal = load_earnings_calendar()
@@ -138,6 +166,8 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_m
     logger.info(f"CAPITAL SIMULATION — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Total capital: ${total_capital:,}")
     logger.info(f"Pairs: {len(candidates)}")
+    logger.info(f"Rotation: {'ON' if rotation_enabled else 'OFF'} "
+                f"(max {MAX_ROTATIONS_PER_DAY}/day, cost={ROTATION_COST_PER_DAY:.4f}/day)")
     logger.info(f"Min trade: ${MIN_TRADE_CAPITAL}/leg, Max per trade: {MAX_PER_TRADE_FRAC*100:.0f}%")
     logger.info("=" * 70)
 
@@ -145,8 +175,9 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_m
         day_pnl = 0.0
         day_entries = 0
         day_exits = 0
+        day_rotations = 0
 
-        # ── STEP 1: Check exits ──
+        # ── STEP 1: Check natural exits ──
         to_close = []
         for i, trade in enumerate(open_trades):
             pa = prices[trade.leg_a][day]
@@ -175,9 +206,9 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_m
                 day_exits += 1
 
                 logger.info(f"[Day {day:>3}] EXIT:{reason:<8} {trade.pair_id()} "
-                           f"{'L' if trade.direction==1 else 'S'} {bars_held}d "
-                           f"${pnl:>+7.2f} | freed ${trade.capital_per_leg*2:.0f} | "
-                           f"pool=${available_capital:.0f}")
+                            f"{'L' if trade.direction==1 else 'S'} {bars_held}d "
+                            f"${pnl:>+7.2f} | freed ${trade.capital_per_leg*2:.0f} | "
+                            f"pool=${available_capital:.0f}")
 
                 closed_trades.append(ClosedTrade(
                     leg_a=trade.leg_a, leg_b=trade.leg_b,
@@ -190,77 +221,180 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_m
         for i in sorted(to_close, reverse=True):
             open_trades.pop(i)
 
-        # ── STEP 2: Scan for new entries with available capital ──
-        if available_capital >= MIN_TRADE_CAPITAL * 2:
-            signals = []
-            held_pairs = {(t.leg_a, t.leg_b) for t in open_trades}
+        # ── STEP 2: Scan for queued signals ──
+        # Always scan, even if capital is unavailable — we need best_queued_per_day
+        # for the rotation decision in Step 2.5.
+        held_pairs = {(t.leg_a, t.leg_b) for t in open_trades}
+        signals = []
 
-            for leg_a, leg_b, pcfg in candidates:
-                if leg_a not in prices or leg_b not in prices:
+        for leg_a, leg_b, pcfg in candidates:
+            if leg_a not in prices or leg_b not in prices:
+                continue
+            if (leg_a, leg_b) in held_pairs:
+                continue
+
+            # Earnings check
+            if earnings_cal and (
+                is_near_earnings(leg_a, day, total_bars, earnings_cal) or
+                is_near_earnings(leg_b, day, total_bars, earnings_cal)
+            ):
+                continue
+
+            params = scan_pair(leg_a, leg_b, prices[leg_a], prices[leg_b], day)
+            if params is None or params.beta < 0.1:
+                continue
+
+            # Beta stability
+            pair_key = (leg_a, leg_b)
+            if pair_key in last_beta:
+                prev = last_beta[pair_key]
+                if prev > 0 and abs(params.beta - prev) / prev > 0.30:
                     continue
-                if (leg_a, leg_b) in held_pairs:
-                    continue
+            last_beta[pair_key] = params.beta
 
-                # Earnings check
-                if earnings_cal and (
-                    is_near_earnings(leg_a, day, total_bars, earnings_cal) or
-                    is_near_earnings(leg_b, day, total_bars, earnings_cal)
-                ):
-                    continue
+            # Quality gate
+            if params.r2 < MIN_R2_ENTRY or params.half_life > MAX_HL_ENTRY or params.adf_stat > MIN_ADF_ENTRY:
+                continue
 
-                params = scan_pair(leg_a, leg_b, prices[leg_a], prices[leg_b], day)
-                if params is None or params.beta < 0.1:
-                    continue
+            pa = prices[leg_a][day]
+            pb = prices[leg_b][day]
+            z = compute_z(params, pa, pb)
 
-                # Beta stability
-                pair_key = (leg_a, leg_b)
-                if pair_key in last_beta:
-                    prev = last_beta[pair_key]
-                    if prev > 0 and abs(params.beta - prev) / prev > 0.30:
-                        continue
-                last_beta[pair_key] = params.beta
+            entry_z = pcfg.get('entry_z', 1.0)
+            if abs(z) > entry_z and abs(z) < entry_z + 1.5:
+                # Capital needed: must afford at least 1 share of each
+                min_capital_leg = max(pa, pb * abs(params.beta), MIN_TRADE_CAPITAL)
+                # Desired capital from config, but cap at pool fraction
+                desired_capital = pcfg.get('capital_per_leg', 500)
+                max_capital = min(
+                    total_capital * MAX_PER_TRADE_FRAC,
+                    available_capital / 2,  # per leg
+                )
+                actual_capital = max(min(desired_capital, max_capital), min_capital_leg)
 
-                # Quality gate
-                if params.r2 < MIN_R2_ENTRY or params.half_life > MAX_HL_ENTRY or params.adf_stat > MIN_ADF_ENTRY:
-                    continue
-
-                pa = prices[leg_a][day]
-                pb = prices[leg_b][day]
-                z = compute_z(params, pa, pb)
-
-                entry_z = pcfg.get('entry_z', 1.0)
-                if abs(z) > entry_z and abs(z) < entry_z + 1.5:
-                    # Capital needed: must afford at least 1 share of each
-                    min_capital_leg = max(pa, pb * abs(params.beta), MIN_TRADE_CAPITAL)
-                    # Desired capital from config, but cap at pool fraction
-                    desired_capital = pcfg.get('capital_per_leg', 500)
-                    max_capital = min(
-                        total_capital * MAX_PER_TRADE_FRAC,
-                        available_capital / 2,  # per leg
+                if actual_capital * 2 <= available_capital:
+                    # Priority score: |z| × sqrt(kappa) / sigma (Rust-computed)
+                    kappa = 0.693147 / params.half_life  # ln(2) / HL
+                    prio = _compute_priority_score(z, kappa, params.spread_std)
+                    # Expected return/$/day for this queued signal (Rust-computed)
+                    # Dynamic max_hold from Rust: ceil(HOLD_MULTIPLIER * HL), capped at MAX_HOLD_CAP
+                    dyn_max_hold = _compute_max_hold_days(
+                        params.half_life,
+                        hold_multiplier=HOLD_MULTIPLIER,
+                        max_hold_cap=MAX_HOLD_CAP,
                     )
-                    actual_capital = max(min(desired_capital, max_capital), min_capital_leg)
+                    erpdd = _expected_return_per_dollar_per_day(
+                        z, params.spread_std, kappa, float(dyn_max_hold)
+                    )
+                    signals.append((leg_a, leg_b, params, z, pa, pb, pcfg,
+                                    actual_capital, prio, erpdd, dyn_max_hold))
 
-                    if actual_capital * 2 <= available_capital:
-                        prio = compute_priority_score(params, z)
-                        signals.append((leg_a, leg_b, params, z, pa, pb, pcfg, actual_capital, prio))
+        # Sort by priority score or |z|
+        if scoring_mode == "priority":
+            signals.sort(key=lambda x: x[8], reverse=True)
+        else:
+            signals.sort(key=lambda x: abs(x[3]), reverse=True)
 
-            # Sort by priority score (|z|×sqrt(kappa)/sigma) or |z| for A/B baseline
-            if scoring_mode == "priority":
-                signals.sort(key=lambda x: x[8], reverse=True)
-            else:
-                signals.sort(key=lambda x: abs(x[3]), reverse=True)
+        # ── STEP 2.5: Opportunity-cost rotation (Leung & Li 2015) ──
+        # Only if rotation is enabled and there is a better signal waiting.
+        if rotation_enabled and signals and open_trades:
+            best_queued_erpdd = signals[0][9]  # expected_return_per_dollar_per_day of top signal
 
-            for leg_a, leg_b, params, z, pa, pb, pcfg, capital, prio in signals:
+            # Score each active trade for remaining edge
+            rotation_candidates = []
+            for i, trade in enumerate(open_trades):
+                pa = prices[trade.leg_a][day]
+                pb = prices[trade.leg_b][day]
+                pnl = compute_pnl(trade, pa, pb)
+                unrealized_return = pnl / (trade.capital_per_leg * 2) if trade.capital_per_leg > 0 else 0.0
+                bars_held = day - trade.entry_day
+
+                # Rust-computed remaining expected return/$/day
+                remaining = _compute_remaining_per_day(
+                    abs(trade.entry_z),
+                    trade.params.spread_std,
+                    unrealized_return,
+                    bars_held,
+                    trade.max_hold,
+                )
+
+                # Rust-computed rotation decision
+                rotate = _should_rotate(
+                    unrealized_return,
+                    remaining,
+                    best_queued_erpdd,
+                    ROTATION_COST_PER_DAY,
+                )
+                if rotate:
+                    rotation_candidates.append((i, trade, pnl, unrealized_return, remaining))
+
+            # Sort by most stale first (lowest remaining_per_day)
+            rotation_candidates.sort(key=lambda x: x[4])
+
+            for i, trade, pnl, unrealized_ret, remaining in rotation_candidates:
+                if day_rotations >= MAX_ROTATIONS_PER_DAY:
+                    break
+                # Evict this trade
+                available_capital += trade.capital_per_leg * 2
+                day_pnl += pnl
+                day_exits += 1
+                day_rotations += 1
+
+                kappa = 0.693147 / trade.params.half_life
+                active_erpdd = _expected_return_per_dollar_per_day(
+                    abs(trade.entry_z), trade.params.spread_std, kappa, float(trade.max_hold)
+                )
+
+                logger.info(
+                    f"[Day {day:>3}] ROTATE       {trade.pair_id()} "
+                    f"{'L' if trade.direction==1 else 'S'} "
+                    f"held={day - trade.entry_day}d/${trade.max_hold}d "
+                    f"${pnl:>+7.2f} unrealized={unrealized_ret:+.4f} "
+                    f"remaining/day={remaining:.6f} "
+                    f"active_erpdd={active_erpdd:.6f} "
+                    f"best_queued_erpdd={best_queued_erpdd:.6f} | "
+                    f"freed ${trade.capital_per_leg*2:.0f} | pool=${available_capital:.0f}"
+                )
+
+                closed_trades.append(ClosedTrade(
+                    leg_a=trade.leg_a, leg_b=trade.leg_b,
+                    direction=trade.direction,
+                    entry_day=trade.entry_day, exit_day=day,
+                    pnl=pnl, capital_used=trade.capital_per_leg, reason="rotation",
+                ))
+
+            # Remove rotated trades (indices may have shifted due to step 1, collect fresh set)
+            rotated_pair_ids = {(rc[1].leg_a, rc[1].leg_b) for rc in rotation_candidates[:MAX_ROTATIONS_PER_DAY]}
+            open_trades = [t for t in open_trades if (t.leg_a, t.leg_b) not in rotated_pair_ids]
+            # Refresh held_pairs after rotation
+            held_pairs = {(t.leg_a, t.leg_b) for t in open_trades}
+            # Re-filter signals to exclude pairs we still hold
+            signals = [s for s in signals if (s[0], s[1]) not in held_pairs]
+            # Re-cap capital per leg for remaining signals
+            signals = [
+                (leg_a, leg_b, params, z, pa, pb, pcfg,
+                 max(min(pcfg.get('capital_per_leg', 500),
+                         min(total_capital * MAX_PER_TRADE_FRAC, available_capital / 2)),
+                     max(pa, pb * abs(params.beta), MIN_TRADE_CAPITAL)),
+                 prio, erpdd, dyn_max_hold)
+                for leg_a, leg_b, params, z, pa, pb, pcfg, _, prio, erpdd, dyn_max_hold in signals
+                if max(min(pcfg.get('capital_per_leg', 500),
+                           min(total_capital * MAX_PER_TRADE_FRAC, available_capital / 2)),
+                       max(pa, pb * abs(params.beta), MIN_TRADE_CAPITAL)) * 2 <= available_capital
+            ]
+
+        # ── STEP 3: Enter new trades with available capital ──
+        if available_capital >= MIN_TRADE_CAPITAL * 2:
+            for leg_a, leg_b, params, z, pa, pb, pcfg, capital, prio, erpdd, dyn_max_hold in signals:
                 if available_capital < capital * 2:
                     break
-
                 direction = 1 if z < -pcfg.get('entry_z', 1.0) else -1
                 trade = Trade(
                     leg_a=leg_a, leg_b=leg_b, params=params,
                     direction=direction, entry_day=day,
                     entry_pa=pa, entry_pb=pb, entry_z=z,
                     capital_per_leg=capital,
-                    max_hold=pcfg.get('max_hold', 10),
+                    max_hold=dyn_max_hold,  # dynamic: ceil(HOLD_MULTIPLIER * HL), cap=MAX_HOLD_CAP
                     exit_z=pcfg.get('exit_z', 0.3),
                     priority_score=prio,
                 )
@@ -269,10 +403,11 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_m
                 day_entries += 1
 
                 logger.info(f"[Day {day:>3}] ENTER        {trade.pair_id()} "
-                           f"{'L' if direction==1 else 'S'} z={z:+.2f} "
-                           f"prio={prio:.4f} "
-                           f"${capital:.0f}/leg | alloc ${capital*2:.0f} | "
-                           f"pool=${available_capital:.0f}")
+                            f"{'L' if direction==1 else 'S'} z={z:+.2f} "
+                            f"prio={prio:.4f} erpdd={erpdd:.6f} "
+                            f"max_hold={dyn_max_hold}d "
+                            f"${capital:.0f}/leg | alloc ${capital*2:.0f} | "
+                            f"pool=${available_capital:.0f}")
 
         # ── Daily summary with position snapshot ──
         deployed = sum(t.capital_per_leg * 2 for t in open_trades)
@@ -297,6 +432,7 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_m
         daily_log.append({
             'day': day, 'pnl': round(day_pnl, 2),
             'open': len(open_trades), 'entries': day_entries, 'exits': day_exits,
+            'rotations': day_rotations,
             'deployed': round(deployed, 0), 'available': round(available_capital, 0),
             'util': round(util, 1),
             'positions': positions,
@@ -304,8 +440,8 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_m
 
         if day_entries > 0 or day_exits > 0:
             logger.debug(f"[Day {day:>3}] DAILY: {len(open_trades)} open, "
-                        f"deployed=${deployed:.0f} ({util:.0f}%), "
-                        f"pool=${available_capital:.0f}, pnl=${day_pnl:+.2f}")
+                         f"deployed=${deployed:.0f} ({util:.0f}%), "
+                         f"pool=${available_capital:.0f}, pnl=${day_pnl:+.2f}")
 
     # Force close remaining
     for trade in open_trades:
@@ -503,6 +639,7 @@ def summarize(closed, daily, label="", total_capital=TOTAL_CAPITAL):
     avg_util = sum(d['util'] for d in last30_daily) / len(last30_daily) if last30_daily else 0
     avg_hold = sum(t.exit_day - t.entry_day for t in closed) / n_trades if n_trades else 0
     max_hold_exits = sum(1 for t in closed if t.reason == "max_hold")
+    rotation_exits = sum(1 for t in closed if t.reason == "rotation")
     r30_pnl = sum(t.pnl for t in recent_30)
     return {
         "label": label,
@@ -515,6 +652,8 @@ def summarize(closed, daily, label="", total_capital=TOTAL_CAPITAL):
         "avg_hold": avg_hold,
         "max_hold_exits": max_hold_exits,
         "max_hold_exit_pct": max_hold_exits / n_trades * 100 if n_trades else 0,
+        "rotation_exits": rotation_exits,
+        "rotation_exit_pct": rotation_exits / n_trades * 100 if n_trades else 0,
         "ret_per_trade": all_pnl / (n_trades * total_capital / 10) if n_trades else 0,
     }
 
@@ -528,9 +667,11 @@ def print_comparison_table(a, b):
         ("Last 30d P&L", f"${a['r30_pnl']:+,.0f}", f"${b['r30_pnl']:+,.0f}"),
         ("$/day (30d)", f"${a['r30_per_day']:+.2f}", f"${b['r30_per_day']:+.2f}"),
         ("Avg utilization", f"{a['avg_util']:.1f}%", f"{b['avg_util']:.1f}%"),
-        ("Avg hold (days)", f"{a['avg_hold']:.1f}", f"{b['avg_hold']:.1f}"),
+        ("Avg hold (days)", f"{a['avg_hold']:.1f}", f"{b['avg_hold']:.1f}%"),
         ("Max-hold exits", f"{a['max_hold_exits']} ({a['max_hold_exit_pct']:.1f}%)",
                            f"{b['max_hold_exits']} ({b['max_hold_exit_pct']:.1f}%)"),
+        ("Rotation exits", f"{a['rotation_exits']} ({a['rotation_exit_pct']:.1f}%)",
+                           f"{b['rotation_exits']} ({b['rotation_exit_pct']:.1f}%)"),
     ]
     print(f"\n{'Metric':<25} {'Before ('+a['label']+')':<28} {'After ('+b['label']+')':<28} Delta")
     print("-" * 90)
@@ -542,9 +683,13 @@ def main():
     parser = argparse.ArgumentParser(description="Capital simulation for pairs trading")
     parser.add_argument("--ab-compare", action="store_true",
                         help="Run A/B comparison: priority scoring vs |z|-only baseline")
+    parser.add_argument("--rotation-ab", action="store_true",
+                        help="Run A/B comparison: rotation OFF vs rotation ON")
     parser.add_argument("--scoring-mode", default="priority",
                         choices=["priority", "z_abs"],
                         help="Signal allocation scoring mode (default: priority)")
+    parser.add_argument("--rotation", action="store_true", default=False,
+                        help="Enable opportunity-cost rotation (Leung & Li 2015)")
     args = parser.parse_args()
 
     prices = json.load(open(root / "data" / "pair_picker_prices.json"))
@@ -553,16 +698,32 @@ def main():
 
     if args.ab_compare:
         print("Running A/B comparison: |z| baseline vs priority scoring...")
-        closed_baseline, daily_baseline = run_capital_sim(prices, pair_configs, scoring_mode="z_abs")
-        closed_priority, daily_priority = run_capital_sim(prices, pair_configs, scoring_mode="priority")
+        closed_baseline, daily_baseline = run_capital_sim(
+            prices, pair_configs, scoring_mode="z_abs", rotation_enabled=False)
+        closed_priority, daily_priority = run_capital_sim(
+            prices, pair_configs, scoring_mode="priority", rotation_enabled=False)
         stats_a = summarize(closed_baseline, daily_baseline, label="z_abs")
         stats_b = summarize(closed_priority, daily_priority, label="priority")
         print_comparison_table(stats_a, stats_b)
-
-        # Use priority results for dashboard
         closed, daily = closed_priority, daily_priority
+
+    elif args.rotation_ab:
+        print("Running rotation A/B: rotation=OFF vs rotation=ON (priority scoring)...")
+        closed_off, daily_off = run_capital_sim(
+            prices, pair_configs, scoring_mode="priority", rotation_enabled=False)
+        closed_on, daily_on = run_capital_sim(
+            prices, pair_configs, scoring_mode="priority", rotation_enabled=True)
+        stats_off = summarize(closed_off, daily_off, label="rotation_off")
+        stats_on = summarize(closed_on, daily_on, label="rotation_on")
+        print_comparison_table(stats_off, stats_on)
+        closed, daily = closed_on, daily_on
+
     else:
-        closed, daily = run_capital_sim(prices, pair_configs, scoring_mode=args.scoring_mode)
+        closed, daily = run_capital_sim(
+            prices, pair_configs,
+            scoring_mode=args.scoring_mode,
+            rotation_enabled=args.rotation,
+        )
 
     total_bars = min(len(v) for v in prices.values() if len(v) >= 200)
     last14 = total_bars - 10
@@ -593,6 +754,14 @@ def main():
         r14_wins = sum(1 for t in recent_14 if t.pnl > 0)
         logger.info(f"LAST 2wk: {len(recent_14)}t {r14_wins}w ${r14_pnl:+,.2f} (${r14_pnl/10:+.2f}/day)")
 
+    # Exit reason breakdown
+    max_hold_exits = sum(1 for t in closed if t.reason == "max_hold")
+    rotation_exits = sum(1 for t in closed if t.reason == "rotation")
+    logger.info(f"\nEXIT REASONS: max_hold={max_hold_exits} "
+                f"({max_hold_exits/max(len(closed),1)*100:.0f}%), "
+                f"rotation={rotation_exits} "
+                f"({rotation_exits/max(len(closed),1)*100:.0f}%)")
+
     logger.info(f"\nCAPITAL UTILIZATION (last 30d):")
     logger.info(f"  Avg deployed: ${avg_deployed:,.0f} / ${TOTAL_CAPITAL:,} = {avg_util:.0f}%")
 
@@ -603,8 +772,9 @@ def main():
         if d['day'] >= last14:
             cum += d['pnl']
             logger.info(f"  Day {d['day']}: {d['open']} open, "
-                       f"${d['deployed']:>6,.0f} deployed ({d['util']:>2.0f}%), "
-                       f"pnl=${d['pnl']:>+7.2f} cum=${cum:>+7.2f}")
+                        f"${d['deployed']:>6,.0f} deployed ({d['util']:>2.0f}%), "
+                        f"pnl=${d['pnl']:>+7.2f} cum=${cum:>+7.2f}"
+                        + (f" rotations={d['rotations']}" if d['rotations'] else ""))
 
     # Per pair
     pair_pnl = {}
