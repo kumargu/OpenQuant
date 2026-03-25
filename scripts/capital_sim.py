@@ -45,6 +45,7 @@ try:
     _compute_max_hold_days = _oq.compute_max_hold_days
     _compute_remaining_per_day = _oq.compute_remaining_per_day
     _should_rotate = _oq.should_rotate
+    _compute_capital_metrics = _oq.compute_capital_metrics
 except ImportError as _e:
     raise ImportError(
         "openquant pybridge not found. Run: cd engine && maturin develop --release"
