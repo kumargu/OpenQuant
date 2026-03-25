@@ -52,13 +52,12 @@ logger.addHandler(_sh)
 
 FORMATION_DAYS = 90       # lookback for pair selection
 ENTRY_Z = 2.0             # |z| > this to enter
-ENTRY_Z_CAP = 3.0         # |z| > this is structural break, NOT reversion (research #192)
 EXIT_Z = 0.5              # |z| < this to exit (at entry; decays over hold period)
 MAX_HOLD = 10             # 10d optimal — shorter hold cuts winners more than losers
 MAX_PAIRS = 3             # max simultaneous pairs
 CAPITAL_PER_LEG = 10_000  # $ per leg
 MIN_R2 = 0.30             # minimum R² for OLS
-COST_BPS = 12             # round-trip cost in bps
+COST_BPS = 5              # round-trip cost in bps (Alpaca $0 commission, ~3-5 bps bid-ask S&P 500)
 MIN_R2_ENTRY = 0.85       # tighter R² for actual entry (scan can be looser)
 MAX_HL_ENTRY = 4.0        # tighter HL for entry — faster reversion pairs only
 MIN_ADF_ENTRY = -2.5      # tighter ADF for entry (more negative = stronger)
@@ -391,20 +390,6 @@ def run_simulation(prices, candidates):
             dir_str = "LONG" if trade.direction == 1 else "SHORT"
             unrealized = compute_trade_pnl(trade, pa, pb)
 
-            # Compute rolling z for drift comparison
-            start = max(0, day - 30)
-            recent = []
-            for ii in range(start, day + 1):
-                if ii < len(prices[trade.pair.leg_a]) and ii < len(prices[trade.pair.leg_b]):
-                    s = math.log(prices[trade.pair.leg_a][ii]) - trade.pair.alpha - trade.pair.beta * math.log(prices[trade.pair.leg_b][ii])
-                    recent.append(s)
-            rolling_z = 0.0
-            if len(recent) > 1:
-                rm = sum(recent) / len(recent)
-                rs = math.sqrt(sum((s - rm)**2 for s in recent) / (len(recent) - 1))
-                current_spread = math.log(pa) - trade.pair.alpha - trade.pair.beta * math.log(pb)
-                rolling_z = (current_spread - rm) / rs if rs > 1e-10 else 0
-
             # Per-trade config (from pair_portfolio.json)
             t_max_hold = trade.trade_max_hold
             t_exit_z = trade.trade_exit_z
@@ -415,8 +400,8 @@ def run_simulation(prices, candidates):
             effective_exit_z = t_exit_z - (t_exit_z - EXIT_Z_FLOOR) * decay_frac
 
             logger.debug(f"[Day {day:>3}] [HOLDING     ] {dir_str} {pair_id} | "
-                         f"bars_held={bars_held}/{t_max_hold} | fixed_z={z:.4f} | rolling_z={rolling_z:.4f} | "
-                         f"drift={abs(z - rolling_z):.4f} | exit_thresh={effective_exit_z:.3f} | "
+                         f"bars_held={bars_held}/{t_max_hold} | z={z:.4f} | "
+                         f"exit_thresh={effective_exit_z:.3f} | "
                          f"unrealized=${unrealized:+.2f} | capital=${trade.trade_capital:.0f}/leg")
 
             reason = None
@@ -554,7 +539,7 @@ def run_simulation(prices, candidates):
             day_idx=day, n_open=len(open_trades),
             n_closed_today=len(trades_today), daily_pnl=daily_pnl,
             cumulative_pnl=cumulative_pnl,
-            pairs_scanned=29, pairs_selected=n_selected,
+            pairs_scanned=len(candidates), pairs_selected=n_selected,
             deployed_capital=deployed_today,
             trades_today=trades_today,
         ))

@@ -347,6 +347,18 @@ def run_capital_sim(
         else:
             signals.sort(key=lambda x: abs(x[3]), reverse=True)
 
+        # Daily scan funnel summary — diagnose why signals are thin
+        if signals:
+            top = signals[0]
+            logger.debug(f"[Day {day:>3}] SCAN_FUNNEL candidates={len(candidates)} "
+                         f"valid_signals={len(signals)} open={len(open_trades)} "
+                         f"pool=${available_capital:.0f} "
+                         f"top={top[0]}/{top[1]} z={top[3]:+.3f} prio={top[8]:.4f}")
+        else:
+            logger.debug(f"[Day {day:>3}] SCAN_FUNNEL candidates={len(candidates)} "
+                         f"valid_signals=0 open={len(open_trades)} pool=${available_capital:.0f} "
+                         f"(no actionable signals today)")
+
         # ── STEP 2.5: Opportunity-cost rotation (Leung & Li 2015) ──
         # Only if rotation is enabled and there is a better signal waiting.
         if rotation_enabled and signals and open_trades:
