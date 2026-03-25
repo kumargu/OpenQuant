@@ -845,6 +845,71 @@ fn should_rotate(
     remaining_per_day < best_queued_per_day - 2.0 * cost_per_day
 }
 
+/// Compute capital utilization metrics (RoEC, Utilization, RoCC) — Gatev et al. (2006).
+///
+/// # Arguments
+///
+/// - `trades`: list of `(pnl, capital_per_leg, hold_days)` tuples.
+/// - `daily_util`: list of `(total_capital, deployed_capital)` tuples.
+/// - `total_capital`: total committed capital (e.g. 10000.0).
+/// - `n_days`: number of trading days in the period.
+///
+/// Returns a dict with keys: roec, avg_utilization, rocc, avg_return_per_trade,
+/// avg_return_per_dollar_day, opportunity_cost, total_pnl, n_trades, total_dollar_days_employed.
+#[pyfunction]
+#[pyo3(signature = (trades, daily_util, total_capital, n_days))]
+fn compute_capital_metrics(
+    py: Python<'_>,
+    trades: Vec<(f64, f64, f64)>,
+    daily_util: Vec<(f64, f64)>,
+    total_capital: f64,
+    n_days: usize,
+) -> PyResult<PyObject> {
+    use openquant_core::capital_metrics::{
+        CapitalMetricsConfig, DailyUtilInput, TradeInput,
+    };
+
+    let trade_inputs: Vec<TradeInput> = trades
+        .into_iter()
+        .map(|(pnl, capital_per_leg, hold_days)| TradeInput {
+            pnl,
+            capital_per_leg,
+            hold_days,
+        })
+        .collect();
+
+    let daily_inputs: Vec<DailyUtilInput> = daily_util
+        .into_iter()
+        .map(|(total, deployed)| DailyUtilInput {
+            total_capital: total,
+            deployed_capital: deployed,
+        })
+        .collect();
+
+    let config = CapitalMetricsConfig {
+        total_capital,
+        n_days,
+    };
+
+    let m = openquant_core::capital_metrics::compute_capital_metrics(
+        &trade_inputs,
+        &daily_inputs,
+        &config,
+    );
+
+    let dict = PyDict::new(py);
+    dict.set_item("roec", m.roec)?;
+    dict.set_item("avg_utilization", m.avg_utilization)?;
+    dict.set_item("rocc", m.rocc)?;
+    dict.set_item("avg_return_per_trade", m.avg_return_per_trade)?;
+    dict.set_item("avg_return_per_dollar_day", m.avg_return_per_dollar_day)?;
+    dict.set_item("opportunity_cost", m.opportunity_cost)?;
+    dict.set_item("total_pnl", m.total_pnl)?;
+    dict.set_item("n_trades", m.n_trades)?;
+    dict.set_item("total_dollar_days_employed", m.total_dollar_days_employed)?;
+    Ok(dict.into())
+}
+
 /// Load and return the parsed TOML config as a JSON string (for Python inspection).
 #[pyfunction]
 #[pyo3(signature = (config_path))]
@@ -1017,5 +1082,6 @@ fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_max_hold_days, m)?)?;
     m.add_function(wrap_pyfunction!(compute_remaining_per_day, m)?)?;
     m.add_function(wrap_pyfunction!(should_rotate, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_capital_metrics, m)?)?;
     Ok(())
 }
