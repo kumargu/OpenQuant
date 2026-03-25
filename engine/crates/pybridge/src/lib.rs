@@ -865,9 +865,7 @@ fn compute_capital_metrics(
     total_capital: f64,
     n_days: usize,
 ) -> PyResult<PyObject> {
-    use openquant_core::capital_metrics::{
-        CapitalMetricsConfig, DailyUtilInput, TradeInput,
-    };
+    use openquant_core::capital_metrics::{CapitalMetricsConfig, DailyUtilInput, TradeInput};
 
     let trade_inputs: Vec<TradeInput> = trades
         .into_iter()
