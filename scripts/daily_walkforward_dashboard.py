@@ -50,6 +50,35 @@ MIN_ADF_ENTRY = -2.5      # tighter ADF for entry (more negative = stronger)
 EARNINGS_BLACKOUT = 5     # skip entry if either leg has earnings within ±N trading days
 
 
+# ── Per-pair portfolio config ─────────────────────────────────────────────────
+
+def load_pair_portfolio():
+    """Load per-pair trading config from pair_portfolio.json.
+    Returns (defaults_dict, {(leg_a, leg_b): config_dict})."""
+    portfolio_path = Path(__file__).resolve().parent.parent / "trading" / "pair_portfolio.json"
+    if not portfolio_path.exists():
+        return None, {}
+    with open(portfolio_path) as f:
+        raw = json.load(f)
+    defaults = raw.get("defaults", {})
+    pair_configs = {}
+    for p in raw.get("pairs", []):
+        key = (p["leg_a"], p["leg_b"])
+        pair_configs[key] = p
+    return defaults, pair_configs
+
+
+def get_pair_config(leg_a, leg_b, pair_configs, defaults):
+    """Get config for a specific pair, falling back to defaults."""
+    cfg = pair_configs.get((leg_a, leg_b), pair_configs.get((leg_b, leg_a), {}))
+    return {
+        'capital_per_leg': cfg.get('capital_per_leg', defaults.get('capital_per_leg', CAPITAL_PER_LEG)),
+        'max_hold': cfg.get('max_hold', defaults.get('max_hold', MAX_HOLD)),
+        'entry_z': cfg.get('entry_z', defaults.get('entry_z', ENTRY_Z)),
+        'exit_z': cfg.get('exit_z', defaults.get('exit_z', EXIT_Z)),
+    }
+
+
 # ── Earnings calendar ─────────────────────────────────────────────────────────
 
 def load_earnings_calendar():
@@ -120,6 +149,10 @@ class OpenTrade:
     entry_price_b: float
     entry_spread: float
     entry_z: float
+    # Per-pair config (from pair_portfolio.json or globals)
+    trade_capital: float = 0.0   # capital per leg for this trade
+    trade_max_hold: int = 10     # max hold days for this trade
+    trade_exit_z: float = 0.5    # exit z threshold for this trade
 
 @dataclass
 class ClosedTrade:
@@ -287,24 +320,34 @@ def compute_z(params, price_a, price_b):
 
 
 def compute_trade_pnl(trade, exit_price_a, exit_price_b):
-    """P&L for a round-trip trade including costs."""
+    """P&L for a round-trip trade including costs. Uses per-trade capital."""
+    capital = trade.trade_capital if trade.trade_capital > 0 else CAPITAL_PER_LEG
     ret_a = (exit_price_a - trade.entry_price_a) / trade.entry_price_a
     ret_b = (exit_price_b - trade.entry_price_b) / trade.entry_price_b
     if trade.direction == 1:  # long spread: long A, short B
-        pnl = CAPITAL_PER_LEG * ret_a - CAPITAL_PER_LEG * trade.pair.beta * ret_b
+        pnl = capital * ret_a - capital * trade.pair.beta * ret_b
     else:  # short spread: short A, long B
-        pnl = -CAPITAL_PER_LEG * ret_a + CAPITAL_PER_LEG * trade.pair.beta * ret_b
+        pnl = -capital * ret_a + capital * trade.pair.beta * ret_b
     # Subtract round-trip cost
-    cost = 2 * CAPITAL_PER_LEG * COST_BPS / 10_000
+    cost = 2 * capital * COST_BPS / 10_000
     return pnl - cost
 
 
 # ── Main simulation ──────────────────────────────────────────────────────────
 
 def run_simulation(prices, candidates):
-    """Run daily walk-forward simulation from day 90 onwards."""
+    """Run daily walk-forward simulation from day 90 onwards.
+
+    If trading/pair_portfolio.json exists, uses per-pair config for
+    capital, max_hold, entry_z, exit_z. Otherwise uses global defaults.
+    """
     total_bars = min(len(v) for v in prices.values())
     start_day = FORMATION_DAYS
+
+    # Load per-pair portfolio config
+    portfolio_defaults, pair_configs = load_pair_portfolio()
+    if pair_configs:
+        logger.info(f"Portfolio config loaded: {len(pair_configs)} pairs with custom config")
 
     open_trades: list[OpenTrade] = []
     closed_trades: list[ClosedTrade] = []
@@ -345,25 +388,22 @@ def run_simulation(prices, candidates):
                 current_spread = math.log(pa) - trade.pair.alpha - trade.pair.beta * math.log(pb)
                 rolling_z = (current_spread - rm) / rs if rs > 1e-10 else 0
 
-            # Time-decay preview for logging
-            _decay = min(bars_held / MAX_HOLD, 1.0)
-            _eff_exit = EXIT_Z * (1.0 - _decay)
+            # Per-trade config (from pair_portfolio.json)
+            t_max_hold = trade.trade_max_hold
+            t_exit_z = trade.trade_exit_z
+
+            # Time-decay exit using per-trade thresholds
+            EXIT_Z_FLOOR = min(0.3, t_exit_z)
+            decay_frac = min(bars_held / t_max_hold, 1.0)
+            effective_exit_z = t_exit_z - (t_exit_z - EXIT_Z_FLOOR) * decay_frac
 
             logger.debug(f"[Day {day:>3}] [HOLDING     ] {dir_str} {pair_id} | "
-                         f"bars_held={bars_held} | fixed_z={z:.4f} | rolling_z={rolling_z:.4f} | "
-                         f"drift={abs(z - rolling_z):.4f} | exit_thresh={_eff_exit:.3f} | "
-                         f"unrealized=${unrealized:+.2f} | price_a={pa:.2f} | price_b={pb:.2f}")
-
-            # Time-decay exit: tighten exit_z from EXIT_Z → EXIT_Z_FLOOR over holding period
-            # Rationale (Leung & Li 2015): conditional reversion probability decreases
-            # with elapsed time. If it hasn't reverted yet, lower the bar for exiting.
-            # Floor at 0.3 — don't exit just because z is slightly non-zero.
-            EXIT_Z_FLOOR = 0.3
-            decay_frac = min(bars_held / MAX_HOLD, 1.0)
-            effective_exit_z = EXIT_Z - (EXIT_Z - EXIT_Z_FLOOR) * decay_frac  # 0.5 → 0.3
+                         f"bars_held={bars_held}/{t_max_hold} | fixed_z={z:.4f} | rolling_z={rolling_z:.4f} | "
+                         f"drift={abs(z - rolling_z):.4f} | exit_thresh={effective_exit_z:.3f} | "
+                         f"unrealized=${unrealized:+.2f} | capital=${trade.trade_capital:.0f}/leg")
 
             reason = None
-            if bars_held >= MAX_HOLD:
+            if bars_held >= t_max_hold:
                 reason = "max_hold"
             elif trade.direction == 1 and z > -effective_exit_z:
                 reason = "reversion"
@@ -372,7 +412,7 @@ def run_simulation(prices, candidates):
 
             if reason:
                 pnl = compute_trade_pnl(trade, pa, pb)
-                cost = 2 * CAPITAL_PER_LEG * COST_BPS / 10_000
+                cost = 2 * trade.trade_capital * COST_BPS / 10_000
                 ret_a = (pa - trade.entry_price_a) / trade.entry_price_a * 100
                 ret_b = (pb - trade.entry_price_b) / trade.entry_price_b * 100
 
@@ -444,17 +484,17 @@ def run_simulation(prices, candidates):
                                  f"adf={params.adf_stat:.4f} > {MIN_ADF_ENTRY} (weak stationarity)")
                     continue
 
+                # Get per-pair config
+                pcfg = get_pair_config(leg_a, leg_b, pair_configs, portfolio_defaults or {})
+                p_entry_z = pcfg['entry_z']
+
                 pa = prices[leg_a][day]
                 pb = prices[leg_b][day]
                 z = compute_z(params, pa, pb)
-                if abs(z) > ENTRY_Z:
-                    # Z-cap: |z| > 2.8 is structural break, not reversion
-                    # Research: OU P(|z|>3) = 0.27%, 0/3 reversions in our data
-                    if abs(z) > ENTRY_Z_CAP:
-                        logger.debug(f"[Day {day:>3}] [Z_CAP       ] {leg_a}/{leg_b} "
-                                     f"|z|={abs(z):.2f} > {ENTRY_Z_CAP} (structural break, skip)")
+                if abs(z) > p_entry_z:
+                    if abs(z) > p_entry_z + 1.5:  # z-cap relative to entry
                         continue
-                    scanned.append((params, z, pa, pb))
+                    scanned.append((params, z, pa, pb, pcfg))
 
             n_selected = len(scanned)
             scanned.sort(key=lambda x: abs(x[1]), reverse=True)
@@ -464,18 +504,21 @@ def run_simulation(prices, candidates):
                 logger.debug(f"[Day {day:>3}] [SCAN        ] {n_selected} signals found, capacity={capacity}")
 
             held_pairs = {(t.pair.leg_a, t.pair.leg_b) for t in open_trades}
-            for params, z, pa, pb in scanned:
+            for params, z, pa, pb, pcfg in scanned:
                 if capacity <= 0:
                     break
                 if (params.leg_a, params.leg_b) in held_pairs:
                     continue
-                direction = 1 if z < -ENTRY_Z else -1
+                direction = 1 if z < -pcfg['entry_z'] else -1
                 dir_str = "LONG_SPREAD" if direction == 1 else "SHORT_SPREAD"
                 trade = OpenTrade(
                     pair=params, direction=direction,
                     entry_day=day, entry_price_a=pa, entry_price_b=pb,
                     entry_spread=math.log(pa) - params.alpha - params.beta * math.log(pb),
                     entry_z=z,
+                    trade_capital=pcfg['capital_per_leg'],
+                    trade_max_hold=pcfg['max_hold'],
+                    trade_exit_z=pcfg['exit_z'],
                 )
                 open_trades.append(trade)
                 held_pairs.add((params.leg_a, params.leg_b))
@@ -484,7 +527,7 @@ def run_simulation(prices, candidates):
                 logger.info(f"[Day {day:>3}] [ENTRY       ] {params.leg_a}/{params.leg_b} {dir_str} | "
                             f"z={z:.4f} | beta={params.beta:.4f} | r2={params.r2:.4f} | "
                             f"hl={params.half_life:.2f}d | adf={params.adf_stat:.4f} | "
-                            f"spread_mean={params.spread_mean:.6f} | spread_std={params.spread_std:.6f} | "
+                            f"capital=${pcfg['capital_per_leg']}/leg | max_hold={pcfg['max_hold']}d | "
                             f"price_a={pa:.2f} | price_b={pb:.2f}")
 
         cumulative_pnl += daily_pnl

@@ -1,0 +1,381 @@
+{
+  "_note": "Per-pair trading config. capital_per_leg in $, max_hold in trading days, entry_z/exit_z are z-score thresholds. Pairs without config use global defaults.",
+  "defaults": {
+    "capital_per_leg": 500,
+    "max_hold": 10,
+    "entry_z": 1.0,
+    "exit_z": 0.3,
+    "enabled": true
+  },
+  "pairs": [
+    {
+      "leg_a": "NVDA",
+      "leg_b": "AMD",
+      "capital_per_leg": 1000,
+      "max_hold": 5,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Strong mean-reverter. 75% win at 3d, 82% at 5d. +221 bps avg at 3d hold."
+    },
+    {
+      "leg_a": "KLAC",
+      "leg_b": "SNDK",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Top P&L pair in S&P500 backtest. 73% win, 7 reversions out of 11 trades."
+    },
+    {
+      "leg_a": "FITB",
+      "leg_b": "PNC",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Regional banks. 92% best win rate, R\u00b2=0.94."
+    },
+    {
+      "leg_a": "CMS",
+      "leg_b": "DUK",
+      "capital_per_leg": 300,
+      "max_hold": 5,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Utilities. 100% win rate in pattern analysis. Low vol, low return per trade."
+    },
+    {
+      "leg_a": "AEE",
+      "leg_b": "XEL",
+      "capital_per_leg": 300,
+      "max_hold": 5,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Utilities. 95% win rate. Tight spreads, steady."
+    },
+    {
+      "leg_a": "MCO",
+      "leg_b": "SPGI",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Credit ratings duopoly. 88% best WR. Consistent reverter."
+    },
+    {
+      "leg_a": "AXP",
+      "leg_b": "BAC",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Financials. 82% best WR. Good reversion signal."
+    },
+    {
+      "leg_a": "DHI",
+      "leg_b": "PHM",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Homebuilders. R\u00b2=0.91, 82% win."
+    },
+    {
+      "leg_a": "EME",
+      "leg_b": "ETN",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Industrials. 89% win, 6 reversions in 9 trades."
+    },
+    {
+      "leg_a": "LNT",
+      "leg_b": "NI",
+      "capital_per_leg": 300,
+      "max_hold": 5,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Utilities. 88% win, 95% best WR. Fast reverter."
+    },
+    {
+      "leg_a": "DXCM",
+      "leg_b": "SYK",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Healthcare. 67% win, AC1=-0.207."
+    },
+    {
+      "leg_a": "COF",
+      "leg_b": "SYF",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "Consumer finance. 87% best WR."
+    },
+    {
+      "leg_a": "GOOG",
+      "leg_b": "GOOGL",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Communication Services: AC1=-0.358"
+    },
+    {
+      "leg_a": "ADSK",
+      "leg_b": "NOW",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Information Technology: AC1=-0.462"
+    },
+    {
+      "leg_a": "NTRS",
+      "leg_b": "STT",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Financials: AC1=-0.193"
+    },
+    {
+      "leg_a": "AZO",
+      "leg_b": "ORLY",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Consumer Discretionary: AC1=-0.496"
+    },
+    {
+      "leg_a": "CPRT",
+      "leg_b": "FAST",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Industrials: AC1=-0.430"
+    },
+    {
+      "leg_a": "INCY",
+      "leg_b": "MTD",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Health Care: AC1=-0.114"
+    },
+    {
+      "leg_a": "AME",
+      "leg_b": "PH",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Industrials: AC1=-0.118"
+    },
+    {
+      "leg_a": "BK",
+      "leg_b": "C",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Financials: AC1=-0.128"
+    },
+    {
+      "leg_a": "APD",
+      "leg_b": "DD",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Materials: AC1=-0.415"
+    },
+    {
+      "leg_a": "ANET",
+      "leg_b": "NVDA",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Information Technology: AC1=-0.298"
+    },
+    {
+      "leg_a": "LYV",
+      "leg_b": "NFLX",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Communication Services: AC1=-0.477"
+    },
+    {
+      "leg_a": "CDNS",
+      "leg_b": "PTC",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Information Technology: AC1=-0.183"
+    },
+    {
+      "leg_a": "A",
+      "leg_b": "WST",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Health Care: AC1=-0.181"
+    },
+    {
+      "leg_a": "KVUE",
+      "leg_b": "TAP",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Consumer Staples: AC1=-0.260"
+    },
+    {
+      "leg_a": "BRO",
+      "leg_b": "MRSH",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Financials: AC1=-0.063"
+    },
+    {
+      "leg_a": "HBAN",
+      "leg_b": "USB",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Financials: AC1=-0.087"
+    },
+    {
+      "leg_a": "LRCX",
+      "leg_b": "MU",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Information Technology: AC1=-0.040"
+    },
+    {
+      "leg_a": "PWR",
+      "leg_b": "TT",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Industrials: AC1=-0.189"
+    },
+    {
+      "leg_a": "IEX",
+      "leg_b": "UPS",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Industrials: AC1=-0.131"
+    },
+    {
+      "leg_a": "COIN",
+      "leg_b": "PYPL",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Financials: AC1=-0.089"
+    },
+    {
+      "leg_a": "RF",
+      "leg_b": "TFC",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Financials: AC1=-0.048"
+    },
+    {
+      "leg_a": "AEP",
+      "leg_b": "EVRG",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Utilities: AC1=-0.080"
+    },
+    {
+      "leg_a": "DOV",
+      "leg_b": "JBHT",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Industrials: AC1=-0.175"
+    },
+    {
+      "leg_a": "CFG",
+      "leg_b": "KEY",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Financials: AC1=-0.144"
+    },
+    {
+      "leg_a": "AON",
+      "leg_b": "WTW",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Financials: AC1=-0.081"
+    },
+    {
+      "leg_a": "IP",
+      "leg_b": "SW",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Materials: AC1=-0.121"
+    },
+    {
+      "leg_a": "ADP",
+      "leg_b": "PAYX",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Industrials: AC1=-0.008"
+    },
+    {
+      "leg_a": "CIEN",
+      "leg_b": "MPWR",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Information Technology: AC1=-0.227"
+    },
+    {
+      "leg_a": "HAS",
+      "leg_b": "HLT",
+      "capital_per_leg": 500,
+      "max_hold": 7,
+      "entry_z": 1.0,
+      "exit_z": 0.3,
+      "notes": "S&P500 Consumer Discretionary: AC1=-0.133"
+    }
+  ]
+}
