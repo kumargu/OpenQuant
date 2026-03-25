@@ -167,6 +167,58 @@ fn bench_thompson_update(c: &mut Criterion) {
     });
 }
 
+fn bench_priority_score(c: &mut Criterion) {
+    use pair_picker::scorer::{compute_priority_score, PriorityConfig};
+
+    let cfg = PriorityConfig::default();
+    // Simulate 41 pairs firing simultaneously: rank by priority
+    let pairs: Vec<(f64, f64, f64)> = (0..41)
+        .map(|i| {
+            let z = 2.0 + (i as f64) * 0.05;
+            let kappa = f64::ln(2.0) / (5.0 + (i % 10) as f64); // 5-15 day HL
+            let sigma = 0.01 + (i as f64) * 0.001;
+            (z, kappa, sigma)
+        })
+        .collect();
+
+    c.bench_function("priority_score_rank_41_pairs", |b| {
+        b.iter(|| {
+            let mut scores: Vec<f64> = pairs
+                .iter()
+                .map(|&(z, k, s)| compute_priority_score(black_box(z), k, s, &cfg))
+                .collect();
+            // Sort descending by priority (as the queue would do)
+            scores.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            scores
+        })
+    });
+}
+
+fn bench_expected_return(c: &mut Criterion) {
+    use pair_picker::scorer::expected_return_per_dollar_per_day;
+
+    let pairs: Vec<(f64, f64, f64, f64)> = (0..41)
+        .map(|i| {
+            let z = 2.0 + (i as f64) * 0.05;
+            let sigma = 0.01 + (i as f64) * 0.001;
+            let kappa = f64::ln(2.0) / (5.0 + (i % 10) as f64);
+            let hold = 5.0 + (i % 5) as f64;
+            (z, sigma, kappa, hold)
+        })
+        .collect();
+
+    c.bench_function("expected_return_41_pairs", |b| {
+        b.iter(|| {
+            let mut scores: Vec<f64> = pairs
+                .iter()
+                .map(|&(z, s, k, h)| expected_return_per_dollar_per_day(black_box(z), s, k, h))
+                .collect();
+            scores.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            scores
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_ols_200,
@@ -178,5 +230,7 @@ criterion_group!(
     bench_full_pipeline_single_pair,
     bench_thompson_sample_20_arms,
     bench_thompson_update,
+    bench_priority_score,
+    bench_expected_return,
 );
 criterion_main!(benches);

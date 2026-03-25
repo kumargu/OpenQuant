@@ -57,6 +57,7 @@ fn fallback_config(leg_a: &str, leg_b: &str, beta: f64) -> PairConfig {
         leg_b: leg_b.into(),
         alpha: 0.0,
         beta,
+        kappa: 0.0,
     }
 }
 

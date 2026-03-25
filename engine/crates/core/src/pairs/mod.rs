@@ -115,6 +115,14 @@ pub struct PairConfig {
     /// Hedge ratio: spread = ln(price_A) - alpha - beta × ln(price_B).
     /// Estimated via OLS regression on historical log-prices.
     pub beta: f64,
+    /// OU mean-reversion rate κ (per day), derived from the OU half-life:
+    /// κ = ln(2) / half_life_days.
+    ///
+    /// Used to compute the priority score at entry:
+    ///   priority = |z| × sqrt(κ) / σ_spread
+    ///
+    /// A value of 0.0 means the half-life was unknown or invalid.
+    pub kappa: f64,
 }
 
 impl Default for PairConfig {
@@ -124,6 +132,7 @@ impl Default for PairConfig {
             leg_b: String::new(),
             alpha: 0.0,
             beta: 1.0,
+            kappa: 0.0,
         }
     }
 }
@@ -154,6 +163,14 @@ pub struct PairOrderIntent {
     pub z_score: f64,
     /// Current spread value.
     pub spread: f64,
+    /// Priority score for signal-queue ranking:
+    ///   priority = |z| × sqrt(κ) / σ_spread
+    ///
+    /// Larger = higher priority.  0.0 means κ was unknown (legacy pairs
+    /// loaded without half_life_days, or σ_spread was degenerate).
+    ///
+    /// Reference: Avellaneda & Lee (2010).
+    pub priority_score: f64,
 }
 
 /// Frozen spread statistics captured at trade entry.
@@ -568,6 +585,15 @@ impl PairState {
                 entry_std,
             });
 
+            // Priority score: |z| × sqrt(κ) / σ_spread
+            // Ranks this signal against concurrent pair signals.
+            // 0.0 when κ=0 (unknown half-life from legacy pairs without half_life_days).
+            let priority_score = if config.kappa > 0.0 && std > 1e-10 {
+                z.abs() * config.kappa.sqrt() / std
+            } else {
+                0.0
+            };
+
             info!(
                 pair = pair_id.as_str(),
                 ts = timestamp,
@@ -577,6 +603,7 @@ impl PairState {
                 entry_std = format!("{:.6}", entry_std).as_str(),
                 price_a = format!("{:.2}", price_a).as_str(),
                 price_b = format!("{:.2}", price_b).as_str(),
+                priority_score = format!("{:.4}", priority_score).as_str(),
                 "pairs: ENTRY long spread (buy {}, sell {})",
                 config.leg_a,
                 config.leg_b,
@@ -599,6 +626,7 @@ impl PairState {
                     pair_id: pair_id.clone(),
                     z_score: z,
                     spread,
+                    priority_score,
                 },
                 PairOrderIntent {
                     symbol: config.leg_b.clone(),
@@ -608,6 +636,7 @@ impl PairState {
                     pair_id,
                     z_score: z,
                     spread,
+                    priority_score,
                 },
             ];
         } else if z > trading.entry_z {
@@ -625,6 +654,15 @@ impl PairState {
                 entry_std,
             });
 
+            // Priority score: |z| × sqrt(κ) / σ_spread
+            // Ranks this signal against concurrent pair signals.
+            // 0.0 when κ=0 (unknown half-life from legacy pairs without half_life_days).
+            let priority_score = if config.kappa > 0.0 && std > 1e-10 {
+                z.abs() * config.kappa.sqrt() / std
+            } else {
+                0.0
+            };
+
             info!(
                 pair = pair_id.as_str(),
                 ts = timestamp,
@@ -634,6 +672,7 @@ impl PairState {
                 entry_std = format!("{:.6}", entry_std).as_str(),
                 price_a = format!("{:.2}", price_a).as_str(),
                 price_b = format!("{:.2}", price_b).as_str(),
+                priority_score = format!("{:.4}", priority_score).as_str(),
                 "pairs: ENTRY short spread (sell {}, buy {})",
                 config.leg_a,
                 config.leg_b,
@@ -656,6 +695,7 @@ impl PairState {
                     pair_id: pair_id.clone(),
                     z_score: z,
                     spread,
+                    priority_score,
                 },
                 PairOrderIntent {
                     symbol: config.leg_b.clone(),
@@ -665,6 +705,7 @@ impl PairState {
                     pair_id,
                     z_score: z,
                     spread,
+                    priority_score,
                 },
             ];
         }
@@ -705,6 +746,7 @@ impl PairState {
                         pair_id: pair_id.clone(),
                         z_score: z,
                         spread,
+                        priority_score: 0.0, // close orders do not compete for capital
                     },
                     PairOrderIntent {
                         symbol: config.leg_b.clone(),
@@ -714,6 +756,7 @@ impl PairState {
                         pair_id,
                         z_score: z,
                         spread,
+                        priority_score: 0.0,
                     },
                 ]
             }
@@ -728,6 +771,7 @@ impl PairState {
                         pair_id: pair_id.clone(),
                         z_score: z,
                         spread,
+                        priority_score: 0.0,
                     },
                     PairOrderIntent {
                         symbol: config.leg_b.clone(),
@@ -737,6 +781,7 @@ impl PairState {
                         pair_id,
                         z_score: z,
                         spread,
+                        priority_score: 0.0,
                     },
                 ]
             }
@@ -773,6 +818,7 @@ mod tests {
             leg_b: "SLV".into(),
             alpha: 0.0,
             beta: 0.37,
+            kappa: 0.0, // unknown in unit tests
         }
     }
 
@@ -822,6 +868,7 @@ mod tests {
             leg_b: "B".into(),
             alpha: 0.0,
             beta: 1.0,
+            kappa: f64::ln(2.0) / 10.0, // 10-day OU half-life for test priority scoring
         }
     }
 
@@ -1417,5 +1464,97 @@ mod tests {
             "true reversion (short) must trigger exit"
         );
         assert_eq!(state.position(), PairPosition::Flat);
+    }
+
+    // ── Priority score tests ─────────────────────────────────────────────────
+
+    /// Entry intents carry a positive priority_score when κ is set.
+    #[test]
+    fn test_entry_priority_score_positive_with_kappa() {
+        let mut state = PairState::new();
+        // Use a config with a known kappa (10-day half-life)
+        let config = easy_trigger_config(); // kappa = ln(2)/10
+        let trading = easy_trigger_trading();
+
+        // Warmup
+        for _ in 0..35 {
+            let _ = state.on_price("A", 100.0, &config, &trading, 0);
+            let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        }
+
+        // Trigger long spread entry
+        let _ = state.on_price("A", 90.0, &config, &trading, 0);
+        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+
+        assert!(!intents.is_empty(), "must trigger entry");
+        // Both legs carry the same priority_score
+        assert!(
+            intents[0].priority_score > 0.0,
+            "priority_score should be positive when κ > 0, got {}",
+            intents[0].priority_score
+        );
+        assert!(
+            (intents[0].priority_score - intents[1].priority_score).abs() < 1e-12,
+            "both legs must have equal priority_score"
+        );
+        // Score must be finite
+        assert!(
+            intents[0].priority_score.is_finite(),
+            "priority_score must be finite"
+        );
+    }
+
+    /// Entry intents carry priority_score = 0.0 when κ = 0 (unknown half-life).
+    #[test]
+    fn test_entry_priority_score_zero_when_kappa_zero() {
+        let mut state = PairState::new();
+        let config = PairConfig {
+            kappa: 0.0, // unknown half-life
+            ..easy_trigger_config()
+        };
+        let trading = easy_trigger_trading();
+
+        for _ in 0..35 {
+            let _ = state.on_price("A", 100.0, &config, &trading, 0);
+            let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        }
+        let _ = state.on_price("A", 90.0, &config, &trading, 0);
+        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+
+        assert!(!intents.is_empty(), "must trigger entry");
+        assert_eq!(
+            intents[0].priority_score, 0.0,
+            "priority_score must be 0.0 when κ=0"
+        );
+    }
+
+    /// Close intents always carry priority_score = 0.0 (they don't compete for capital).
+    #[test]
+    fn test_close_priority_score_always_zero() {
+        let mut state = PairState::new();
+        let config = easy_trigger_config();
+        let trading = easy_trigger_trading();
+
+        // Enter
+        for _ in 0..35 {
+            let _ = state.on_price("A", 100.0, &config, &trading, 0);
+            let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        }
+        let _ = state.on_price("A", 90.0, &config, &trading, 0);
+        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        assert_eq!(state.position(), PairPosition::LongSpread);
+
+        // Revert to trigger close
+        let _ = state.on_price("A", 100.0, &config, &trading, 0);
+        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+
+        assert!(!intents.is_empty(), "should close");
+        for intent in &intents {
+            assert_eq!(
+                intent.priority_score, 0.0,
+                "close intents must have priority_score=0.0, got {}",
+                intent.priority_score
+            );
+        }
     }
 }

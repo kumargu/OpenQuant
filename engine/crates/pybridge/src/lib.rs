@@ -703,6 +703,60 @@ fn deflated_sharpe(
     )
 }
 
+/// Compute the priority score for signal-queue ranking.
+///
+/// Formula: `|z| × sqrt(κ) / σ_spread`
+///
+/// - z: z-score of the spread at signal time
+/// - kappa: OU mean-reversion rate in per-day units (= ln(2) / half_life_days)
+/// - sigma_spread: rolling standard deviation of the spread
+///
+/// Returns 0.0 if any input is not finite, kappa ≤ 0, or sigma_spread ≤ 0.
+///
+/// Reference: Avellaneda & Lee (2010), "Statistical Arbitrage in the US Equities Market".
+#[pyfunction]
+#[pyo3(signature = (z, kappa, sigma_spread))]
+fn compute_priority_score(z: f64, kappa: f64, sigma_spread: f64) -> f64 {
+    if !z.is_finite() || !kappa.is_finite() || !sigma_spread.is_finite() {
+        return 0.0;
+    }
+    if kappa <= 0.0 || sigma_spread <= 0.0 {
+        return 0.0;
+    }
+    z.abs() * kappa.sqrt() / sigma_spread
+}
+
+/// Compute expected return per dollar deployed per day.
+///
+/// Formula: `|z| × σ_spread × κ / (1 + κ × expected_hold_days)`
+///
+/// Common-unit metric for comparing active trades with queued signals.
+/// Used for capital rotation decisions: evict a slower trade to enter a faster one.
+///
+/// Returns 0.0 if any input is not finite or non-positive.
+///
+/// Reference: Lee, Leung & Ning (2023), "Optimal Mean Reversion Trading".
+#[pyfunction]
+#[pyo3(signature = (z, sigma_spread, kappa, expected_hold_days))]
+fn expected_return_per_dollar_per_day(
+    z: f64,
+    sigma_spread: f64,
+    kappa: f64,
+    expected_hold_days: f64,
+) -> f64 {
+    if !z.is_finite()
+        || !sigma_spread.is_finite()
+        || !kappa.is_finite()
+        || !expected_hold_days.is_finite()
+    {
+        return 0.0;
+    }
+    if kappa <= 0.0 || sigma_spread <= 0.0 || expected_hold_days <= 0.0 {
+        return 0.0;
+    }
+    z.abs() * sigma_spread * kappa / (1.0 + kappa * expected_hold_days)
+}
+
 /// Load and return the parsed TOML config as a JSON string (for Python inspection).
 #[pyfunction]
 #[pyo3(signature = (config_path))]
@@ -822,6 +876,7 @@ impl PairsEngineWrapper {
                 dict.set_item("pair_id", &intent.pair_id)?;
                 dict.set_item("z_score", intent.z_score)?;
                 dict.set_item("spread", intent.spread)?;
+                dict.set_item("priority_score", intent.priority_score)?;
                 Ok(dict.into())
             })
             .collect()
@@ -869,5 +924,7 @@ fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_bars, m)?)?;
     m.add_function(wrap_pyfunction!(deflated_sharpe, m)?)?;
     m.add_function(wrap_pyfunction!(load_config, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_priority_score, m)?)?;
+    m.add_function(wrap_pyfunction!(expected_return_per_dollar_per_day, m)?)?;
     Ok(())
 }

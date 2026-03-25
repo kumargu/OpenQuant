@@ -11,6 +11,7 @@ Instead of fixed slots, manages a capital pool:
 - Same pair CAN re-enter immediately if it signals again
 """
 
+import argparse
 import json
 import logging
 import math
@@ -52,6 +53,25 @@ MAX_HL_ENTRY = 5.0
 MIN_ADF_ENTRY = -2.5
 
 
+def compute_priority_score(params: "PairParams", z: float) -> float:
+    """Priority score for capital allocation ordering.
+
+    Formula: |z| × sqrt(kappa) / sigma_spread
+    where kappa = ln(2) / half_life  (OU mean-reversion speed, days^-1)
+
+    Source: Avellaneda & Lee (2010) — Statistical Arbitrage in the US Equities Market;
+            Lee, Leung & Ning (2023) — OU speed as allocation signal.
+
+    Higher score = stronger signal × faster reversion × less spread risk.
+    Returns 0.0 if inputs are not finite or half_life <= 0.
+    """
+    if not math.isfinite(z) or params.half_life <= 0 or params.spread_std <= 0:
+        return 0.0
+    kappa = math.log(2.0) / params.half_life
+    score = abs(z) * math.sqrt(kappa) / params.spread_std
+    return score if math.isfinite(score) else 0.0
+
+
 @dataclass
 class Trade:
     leg_a: str
@@ -65,6 +85,7 @@ class Trade:
     capital_per_leg: float
     max_hold: int
     exit_z: float
+    priority_score: float = 0.0  # score at entry time, for observability
 
     def pair_id(self):
         return f"{self.leg_a}/{self.leg_b}"
@@ -94,8 +115,13 @@ def compute_pnl(trade, exit_pa, exit_pb):
     return pnl - cost
 
 
-def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL):
-    """Run simulation with capital pool management."""
+def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL, scoring_mode="priority"):
+    """Run simulation with capital pool management.
+
+    Args:
+        scoring_mode: "priority"  — sort by |z|×sqrt(kappa)/sigma (Avellaneda-Lee)
+                      "z_abs"     — sort by |z| only (legacy baseline)
+    """
     total_bars = min(len(v) for v in prices.values() if len(v) >= 200)
     earnings_cal = load_earnings_calendar()
 
@@ -215,12 +241,16 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL):
                     actual_capital = max(min(desired_capital, max_capital), min_capital_leg)
 
                     if actual_capital * 2 <= available_capital:
-                        signals.append((leg_a, leg_b, params, z, pa, pb, pcfg, actual_capital))
+                        prio = compute_priority_score(params, z)
+                        signals.append((leg_a, leg_b, params, z, pa, pb, pcfg, actual_capital, prio))
 
-            # Sort by |z| descending, allocate greedily
-            signals.sort(key=lambda x: abs(x[3]), reverse=True)
+            # Sort by priority score (|z|×sqrt(kappa)/sigma) or |z| for A/B baseline
+            if scoring_mode == "priority":
+                signals.sort(key=lambda x: x[8], reverse=True)
+            else:
+                signals.sort(key=lambda x: abs(x[3]), reverse=True)
 
-            for leg_a, leg_b, params, z, pa, pb, pcfg, capital in signals:
+            for leg_a, leg_b, params, z, pa, pb, pcfg, capital, prio in signals:
                 if available_capital < capital * 2:
                     break
 
@@ -232,6 +262,7 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL):
                     capital_per_leg=capital,
                     max_hold=pcfg.get('max_hold', 10),
                     exit_z=pcfg.get('exit_z', 0.3),
+                    priority_score=prio,
                 )
                 open_trades.append(trade)
                 available_capital -= capital * 2
@@ -239,6 +270,7 @@ def run_capital_sim(prices, pair_configs, total_capital=TOTAL_CAPITAL):
 
                 logger.info(f"[Day {day:>3}] ENTER        {trade.pair_id()} "
                            f"{'L' if direction==1 else 'S'} z={z:+.2f} "
+                           f"prio={prio:.4f} "
                            f"${capital:.0f}/leg | alloc ${capital*2:.0f} | "
                            f"pool=${available_capital:.0f}")
 
@@ -459,13 +491,78 @@ filterDays();
     logger.info(f"Dashboard: file://{output_path}")
 
 
+def summarize(closed, daily, label="", total_capital=TOTAL_CAPITAL):
+    """Return a dict of summary stats for a simulation run."""
+    total_bars = max((d['day'] for d in daily), default=0) + 1
+    last30 = total_bars - 22
+    n_trades = len(closed)
+    n_wins = sum(1 for t in closed if t.pnl > 0)
+    all_pnl = sum(t.pnl for t in closed)
+    recent_30 = [t for t in closed if t.exit_day >= last30]
+    last30_daily = [d for d in daily if d['day'] >= last30]
+    avg_util = sum(d['util'] for d in last30_daily) / len(last30_daily) if last30_daily else 0
+    avg_hold = sum(t.exit_day - t.entry_day for t in closed) / n_trades if n_trades else 0
+    max_hold_exits = sum(1 for t in closed if t.reason == "max_hold")
+    r30_pnl = sum(t.pnl for t in recent_30)
+    return {
+        "label": label,
+        "n_trades": n_trades,
+        "win_rate": n_wins / n_trades * 100 if n_trades else 0,
+        "all_pnl": all_pnl,
+        "r30_pnl": r30_pnl,
+        "r30_per_day": r30_pnl / 22 if recent_30 else 0,
+        "avg_util": avg_util,
+        "avg_hold": avg_hold,
+        "max_hold_exits": max_hold_exits,
+        "max_hold_exit_pct": max_hold_exits / n_trades * 100 if n_trades else 0,
+        "ret_per_trade": all_pnl / (n_trades * total_capital / 10) if n_trades else 0,
+    }
+
+
+def print_comparison_table(a, b):
+    """Print markdown comparison table for A/B test results."""
+    rows = [
+        ("Trades", f"{a['n_trades']}", f"{b['n_trades']}"),
+        ("Win rate", f"{a['win_rate']:.1f}%", f"{b['win_rate']:.1f}%"),
+        ("All-time P&L", f"${a['all_pnl']:+,.0f}", f"${b['all_pnl']:+,.0f}"),
+        ("Last 30d P&L", f"${a['r30_pnl']:+,.0f}", f"${b['r30_pnl']:+,.0f}"),
+        ("$/day (30d)", f"${a['r30_per_day']:+.2f}", f"${b['r30_per_day']:+.2f}"),
+        ("Avg utilization", f"{a['avg_util']:.1f}%", f"{b['avg_util']:.1f}%"),
+        ("Avg hold (days)", f"{a['avg_hold']:.1f}", f"{b['avg_hold']:.1f}"),
+        ("Max-hold exits", f"{a['max_hold_exits']} ({a['max_hold_exit_pct']:.1f}%)",
+                           f"{b['max_hold_exits']} ({b['max_hold_exit_pct']:.1f}%)"),
+    ]
+    print(f"\n{'Metric':<25} {'Before ('+a['label']+')':<28} {'After ('+b['label']+')':<28} Delta")
+    print("-" * 90)
+    for metric, va, vb in rows:
+        print(f"{metric:<25} {va:<28} {vb:<28}")
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Capital simulation for pairs trading")
+    parser.add_argument("--ab-compare", action="store_true",
+                        help="Run A/B comparison: priority scoring vs |z|-only baseline")
+    parser.add_argument("--scoring-mode", default="priority",
+                        choices=["priority", "z_abs"],
+                        help="Signal allocation scoring mode (default: priority)")
+    args = parser.parse_args()
 
     prices = json.load(open(root / "data" / "pair_picker_prices.json"))
     portfolio = json.load(open(root / "trading" / "pair_portfolio.json"))
     pair_configs = portfolio['pairs']
 
-    closed, daily = run_capital_sim(prices, pair_configs)
+    if args.ab_compare:
+        print("Running A/B comparison: |z| baseline vs priority scoring...")
+        closed_baseline, daily_baseline = run_capital_sim(prices, pair_configs, scoring_mode="z_abs")
+        closed_priority, daily_priority = run_capital_sim(prices, pair_configs, scoring_mode="priority")
+        stats_a = summarize(closed_baseline, daily_baseline, label="z_abs")
+        stats_b = summarize(closed_priority, daily_priority, label="priority")
+        print_comparison_table(stats_a, stats_b)
+
+        # Use priority results for dashboard
+        closed, daily = closed_priority, daily_priority
+    else:
+        closed, daily = run_capital_sim(prices, pair_configs, scoring_mode=args.scoring_mode)
 
     total_bars = min(len(v) for v in prices.values() if len(v) >= 200)
     last14 = total_bars - 10

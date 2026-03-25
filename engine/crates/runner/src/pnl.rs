@@ -257,6 +257,7 @@ mod tests {
             z_score: 2.5,
             spread: 0.1,
             reason,
+            priority_score: 0.0,
         }
     }
 
