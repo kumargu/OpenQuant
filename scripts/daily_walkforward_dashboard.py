@@ -14,6 +14,21 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+# ── Rust bridge (capital metrics math) ───────────────────────────────────────
+# All math (RoEC, RoCC, utilization) lives in Rust. Python is orchestration only.
+_root = Path(__file__).resolve().parent.parent
+_venv_site = _root / "engine" / ".venv" / "lib"
+_site_pkgs = next(_venv_site.glob("python*/site-packages"), None)
+if _site_pkgs and str(_site_pkgs) not in sys.path:
+    sys.path.insert(0, str(_site_pkgs))
+
+try:
+    from openquant import openquant as _oq
+    _compute_capital_metrics = _oq.compute_capital_metrics
+except ImportError:
+    # Graceful degradation: capital metrics unavailable (bridge not built)
+    _compute_capital_metrics = None
+
 # ── Persistent logger ─────────────────────────────────────────────────────────
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "journal"
@@ -167,6 +182,7 @@ class ClosedTrade:
     exit_price_b: float
     pnl_usd: float
     exit_reason: str
+    capital_per_leg: float = 0.0  # capital deployed per leg for this trade
 
 @dataclass
 class DayRecord:
@@ -177,6 +193,7 @@ class DayRecord:
     cumulative_pnl: float
     pairs_scanned: int
     pairs_selected: int
+    deployed_capital: float = 0.0  # total capital deployed in open positions that day
     trades_today: list = field(default_factory=list)
 
 
@@ -429,6 +446,7 @@ def run_simulation(prices, candidates):
                     entry_price_a=trade.entry_price_a, exit_price_a=pa,
                     entry_price_b=trade.entry_price_b, exit_price_b=pb,
                     pnl_usd=pnl, exit_reason=reason,
+                    capital_per_leg=trade.trade_capital,
                 )
                 closed_trades.append(ct)
                 trades_today.append(ct)
@@ -531,11 +549,13 @@ def run_simulation(prices, candidates):
                             f"price_a={pa:.2f} | price_b={pb:.2f}")
 
         cumulative_pnl += daily_pnl
+        deployed_today = sum(t.trade_capital * 2 for t in open_trades)
         day_records.append(DayRecord(
             day_idx=day, n_open=len(open_trades),
             n_closed_today=len(trades_today), daily_pnl=daily_pnl,
             cumulative_pnl=cumulative_pnl,
             pairs_scanned=29, pairs_selected=n_selected,
+            deployed_capital=deployed_today,
             trades_today=trades_today,
         ))
 
@@ -551,6 +571,7 @@ def run_simulation(prices, candidates):
             entry_price_a=trade.entry_price_a, exit_price_a=pa,
             entry_price_b=trade.entry_price_b, exit_price_b=pb,
             pnl_usd=pnl, exit_reason="eod_force",
+            capital_per_leg=trade.trade_capital,
         ))
 
     return day_records, closed_trades
@@ -872,6 +893,39 @@ def main():
     logger.info("=" * 60)
     logger.info(f"RESULTS: {n_trades} trades | {n_winners} winners "
                 f"({n_winners/n_trades*100:.1f}%) | P&L: ${total_pnl:+,.2f}" if n_trades else "No trades")
+
+    # Capital metrics (Rust) — Gatev et al. 2006 decomposition.
+    # RoCC = RoEC × Utilization is the headline metric.
+    if _compute_capital_metrics is not None and n_trades > 0:
+        trade_inputs = [
+            (t.pnl_usd, t.capital_per_leg, float(t.exit_day - t.entry_day))
+            for t in closed_trades
+            if t.exit_day > t.entry_day and t.capital_per_leg > 0
+        ]
+        # Use deployed_capital from DayRecord for utilization
+        total_cap = float(CAPITAL_PER_LEG * MAX_PAIRS)
+        daily_inputs = [
+            (total_cap, float(d.deployed_capital))
+            for d in day_records
+        ]
+        n_sim_days = max(len(day_records), 1)
+        cm = _compute_capital_metrics(trade_inputs, daily_inputs, total_cap, n_sim_days)
+        logger.info(
+            f"  RoEC (return on employed):  {cm['roec']*100:+.4f}%/day"
+        )
+        logger.info(
+            f"  Utilization:                {cm['avg_utilization']*100:.1f}%"
+        )
+        logger.info(
+            f"  RoCC (return on committed): {cm['rocc']*100:+.4f}%/day  (= RoEC x Util)"
+        )
+        logger.info(
+            f"  Return per trade:           {cm['avg_return_per_trade']*100:+.3f}%"
+        )
+        logger.info(
+            f"  Opportunity cost (idle $):  ${cm['opportunity_cost']:+,.2f}"
+        )
+
     # Log exit reason breakdown
     reasons = {}
     for t in closed_trades:

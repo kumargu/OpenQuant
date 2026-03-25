@@ -45,6 +45,7 @@ try:
     _compute_max_hold_days = _oq.compute_max_hold_days
     _compute_remaining_per_day = _oq.compute_remaining_per_day
     _should_rotate = _oq.should_rotate
+    _compute_capital_metrics = _oq.compute_capital_metrics
 except ImportError as _e:
     raise ImportError(
         "openquant pybridge not found. Run: cd engine && maturin develop --release"
@@ -628,19 +629,41 @@ filterDays();
 
 
 def summarize(closed, daily, label="", total_capital=TOTAL_CAPITAL):
-    """Return a dict of summary stats for a simulation run."""
+    """Return a dict of summary stats for a simulation run.
+
+    All capital utilization math (RoEC, Utilization, RoCC) is computed in
+    Rust via compute_capital_metrics (Gatev et al. 2006).
+    """
     total_bars = max((d['day'] for d in daily), default=0) + 1
     last30 = total_bars - 22
     n_trades = len(closed)
     n_wins = sum(1 for t in closed if t.pnl > 0)
     all_pnl = sum(t.pnl for t in closed)
     recent_30 = [t for t in closed if t.exit_day >= last30]
-    last30_daily = [d for d in daily if d['day'] >= last30]
-    avg_util = sum(d['util'] for d in last30_daily) / len(last30_daily) if last30_daily else 0
     avg_hold = sum(t.exit_day - t.entry_day for t in closed) / n_trades if n_trades else 0
     max_hold_exits = sum(1 for t in closed if t.reason == "max_hold")
     rotation_exits = sum(1 for t in closed if t.reason == "rotation")
     r30_pnl = sum(t.pnl for t in recent_30)
+
+    # Capital metrics (Rust) — Gatev et al. 2006 decomposition over last 30 days.
+    # Rust guards NaN/invalid inputs; we only forward valid entries.
+    last30_daily = [d for d in daily if d['day'] >= last30]
+    last30_closed = [t for t in closed if t.exit_day >= last30]
+    trade_inputs = [
+        (t.pnl, t.capital_used, float(t.exit_day - t.entry_day))
+        for t in last30_closed
+        if t.exit_day > t.entry_day  # guard zero hold-time
+    ]
+    daily_inputs = [
+        (float(total_capital), float(d['deployed']))
+        for d in last30_daily
+        if d.get('deployed') is not None
+    ]
+    n_last30_days = max(len(last30_daily), 1)
+    cm = _compute_capital_metrics(
+        trade_inputs, daily_inputs, float(total_capital), n_last30_days
+    )
+
     return {
         "label": label,
         "n_trades": n_trades,
@@ -648,7 +671,12 @@ def summarize(closed, daily, label="", total_capital=TOTAL_CAPITAL):
         "all_pnl": all_pnl,
         "r30_pnl": r30_pnl,
         "r30_per_day": r30_pnl / 22 if recent_30 else 0,
-        "avg_util": avg_util,
+        # Gatev et al. (2006) decomposition — computed in Rust
+        "roec": cm["roec"],
+        "avg_util": cm["avg_utilization"] * 100,  # percent for display
+        "rocc": cm["rocc"],
+        "avg_return_per_trade": cm["avg_return_per_trade"],
+        "opportunity_cost": cm["opportunity_cost"],
         "avg_hold": avg_hold,
         "max_hold_exits": max_hold_exits,
         "max_hold_exit_pct": max_hold_exits / n_trades * 100 if n_trades else 0,
@@ -659,15 +687,23 @@ def summarize(closed, daily, label="", total_capital=TOTAL_CAPITAL):
 
 
 def print_comparison_table(a, b):
-    """Print markdown comparison table for A/B test results."""
+    """Print markdown comparison table for A/B test results.
+
+    RoCC (Return on Committed Capital) is the headline metric per Gatev et al. (2006):
+      RoCC = RoEC × Utilization
+    It enables apples-to-apples comparison across different utilization regimes.
+    """
     rows = [
         ("Trades", f"{a['n_trades']}", f"{b['n_trades']}"),
         ("Win rate", f"{a['win_rate']:.1f}%", f"{b['win_rate']:.1f}%"),
         ("All-time P&L", f"${a['all_pnl']:+,.0f}", f"${b['all_pnl']:+,.0f}"),
         ("Last 30d P&L", f"${a['r30_pnl']:+,.0f}", f"${b['r30_pnl']:+,.0f}"),
-        ("$/day (30d)", f"${a['r30_per_day']:+.2f}", f"${b['r30_per_day']:+.2f}"),
-        ("Avg utilization", f"{a['avg_util']:.1f}%", f"{b['avg_util']:.1f}%"),
-        ("Avg hold (days)", f"{a['avg_hold']:.1f}", f"{b['avg_hold']:.1f}%"),
+        ("RoCC (30d)", f"{a['rocc']*100:+.4f}%/day", f"{b['rocc']*100:+.4f}%/day"),
+        ("  RoEC (30d)", f"{a['roec']*100:+.4f}%/day", f"{b['roec']*100:+.4f}%/day"),
+        ("  Utilization (30d)", f"{a['avg_util']:.1f}%", f"{b['avg_util']:.1f}%"),
+        ("Ret/trade (30d)", f"{a['avg_return_per_trade']*100:+.3f}%", f"{b['avg_return_per_trade']*100:+.3f}%"),
+        ("Opp. cost (30d)", f"${a['opportunity_cost']:+,.0f}", f"${b['opportunity_cost']:+,.0f}"),
+        ("Avg hold (days)", f"{a['avg_hold']:.1f}", f"{b['avg_hold']:.1f}"),
         ("Max-hold exits", f"{a['max_hold_exits']} ({a['max_hold_exit_pct']:.1f}%)",
                            f"{b['max_hold_exits']} ({b['max_hold_exit_pct']:.1f}%)"),
         ("Rotation exits", f"{a['rotation_exits']} ({a['rotation_exit_pct']:.1f}%)",
@@ -734,21 +770,58 @@ def main():
     recent_30 = [t for t in closed if t.exit_day >= last30]
     recent_14 = [t for t in closed if t.exit_day >= last14]
 
-    # Utilization stats
+    # Capital metrics (Rust) — Gatev et al. 2006 decomposition over last 30 days.
+    # RoCC = RoEC × Utilization is the headline metric.
     last30_daily = [d for d in daily if d['day'] >= last30]
-    avg_util = sum(d['util'] for d in last30_daily) / len(last30_daily) if last30_daily else 0
-    avg_deployed = sum(d['deployed'] for d in last30_daily) / len(last30_daily) if last30_daily else 0
+    last30_closed = [t for t in closed if t.exit_day >= last30]
+    trade_inputs_30 = [
+        (t.pnl, t.capital_used, float(t.exit_day - t.entry_day))
+        for t in last30_closed
+        if t.exit_day > t.entry_day
+    ]
+    daily_inputs_30 = [
+        (float(TOTAL_CAPITAL), float(d['deployed']))
+        for d in last30_daily
+        if d.get('deployed') is not None
+    ]
+    n_last30_days = max(len(last30_daily), 1)
+    cm30 = _compute_capital_metrics(
+        trade_inputs_30, daily_inputs_30, float(TOTAL_CAPITAL), n_last30_days
+    )
+
+    # Capital metrics over full history
+    all_trade_inputs = [
+        (t.pnl, t.capital_used, float(t.exit_day - t.entry_day))
+        for t in closed
+        if t.exit_day > t.entry_day
+    ]
+    all_daily_inputs = [
+        (float(TOTAL_CAPITAL), float(d['deployed']))
+        for d in daily
+        if d.get('deployed') is not None
+    ]
+    cm_all = _compute_capital_metrics(
+        all_trade_inputs, all_daily_inputs, float(TOTAL_CAPITAL), max(len(daily), 1)
+    )
 
     logger.info("")
     logger.info("=" * 70)
     logger.info(f"RESULTS — ${TOTAL_CAPITAL:,} capital, {len(pair_configs)} pairs")
     logger.info("=" * 70)
-    logger.info(f"ALL TIME: {len(closed)}t ${all_pnl:+,.2f}")
+    logger.info(f"ALL TIME: {len(closed)}t ${all_pnl:+,.2f} "
+                f"RoCC={cm_all['rocc']*100:+.4f}%/day "
+                f"RoEC={cm_all['roec']*100:+.4f}%/day "
+                f"Util={cm_all['avg_utilization']*100:.1f}%")
     if recent_30:
         r30_pnl = sum(t.pnl for t in recent_30)
         r30_wins = sum(1 for t in recent_30 if t.pnl > 0)
         logger.info(f"LAST 30d: {len(recent_30)}t {r30_wins}w ({r30_wins/len(recent_30)*100:.0f}%) "
-                    f"${r30_pnl:+,.2f} (${r30_pnl/22:+.2f}/day)")
+                    f"${r30_pnl:+,.2f}")
+        logger.info(f"  RoEC (return on employed):  {cm30['roec']*100:+.4f}%/day")
+        logger.info(f"  Utilization:                {cm30['avg_utilization']*100:.1f}%")
+        logger.info(f"  RoCC (return on committed): {cm30['rocc']*100:+.4f}%/day  (= RoEC x Util)")
+        logger.info(f"  Return per trade:           {cm30['avg_return_per_trade']*100:+.3f}%")
+        logger.info(f"  Opportunity cost (idle $):  ${cm30['opportunity_cost']:+,.2f}")
     if recent_14:
         r14_pnl = sum(t.pnl for t in recent_14)
         r14_wins = sum(1 for t in recent_14 if t.pnl > 0)
@@ -762,9 +835,6 @@ def main():
                 f"rotation={rotation_exits} "
                 f"({rotation_exits/max(len(closed),1)*100:.0f}%)")
 
-    logger.info(f"\nCAPITAL UTILIZATION (last 30d):")
-    logger.info(f"  Avg deployed: ${avg_deployed:,.0f} / ${TOTAL_CAPITAL:,} = {avg_util:.0f}%")
-
     # Daily breakdown last 2 weeks
     logger.info(f"\nDAILY (last 2 weeks):")
     cum = 0
@@ -776,23 +846,42 @@ def main():
                         f"pnl=${d['pnl']:>+7.2f} cum=${cum:>+7.2f}"
                         + (f" rotations={d['rotations']}" if d['rotations'] else ""))
 
-    # Per pair
-    pair_pnl = {}
+    # Per pair — compute per-pair return on employed capital
+    pair_stats: dict = {}
     for t in closed:
         k = f"{t.leg_a}/{t.leg_b}"
-        if k not in pair_pnl:
-            pair_pnl[k] = {'trades': 0, 'pnl': 0.0, 'wins': 0, 'capital': 0}
-        pair_pnl[k]['trades'] += 1
-        pair_pnl[k]['pnl'] += t.pnl
-        pair_pnl[k]['capital'] = t.capital_used
+        if k not in pair_stats:
+            pair_stats[k] = {
+                'trades': 0, 'pnl': 0.0, 'wins': 0, 'capital': 0,
+                'hold_days': [], 'trade_inputs': [],
+            }
+        pair_stats[k]['trades'] += 1
+        pair_stats[k]['pnl'] += t.pnl
+        pair_stats[k]['capital'] = t.capital_used
+        pair_stats[k]['hold_days'].append(t.exit_day - t.entry_day)
         if t.pnl > 0:
-            pair_pnl[k]['wins'] += 1
+            pair_stats[k]['wins'] += 1
+        if t.exit_day > t.entry_day:
+            pair_stats[k]['trade_inputs'].append(
+                (t.pnl, t.capital_used, float(t.exit_day - t.entry_day))
+            )
 
     logger.info(f"\nPER PAIR:")
-    for pair in sorted(pair_pnl, key=lambda p: pair_pnl[p]['pnl'], reverse=True):
-        s = pair_pnl[pair]
-        logger.info(f"  {pair:<15} {s['trades']:>2}t {s['wins']:>2}w "
-                    f"${s['pnl']:>+7.2f} (${s['capital']:.0f}/leg)")
+    for pair in sorted(pair_stats, key=lambda p: pair_stats[p]['pnl'], reverse=True):
+        s = pair_stats[pair]
+        avg_hold = sum(s['hold_days']) / len(s['hold_days']) if s['hold_days'] else 0.0
+        # RoEC per pair (no daily snapshots — trade-weighted estimate)
+        pm = _compute_capital_metrics(
+            s['trade_inputs'], [], float(s['capital'] * 2), max(len(s['hold_days']), 1)
+        ) if s['trade_inputs'] else {"roec": 0.0, "avg_return_per_trade": 0.0}
+        logger.info(
+            f"  {pair:<15} {s['trades']:>2}t {s['wins']:>2}w "
+            f"${s['pnl']:>+7.2f} "
+            f"RoEC={pm['roec']*100:+.3f}%/day "
+            f"ret/trade={pm['avg_return_per_trade']*100:+.2f}% "
+            f"avg_hold={avg_hold:.1f}d "
+            f"(${s['capital']:.0f}/leg)"
+        )
 
     # Generate dashboard
     dashboard_path = root / "dashboards" / "capital_dashboard.html"
