@@ -107,6 +107,7 @@ class Trade:
     max_hold: int
     exit_z: float
     priority_score: float = 0.0  # score at entry time, for observability
+    trade_id: str = ""  # unique trace ID: "LEG_A/LEG_B:entry_day" — links ENTER→HOLD→EXIT logs
 
     def pair_id(self):
         return f"{self.leg_a}/{self.leg_b}"
@@ -125,20 +126,28 @@ class ClosedTrade:
 
 
 def compute_pnl(trade, exit_pa, exit_pb):
-    """Dollar-neutral P&L: equal $ per leg, no beta scaling in P&L.
+    """Beta-neutral P&L consistent with the beta-weighted spread z-score.
 
-    Beta is used for spread z-score (entry signal), NOT for P&L.
-    Both legs get $capital_per_leg of actual exposure.
-    Previous bug: beta-scaling the B leg meant low-beta pairs had
-    40-50% of B-leg capital sitting idle in P&L terms.
+    The z-score is computed on spread = ln(A) - alpha - beta * ln(B), so the
+    mean-reversion signal captures divergence in beta-weighted terms.  The P&L
+    must use the same weighting: A leg gets $capital, B leg gets $capital * beta.
+
+    Sizing consequence: A leg = $capital_per_leg, B leg = $capital_per_leg * |beta|.
+    For low-beta pairs (e.g. NVDA/AMD beta=0.19) the B leg is intentionally small
+    — that is correct.  Using equal-dollar legs (dollar-neutral) over-hedges B
+    relative to what the signal predicts, which adds noise and loses P&L.
+
+    Cite: Avellaneda & Lee (2010), "Statistical Arbitrage in the U.S. Equities Market",
+    equation for spread construction and corresponding position sizing.
     """
     c = trade.capital_per_leg
+    beta = trade.params.beta
     ret_a = (exit_pa - trade.entry_pa) / trade.entry_pa
     ret_b = (exit_pb - trade.entry_pb) / trade.entry_pb
     if trade.direction == 1:  # long A, short B
-        pnl = c * ret_a - c * ret_b
+        pnl = c * ret_a - c * beta * ret_b
     else:  # short A, long B
-        pnl = -c * ret_a + c * ret_b
+        pnl = -c * ret_a + c * beta * ret_b
     cost = 2 * c * COST_BPS / 10_000
     return pnl - cost
 
@@ -202,6 +211,7 @@ def run_capital_sim(
 
             # Per-bar holding log — the key diagnostic for understanding trade evolution
             logger.debug(f"[Day {day:>3}] HOLD {trade.pair_id():<12} "
+                         f"[{trade.trade_id}] "
                          f"{'L' if trade.direction==1 else 'S'} "
                          f"held={bars_held}/{trade.max_hold}d "
                          f"z_now={z:+.3f} z_entry={trade.entry_z:+.3f} "
@@ -226,6 +236,7 @@ def run_capital_sim(
                 day_exits += 1
 
                 logger.info(f"[Day {day:>3}] EXIT:{reason:<8} {trade.pair_id()} "
+                            f"[{trade.trade_id}] "
                             f"{'L' if trade.direction==1 else 'S'} {bars_held}d "
                             f"${pnl:>+7.2f} ({ret_pct:+.2f}%) "
                             f"z_now={z:+.3f} z_entry={trade.entry_z:+.3f} | "
@@ -295,7 +306,11 @@ def run_capital_sim(
             z = compute_z(params, pa, pb)
 
             entry_z = pcfg.get('entry_z', 1.0)
-            if abs(z) > entry_z and abs(z) < entry_z + 1.5:
+            if abs(z) >= entry_z + 1.5:
+                logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} z_cap "
+                             f"z={z:+.3f} cap={entry_z+1.5:.1f} "
+                             f"(z too extreme — possible structural break, not reversion)")
+            elif abs(z) > entry_z:
                 # Capital needed: must afford at least 1 share of each
                 min_capital_leg = max(pa, pb * abs(params.beta), MIN_TRADE_CAPITAL)
                 # Desired capital from config, but cap at pool fraction
@@ -306,7 +321,10 @@ def run_capital_sim(
                 )
                 actual_capital = max(min(desired_capital, max_capital), min_capital_leg)
 
-                if actual_capital * 2 <= available_capital:
+                if actual_capital * 2 > available_capital:
+                    logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} no_capital "
+                                 f"z={z:+.3f} need=${actual_capital*2:.0f} pool=${available_capital:.0f}")
+                else:
                     # Priority score: |z| × sqrt(kappa) / sigma (Rust-computed)
                     kappa = 0.693147 / params.half_life  # ln(2) / HL
                     prio = _compute_priority_score(z, kappa, params.spread_std)
@@ -392,6 +410,7 @@ def run_capital_sim(
 
                 logger.info(
                     f"[Day {day:>3}] ROTATE       {trade.pair_id()} "
+                    f"[{trade.trade_id}] "
                     f"{'L' if trade.direction==1 else 'S'} "
                     f"held={day - trade.entry_day}d/${trade.max_hold}d "
                     f"${pnl:>+7.2f} unrealized={unrealized_ret:+.4f} "
@@ -432,8 +451,12 @@ def run_capital_sim(
         if available_capital >= MIN_TRADE_CAPITAL * 2:
             for leg_a, leg_b, params, z, pa, pb, pcfg, capital, prio, erpdd, dyn_max_hold in signals:
                 if available_capital < capital * 2:
+                    logger.debug(f"[Day {day:>3}] SKIP_CAPITAL  {leg_a}/{leg_b} "
+                                 f"need=${capital*2:.0f} pool=${available_capital:.0f} "
+                                 f"(capital exhausted — valid signal left on table)")
                     break
                 direction = 1 if z < -pcfg.get('entry_z', 1.0) else -1
+                tid = f"{leg_a}/{leg_b}:{day}"
                 trade = Trade(
                     leg_a=leg_a, leg_b=leg_b, params=params,
                     direction=direction, entry_day=day,
@@ -442,12 +465,14 @@ def run_capital_sim(
                     max_hold=dyn_max_hold,  # dynamic: ceil(HOLD_MULTIPLIER * HL), cap=MAX_HOLD_CAP
                     exit_z=pcfg.get('exit_z', 0.3),
                     priority_score=prio,
+                    trade_id=tid,
                 )
                 open_trades.append(trade)
                 available_capital -= capital * 2
                 day_entries += 1
 
                 logger.info(f"[Day {day:>3}] ENTER        {trade.pair_id()} "
+                            f"[{tid}] "
                             f"{'L' if direction==1 else 'S'} z={z:+.2f} "
                             f"prio={prio:.4f} erpdd={erpdd:.6f} "
                             f"max_hold={dyn_max_hold}d "
