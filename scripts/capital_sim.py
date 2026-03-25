@@ -178,18 +178,30 @@ def run_capital_sim(
         day_exits = 0
         day_rotations = 0
 
-        # ── STEP 1: Check natural exits ──
+        # ── STEP 1: Check natural exits + log per-bar holding state ──
         to_close = []
         for i, trade in enumerate(open_trades):
             pa = prices[trade.leg_a][day]
             pb = prices[trade.leg_b][day]
             z = compute_z(trade.params, pa, pb)
             bars_held = day - trade.entry_day
+            pnl_unrealized = compute_pnl(trade, pa, pb)
+            ret_unrealized = pnl_unrealized / (trade.capital_per_leg * 2) * 100 if trade.capital_per_leg > 0 else 0
 
             # Time-decay exit threshold
             decay = min(bars_held / trade.max_hold, 1.0)
             floor = min(0.3, trade.exit_z)
             eff_exit = trade.exit_z - (trade.exit_z - floor) * decay
+
+            # Per-bar holding log — the key diagnostic for understanding trade evolution
+            logger.debug(f"[Day {day:>3}] HOLD {trade.pair_id():<12} "
+                         f"{'L' if trade.direction==1 else 'S'} "
+                         f"held={bars_held}/{trade.max_hold}d "
+                         f"z_now={z:+.3f} z_entry={trade.entry_z:+.3f} "
+                         f"exit_thresh={eff_exit:.3f} "
+                         f"unreal=${pnl_unrealized:+.2f} ({ret_unrealized:+.2f}%) "
+                         f"prio={trade.priority_score:.1f} "
+                         f"${trade.capital_per_leg:.0f}/leg")
 
             reason = None
             if bars_held >= trade.max_hold:
@@ -201,14 +213,16 @@ def run_capital_sim(
 
             if reason:
                 pnl = compute_pnl(trade, pa, pb)
-                # Return capital to pool
+                ret_pct = pnl / (trade.capital_per_leg * 2) * 100 if trade.capital_per_leg > 0 else 0
                 available_capital += trade.capital_per_leg * 2
                 day_pnl += pnl
                 day_exits += 1
 
                 logger.info(f"[Day {day:>3}] EXIT:{reason:<8} {trade.pair_id()} "
                             f"{'L' if trade.direction==1 else 'S'} {bars_held}d "
-                            f"${pnl:>+7.2f} | freed ${trade.capital_per_leg*2:.0f} | "
+                            f"${pnl:>+7.2f} ({ret_pct:+.2f}%) "
+                            f"z_now={z:+.3f} z_entry={trade.entry_z:+.3f} | "
+                            f"freed ${trade.capital_per_leg*2:.0f} | "
                             f"pool=${available_capital:.0f}")
 
                 closed_trades.append(ClosedTrade(
@@ -250,11 +264,23 @@ def run_capital_sim(
             if pair_key in last_beta:
                 prev = last_beta[pair_key]
                 if prev > 0 and abs(params.beta - prev) / prev > 0.30:
+                    logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} beta_unstable "
+                                 f"beta={params.beta:.3f} prev={prev:.3f} "
+                                 f"change={abs(params.beta-prev)/prev*100:.0f}%")
                     continue
             last_beta[pair_key] = params.beta
 
             # Quality gate
             if params.r2 < MIN_R2_ENTRY or params.half_life > MAX_HL_ENTRY or params.adf_stat > MIN_ADF_ENTRY:
+                reject_reasons = []
+                if params.r2 < MIN_R2_ENTRY:
+                    reject_reasons.append(f"r2={params.r2:.3f}")
+                if params.half_life > MAX_HL_ENTRY:
+                    reject_reasons.append(f"hl={params.half_life:.1f}")
+                if params.adf_stat > MIN_ADF_ENTRY:
+                    reject_reasons.append(f"adf={params.adf_stat:.2f}")
+                logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} quality_gate "
+                             f"{' '.join(reject_reasons)}")
                 continue
 
             pa = prices[leg_a][day]
@@ -326,6 +352,17 @@ def run_capital_sim(
                     best_queued_erpdd,
                     ROTATION_COST_PER_DAY,
                 )
+
+                # Log the rotation reasoning for every active trade
+                best_sig = signals[0]
+                logger.debug(f"[Day {day:>3}] ROT_CHECK {trade.pair_id():<12} "
+                             f"unreal_ret={unrealized_return:+.4f} "
+                             f"remaining/d={remaining:.6f} "
+                             f"best_queued={best_sig[0]}/{best_sig[1]} erpdd={best_queued_erpdd:.6f} "
+                             f"→ {'ROTATE' if rotate else 'KEEP'}"
+                             f"{' (losing)' if unrealized_return <= 0 else ''}"
+                             f"{' (edge>opp)' if remaining >= best_queued_erpdd else ''}")
+
                 if rotate:
                     rotation_candidates.append((i, trade, pnl, unrealized_return, remaining))
 
@@ -439,10 +476,16 @@ def run_capital_sim(
             'positions': positions,
         })
 
-        if day_entries > 0 or day_exits > 0:
-            logger.debug(f"[Day {day:>3}] DAILY: {len(open_trades)} open, "
-                         f"deployed=${deployed:.0f} ({util:.0f}%), "
-                         f"pool=${available_capital:.0f}, pnl=${day_pnl:+.2f}")
+        # Daily snapshot — always log (not just on entry/exit days)
+        pos_summary = ", ".join(
+            f"{t.pair_id()}({'L' if t.direction==1 else 'S'} {day-t.entry_day}d ${compute_pnl(t, prices[t.leg_a][day], prices[t.leg_b][day]):+.0f})"
+            for t in open_trades
+        ) if open_trades else "IDLE"
+        logger.debug(f"[Day {day:>3}] DAILY: {len(open_trades)} pos, "
+                     f"deployed=${deployed:.0f}/{total_capital} ({util:.0f}%), "
+                     f"pool=${available_capital:.0f}, "
+                     f"entries={day_entries} exits={day_exits} rot={day_rotations} "
+                     f"pnl=${day_pnl:+.2f} | {pos_summary}")
 
     # Force close remaining
     for trade in open_trades:
