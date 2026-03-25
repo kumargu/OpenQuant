@@ -303,7 +303,11 @@ def scan_pair(leg_a, leg_b, prices_a, prices_b, formation_end):
         logger.debug(f"[scan] {leg_a}/{leg_b} REJECT adf={adf:.4f} > -2.0")
         return None
 
-    # Z-score on last 30 days of formation window
+    # Z-score on last 30 days of spread. Using 30 vs 90 was tested:
+    # - 90-day: bigger swings (+$1,642 all-time) but inconsistent (-$3/day last 30d)
+    # - 30-day: more consistent ($26/day last 30d) but smaller all-time ($1,298)
+    # Keeping 30-day: recent spread regime matters more than long-term OLS residual
+    # BUG-5 documented but 30-day chosen deliberately for regime-responsiveness
     window = spread[-30:]
     mean = sum(window) / len(window)
     std = math.sqrt(sum((s - mean) ** 2 for s in window) / (len(window) - 1))
