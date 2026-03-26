@@ -165,13 +165,30 @@ def compute_spread_and_z(state):
 
 
 def check_exit(state, params):
-    """Check if current position should exit."""
+    """Check if current position should exit using FROZEN entry-time stats.
+
+    FIX 2: The rolling z (params['z']) uses current rolling mean/std which
+    adapts over time — causing fake reversion (issue #182). Instead, compute
+    exit z against the FROZEN entry-time mean/std. The spread can only
+    "revert" if it actually moves back toward the entry-time baseline.
+    """
     if state.position is None:
         return None
 
     pos = state.position
-    z = params['z']
     minutes_held = (datetime.now(timezone.utc) - pos['entry_time']).total_seconds() / 60
+
+    # Compute exit z using FROZEN entry-time stats (not rolling)
+    current_spread = params['current_spread']
+    frozen_z = (current_spread - pos['entry_spread_mean']) / pos['entry_spread_std'] \
+        if pos['entry_spread_std'] > 1e-10 else 0.0
+
+    # Also track rolling z for comparison logging
+    rolling_z = params['z']
+    drift = abs(frozen_z - rolling_z)
+    if drift > 0.5 and minutes_held > 30:
+        log.warning(f"DRIFT: frozen_z={frozen_z:+.3f} rolling_z={rolling_z:+.3f} "
+                    f"drift={drift:.3f} (rolling stats adapting — fake reversion risk)")
 
     # Time-decay exit threshold
     decay = min(minutes_held / MAX_HOLD_MINUTES, 1.0)
@@ -180,9 +197,9 @@ def check_exit(state, params):
     reason = None
     if minutes_held >= MAX_HOLD_MINUTES:
         reason = "max_hold"
-    elif pos['direction'] == 1 and z > -eff_exit:
+    elif pos['direction'] == 1 and frozen_z > -eff_exit:
         reason = "reversion"
-    elif pos['direction'] == -1 and z < eff_exit:
+    elif pos['direction'] == -1 and frozen_z < eff_exit:
         reason = "reversion"
 
     if reason:
@@ -197,7 +214,8 @@ def check_exit(state, params):
         cost = 2 * CAPITAL_PER_LEG * COST_BPS / 10000
         pnl -= cost
         return {'reason': reason, 'pnl': pnl, 'minutes_held': minutes_held,
-                'ret_a': ret_a * 100, 'ret_b': ret_b * 100, 'z_exit': z, 'eff_exit': eff_exit}
+                'ret_a': ret_a * 100, 'ret_b': ret_b * 100,
+                'z_exit_frozen': frozen_z, 'z_exit_rolling': rolling_z, 'eff_exit': eff_exit}
     return None
 
 
@@ -295,9 +313,9 @@ def main():
     tick = 0
     while running:
         try:
-            # Fetch latest bars
+            # FIX 1: Wider poll window (5 min) to catch more bars, not just last 60s
             end = datetime.now(timezone.utc)
-            start = end - timedelta(seconds=args.interval + 30)
+            start = end - timedelta(minutes=5)
             request = CryptoBarsRequest(
                 symbol_or_symbols=[PAIR_A, PAIR_B],
                 timeframe=TimeFrame.Minute,
@@ -310,11 +328,19 @@ def main():
                 sym_bars = bars.data.get(sym, [])
                 for bar in sym_bars:
                     ts = int(bar.timestamp.timestamp() * 1000)
-                    # Dedup: only add if newer than last bar
                     existing = state.bars_a if sym == PAIR_A else state.bars_b
                     if not existing or ts > existing[-1][0]:
                         state.add_bar(sym, ts, float(bar.close))
                         new_bars += 1
+
+            # FIX 3: Data freshness check — warn if prices haven't changed
+            if state.bars_a and state.bars_b:
+                last_a_time = datetime.fromtimestamp(state.bars_a[-1][0] / 1000, tz=timezone.utc)
+                last_b_time = datetime.fromtimestamp(state.bars_b[-1][0] / 1000, tz=timezone.utc)
+                age_a = (end - last_a_time).total_seconds() / 60
+                age_b = (end - last_b_time).total_seconds() / 60
+                if age_a > 5 or age_b > 5:
+                    log.warning(f"STALE DATA: BTC last bar {age_a:.0f}m ago, ETH last bar {age_b:.0f}m ago")
 
             # Compute spread and z-score
             params = compute_spread_and_z(state)
@@ -340,8 +366,12 @@ def main():
                 else:
                     unrealized = -CAPITAL_PER_LEG * ret_a/100 + CAPITAL_PER_LEG * beta * ret_b/100
                 mins_held = (datetime.now(timezone.utc) - pos['entry_time']).total_seconds() / 60
+                # Frozen z for exit comparison
+                frozen_z = (params['current_spread'] - pos['entry_spread_mean']) / pos['entry_spread_std'] \
+                    if pos['entry_spread_std'] > 1e-10 else 0.0
                 pos_str = (f"{'LONG' if pos['direction']==1 else 'SHORT'} "
                           f"held={mins_held:.0f}m unreal=${unrealized:+.2f} "
+                          f"frozen_z={frozen_z:+.2f} rolling_z={params['z']:+.2f} "
                           f"z_entry={pos['entry_z']:+.2f}")
 
             log.info(f"TICK {tick}: BTC=${params['price_a']:,.2f} ETH=${params['price_b']:,.2f} "
@@ -360,7 +390,9 @@ def main():
                              f"{'LONG' if pos['direction']==1 else 'SHORT'} "
                              f"{exit_info['minutes_held']:.0f}m "
                              f"${exit_info['pnl']:+.2f} "
-                             f"z_entry={pos['entry_z']:+.2f} z_exit={exit_info['z_exit']:+.2f} "
+                             f"z_entry={pos['entry_z']:+.2f} "
+                             f"frozen_z={exit_info['z_exit_frozen']:+.2f} "
+                             f"rolling_z={exit_info['z_exit_rolling']:+.2f} "
                              f"ret_a={exit_info['ret_a']:+.2f}% ret_b={exit_info['ret_b']:+.2f}%")
 
                     # Execute close orders
@@ -403,6 +435,9 @@ def main():
                         'beta': params['beta'],
                         'entry_time': datetime.now(timezone.utc),
                         'trace_id': tid,
+                        # FIX 2: Freeze spread stats at entry for exit z computation
+                        'entry_spread_mean': params['spread_mean'],
+                        'entry_spread_std': params['spread_std'],
                     }
                 else:
                     if tick % 5 == 0:
