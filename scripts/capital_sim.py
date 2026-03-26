@@ -769,7 +769,7 @@ def summarize(closed, daily, label="", total_capital=TOTAL_CAPITAL):
         "max_hold_exit_pct": max_hold_exits / n_trades * 100 if n_trades else 0,
         "rotation_exits": rotation_exits,
         "rotation_exit_pct": rotation_exits / n_trades * 100 if n_trades else 0,
-        "ret_per_trade": all_pnl / (n_trades * total_capital / 10) if n_trades else 0,
+        "ret_per_trade": sum(t.pnl / (t.capital_used * 2) for t in closed) / n_trades if n_trades else 0,  # BUG-4 fix: use actual trade capital
     }
 
 

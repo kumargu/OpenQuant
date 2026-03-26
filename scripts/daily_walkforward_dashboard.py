@@ -58,8 +58,8 @@ MAX_PAIRS = 3             # max simultaneous pairs
 CAPITAL_PER_LEG = 10_000  # $ per leg
 MIN_R2 = 0.30             # minimum R² for OLS
 COST_BPS = 5              # round-trip cost in bps (Alpaca $0 commission, ~3-5 bps bid-ask S&P 500)
-MIN_R2_ENTRY = 0.85       # tighter R² for actual entry (scan can be looser)
-MAX_HL_ENTRY = 4.0        # tighter HL for entry — faster reversion pairs only
+MIN_R2_ENTRY = 0.70       # unified with capital_sim.py (BUG-9 fix)
+MAX_HL_ENTRY = 5.0        # unified with capital_sim.py (BUG-9 fix)
 MIN_ADF_ENTRY = -2.5      # tighter ADF for entry (more negative = stronger)
 EARNINGS_BLACKOUT = 5     # skip entry if either leg has earnings within ±N trading days
 
