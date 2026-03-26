@@ -46,11 +46,11 @@ log = logging.getLogger("live_crypto")
 PAIR_A = "BTC/USD"
 PAIR_B = "ETH/USD"
 CAPITAL_PER_LEG = 5000
-ENTRY_Z = 1.0
-EXIT_Z = 0.3
-MAX_HOLD_MINUTES = 60 * 24 * 5  # 5 days in minutes (crypto is 24/7)
-LOOKBACK_BARS = 120  # 2 hours of minute bars for z-score
-OLS_WINDOW = 60 * 24  # 1 day of minute bars for OLS
+ENTRY_Z = 0.8       # aggressive for crypto — higher vol, faster moves
+EXIT_Z = 0.2        # tighter exit — take profits quicker
+MAX_HOLD_MINUTES = 60 * 4  # 4 hours max hold (crypto moves fast)
+LOOKBACK_BARS = 60   # 1 hour of minute bars for z-score
+OLS_WINDOW = 60 * 6  # 6 hours of minute bars for OLS (crypto regime changes fast)
 COST_BPS = 10  # crypto spread is wider
 
 # ── State ─────────────────────────────────────────────────────────────────────
