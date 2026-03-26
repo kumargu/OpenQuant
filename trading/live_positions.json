@@ -1,5 +1,5 @@
 {
-  "_note": "Active paper trading positions. Persist across sessions. Check with: python -m paper_trading account && python -m paper_trading positions",
+  "_note": "Active paper trading positions. Persist across sessions.",
   "positions": [
     {
       "pair": "COIN/PYPL",
@@ -8,23 +8,39 @@
       "entry_time_et": "10:52",
       "leg_a": {"symbol": "COIN", "side": "long", "qty": 28, "entry_price": 176.66},
       "leg_b": {"symbol": "PYPL", "side": "short", "qty": 118, "entry_price": 45.76},
-      "signal": {
-        "z_entry": -0.92,
-        "r2": 0.885,
-        "half_life_days": 2.2,
-        "beta": 1.086,
-        "spread_mean": -0.001341,
-        "spread_std": 0.032703
-      },
+      "signal": {"z_entry": -0.92, "r2": 0.885, "half_life_days": 2.2, "beta": 1.086},
       "capital_per_leg": 5000,
       "max_hold_days": 5,
-      "exit_z_threshold": 0.2,
-      "notes": "First live paper trade. COIN undervalued vs PYPL. Expect reversion in 2-3 days."
+      "exit_z_threshold": 0.2
+    },
+    {
+      "pair": "PNC/USB",
+      "direction": "SHORT",
+      "entry_date": "2026-03-26",
+      "entry_time_et": "11:06",
+      "leg_a": {"symbol": "PNC", "side": "short", "qty": 24, "entry_price": 204.56},
+      "leg_b": {"symbol": "USB", "side": "long", "qty": 103, "entry_price": 51.56},
+      "signal": {"z_entry": 1.89, "r2": 0.978, "half_life_days": 2.4, "beta": 1.074},
+      "capital_per_leg": 5000,
+      "max_hold_days": 5,
+      "exit_z_threshold": 0.2
+    },
+    {
+      "pair": "HD/LOW",
+      "direction": "LONG",
+      "entry_date": "2026-03-26",
+      "entry_time_et": "11:06",
+      "leg_a": {"symbol": "HD", "side": "long", "qty": 15, "entry_price": 332.97},
+      "leg_b": {"symbol": "LOW", "side": "short", "qty": 13, "entry_price": 237.38},
+      "signal": {"z_entry": -1.70, "r2": 0.852, "half_life_days": 3.4, "beta": 0.661},
+      "capital_per_leg": 5000,
+      "max_hold_days": 5,
+      "exit_z_threshold": 0.2
     }
   ],
   "account": {
     "broker": "alpaca_paper",
-    "equity_at_entry": 99397.20,
-    "total_deployed": 10346
+    "total_deployed": 28619,
+    "cash_remaining": 70778
   }
 }
