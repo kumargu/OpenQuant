@@ -41,6 +41,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("live_crypto")
 
+# Silence noisy HTTP/urllib3 debug logs — we don't need request URLs in engine.log
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("alpaca").setLevel(logging.WARNING)
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 PAIR_A = "BTC/USD"
