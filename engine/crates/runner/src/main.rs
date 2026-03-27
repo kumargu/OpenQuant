@@ -152,10 +152,6 @@ struct RunArgs {
     /// Number of warmup bars before signal generation begins.
     #[arg(long, default_value = "0")]
     warmup_bars: usize,
-
-    /// Live mode: re-fetch and re-evaluate every N seconds (0 = once and exit).
-    #[arg(long, default_value = "0")]
-    poll_secs: u64,
 }
 
 #[tokio::main]
@@ -515,7 +511,6 @@ async fn run_live(args: RunArgs) {
     info!(
         pairs = pairs_engine.as_ref().map_or(0, |e| e.pair_count()),
         symbols = symbols.len(),
-        poll_secs = args.poll_secs,
         "live engine ready"
     );
 
@@ -551,35 +546,29 @@ async fn run_live(args: RunArgs) {
         }
     }
 
-    // ── If one-shot mode, fetch latest bars, run, execute, exit ──
-    if args.poll_secs == 0 {
-        run_once(&alpaca, &mut pairs_engine, &symbols).await;
-        info!("========== OPENQUANT LIVE END (one-shot) ==========");
-        return;
-    }
-
-    // ── Continuous mode: tokio::select! event loop ──
-    info!(poll_secs = args.poll_secs, "entering continuous trading loop (Ctrl+C to stop)");
-
-    let mut poll_interval = tokio::time::interval(
-        tokio::time::Duration::from_secs(args.poll_secs)
-    );
-    poll_interval.tick().await; // consume immediate first tick
+    // ── Main loop: fetch → evaluate → execute → sleep → repeat ──
+    // Runs until the process is killed (Ctrl+C, SIGTERM, etc.)
+    info!("entering main loop — process stays alive until killed");
 
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
+    // For daily bars, check once per hour (bar only changes at close).
+    // For intraday, this interval would be replaced by a WebSocket stream.
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+    interval.tick().await; // consume immediate first tick
+
+    // Run immediately on startup
+    run_once(&alpaca, &mut pairs_engine, &symbols).await;
+
     loop {
         tokio::select! {
-            // Task 1: Periodic bar fetch + engine evaluation + order execution
-            _ = poll_interval.tick() => {
-                info!("poll: fetching latest bars");
+            _ = interval.tick() => {
+                info!("heartbeat: re-evaluating");
                 run_once(&alpaca, &mut pairs_engine, &symbols).await;
             }
-
-            // Task 2: Graceful shutdown on Ctrl+C
             _ = &mut ctrl_c => {
-                info!("========== OPENQUANT LIVE END (Ctrl+C) ==========");
+                info!("========== OPENQUANT LIVE END (shutdown) ==========");
                 break;
             }
         }
