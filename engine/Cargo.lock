@@ -671,6 +671,7 @@ version = "0.1.0"
 dependencies = [
  "openquant-core",
  "openquant-journal",
+ "pair-picker",
  "pyo3",
  "serde_json",
  "tracing",

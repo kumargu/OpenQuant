@@ -703,10 +703,99 @@ fn deflated_sharpe(
     )
 }
 
-/// Compute the priority score for signal-queue ranking.
+/// Validate a pair using the Rust pair-picker pipeline.
 ///
-/// Formula: `|z| × sqrt(κ) / σ_spread`
+/// Takes two price arrays (daily closes, oldest first) and returns a dict with:
+///   passed, alpha, beta, r2, adf_stat, half_life, spread_mean, spread_std,
+///   rejection_reasons, score
 ///
+/// Returns None if validation cannot be performed (e.g., insufficient data).
+#[pyfunction]
+#[pyo3(signature = (leg_a, leg_b, prices_a, prices_b))]
+fn scan_pair(
+    leg_a: &str,
+    leg_b: &str,
+    prices_a: Vec<f64>,
+    prices_b: Vec<f64>,
+) -> Option<pyo3::Py<pyo3::types::PyDict>> {
+    use pair_picker::pipeline::{validate_pair, InMemoryPrices};
+    use pair_picker::types::PairCandidate;
+
+    let candidate = PairCandidate {
+        leg_a: leg_a.into(),
+        leg_b: leg_b.into(),
+        economic_rationale: String::new(),
+    };
+
+    let mut price_map = std::collections::HashMap::new();
+    price_map.insert(leg_a.to_string(), prices_a.clone());
+    price_map.insert(leg_b.to_string(), prices_b.clone());
+    let provider = InMemoryPrices { data: price_map };
+
+    let result = validate_pair(&candidate, &provider);
+
+    pyo3::Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("passed", result.passed).ok()?;
+        dict.set_item("alpha", result.alpha).ok()?;
+        dict.set_item("beta", result.beta).ok()?;
+        dict.set_item("r2", result.beta_r_squared).ok()?;
+        dict.set_item("adf_stat", result.adf_statistic).ok()?;
+        dict.set_item("half_life", result.half_life).ok()?;
+        dict.set_item("score", result.score).ok()?;
+        dict.set_item("beta_stable", result.beta_stable).ok()?;
+        dict.set_item("is_cointegrated", result.is_cointegrated).ok()?;
+
+        // Compute spread stats (mean, std) for frozen z-score.
+        // Window must match MAX_VALIDATION_WINDOW used by validate_pair.
+        if let (Some(alpha), Some(beta)) = (result.alpha, result.beta) {
+            let window = pair_picker::pipeline::MAX_VALIDATION_WINDOW;
+            let n = prices_a.len().min(prices_b.len());
+            let start = if n > window { n - window } else { 0 };
+            let spreads: Vec<f64> = (start..n)
+                .filter(|&i| prices_a[i] > 0.0 && prices_b[i] > 0.0)
+                .map(|i| prices_a[i].ln() - alpha - beta * prices_b[i].ln())
+                .collect();
+            if spreads.len() >= 2 {
+                let mean = spreads.iter().sum::<f64>() / spreads.len() as f64;
+                let var = spreads.iter().map(|s| (s - mean).powi(2)).sum::<f64>()
+                    / (spreads.len() - 1) as f64;
+                let std = var.sqrt();
+                if std.is_finite() && std > 0.0 {
+                    dict.set_item("spread_mean", mean).ok()?;
+                    dict.set_item("spread_std", std).ok()?;
+                }
+            }
+        }
+
+        let reasons: Vec<String> = result.rejection_reasons;
+        dict.set_item("rejection_reasons", reasons).ok()?;
+
+        Some(dict.into())
+    })
+}
+
+/// Compute z-score: (log(price_a) - alpha - beta * log(price_b) - spread_mean) / spread_std
+#[pyfunction]
+#[pyo3(signature = (price_a, price_b, alpha, beta, spread_mean, spread_std))]
+fn compute_z(
+    price_a: f64,
+    price_b: f64,
+    alpha: f64,
+    beta: f64,
+    spread_mean: f64,
+    spread_std: f64,
+) -> Option<f64> {
+    if price_a <= 0.0 || price_b <= 0.0 || spread_std <= 0.0 {
+        return None;
+    }
+    if !price_a.is_finite() || !price_b.is_finite() || !spread_std.is_finite() {
+        return None;
+    }
+    let spread = price_a.ln() - alpha - beta * price_b.ln();
+    Some((spread - spread_mean) / spread_std)
+}
+
 /// - z: z-score of the spread at signal time
 /// - kappa: OU mean-reversion rate in per-day units (= ln(2) / half_life_days)
 /// - sigma_spread: rolling standard deviation of the spread
@@ -755,6 +844,41 @@ fn expected_return_per_dollar_per_day(
         return 0.0;
     }
     z.abs() * sigma_spread * kappa / (1.0 + kappa * expected_hold_days)
+}
+
+/// Decide whether to exit a position. Returns exit reason or None.
+///
+/// Time-decay: the exit threshold tightens from `exit_z` toward `floor` as hold progresses.
+/// At max_hold, the position is force-closed regardless of z.
+#[pyfunction]
+#[pyo3(signature = (frozen_z, days_held, max_hold, exit_z=0.2, decay_floor=0.3, use_decay=true))]
+fn decide_exit(
+    frozen_z: Option<f64>,
+    days_held: i32,
+    max_hold: i32,
+    exit_z: f64,
+    decay_floor: f64,
+    use_decay: bool,
+) -> Option<String> {
+    if days_held >= max_hold {
+        return Some("max_hold".into());
+    }
+    let fz = match frozen_z {
+        Some(z) if z.is_finite() => z,
+        _ => return None,
+    };
+    let eff_exit = if use_decay && max_hold > 0 {
+        let decay = (days_held as f64 / max_hold as f64).min(1.0);
+        let floor = decay_floor.min(exit_z);
+        exit_z - (exit_z - floor) * decay
+    } else {
+        exit_z
+    };
+    if fz.abs() < eff_exit {
+        Some("reversion".into())
+    } else {
+        None
+    }
 }
 
 /// Compute per-pair max hold days from OU half-life.
@@ -1075,6 +1199,9 @@ fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_bars, m)?)?;
     m.add_function(wrap_pyfunction!(deflated_sharpe, m)?)?;
     m.add_function(wrap_pyfunction!(load_config, m)?)?;
+    m.add_function(wrap_pyfunction!(scan_pair, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_z, m)?)?;
+    m.add_function(wrap_pyfunction!(decide_exit, m)?)?;
     m.add_function(wrap_pyfunction!(compute_priority_score, m)?)?;
     m.add_function(wrap_pyfunction!(expected_return_per_dollar_per_day, m)?)?;
     m.add_function(wrap_pyfunction!(compute_max_hold_days, m)?)?;

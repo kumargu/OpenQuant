@@ -394,8 +394,9 @@ max_bar_age_seconds = 120
 # - VWAP session reset (resets at midnight in this timezone)
 # - Market hours filtering (bars outside open/close are dropped)
 # - Day boundary detection
-# US Eastern: -5 (EST) or -4 (EDT). Use -5 for year-round safety.
-timezone_offset_hours = -5
+# US Eastern: -4 (EDT, March-November) or -5 (EST, November-March).
+# TODO: Replace with "US/Eastern" ZoneInfo to handle DST automatically.
+timezone_offset_hours = -4
 
 # Market open/close in local timezone (HH:MM format).
 # Bars outside this window are filtered out (pre-market/after-hours).

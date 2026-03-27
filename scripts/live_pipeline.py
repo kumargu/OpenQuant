@@ -27,7 +27,6 @@ Architecture:
 import argparse
 import json
 import logging
-import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +42,7 @@ ET = ZoneInfo("US/Eastern")
 from pairs_core import (
     scan_pair, compute_z, load_earnings_calendar,
     validate_entry, compute_frozen_z, decide_exit, score_signal,
+    check_beta_drift,
     TOTAL_CAPITAL, HOLD_MULTIPLIER, MAX_HOLD_CAP, EXIT_Z_DEFAULT,
 )
 
@@ -153,6 +153,8 @@ def _compute_position_frozen_z(pos, a_now, b_now, prices, total_bars):
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
+_last_betas = {}  # persist beta across daily scans for stability check
+
 def cmd_scan(args):
     """Pre-market scan: find actionable signals from the portfolio."""
     pairs, defaults = load_portfolio()
@@ -180,6 +182,14 @@ def cmd_scan(args):
         params = scan_pair(leg_a, leg_b, prices[leg_a], prices[leg_b], total_bars - 1)
         if params is None:
             logger.debug(f"  {pair_id}: scan_pair REJECTED")
+            continue
+
+        # Beta stability check (shared with capital_sim via pairs_core)
+        prev_beta = _last_betas.get(pair_id)
+        stable, change = check_beta_drift(params.beta, prev_beta)
+        _last_betas[pair_id] = params.beta
+        if not stable:
+            logger.info(f"  {pair_id}: REJECTED — beta_unstable {params.beta:.3f} (prev={prev_beta:.3f}, change={change:.0%})")
             continue
 
         pa = prices[leg_a][total_bars - 1]
@@ -291,7 +301,12 @@ def cmd_enter(args):
             logger.info(f"  SKIP {sig['pair']}: already held")
             continue
 
-        capital_needed = sig["capital_per_leg"] * 2
+        # Cap capital per leg (same as capital_sim: MAX_PER_TRADE_FRAC * TOTAL_CAPITAL)
+        from pairs_core import MAX_PER_TRADE_FRAC
+        max_per_leg = TOTAL_CAPITAL * MAX_PER_TRADE_FRAC
+        capital_per_leg = min(sig["capital_per_leg"], max_per_leg)
+
+        capital_needed = capital_per_leg * 2
         if capital_needed > cash:
             logger.info(f"  SKIP {sig['pair']}: need ${capital_needed} but cash=${cash:.0f}")
             continue
@@ -300,8 +315,8 @@ def cmd_enter(args):
         pa = prices_data[sig["leg_a"]][total_bars - 1]
         pb = prices_data[sig["leg_b"]][total_bars - 1]
 
-        qty_a = max(1, int(sig["capital_per_leg"] / pa))
-        qty_b = max(1, int(sig["capital_per_leg"] * abs(sig["beta"]) / pb))
+        qty_a = max(1, int(capital_per_leg / pa))
+        qty_b = max(1, int(capital_per_leg * abs(sig["beta"]) / pb))
 
         is_long = sig["direction"] == "LONG"
         side_a = OrderSide.BUY if is_long else OrderSide.SELL
@@ -358,7 +373,7 @@ def cmd_enter(args):
                     "spread_mean": sig["spread_mean"],
                     "spread_std": sig["spread_std"],
                 },
-                "capital_per_leg": sig["capital_per_leg"],
+                "capital_per_leg": capital_per_leg,
                 "max_hold_days": sig["max_hold"],
                 "exit_z_threshold": sig["exit_z"],
             }
