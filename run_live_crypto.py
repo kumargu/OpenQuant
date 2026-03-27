@@ -30,15 +30,22 @@ load_dotenv()
 LOG_FILE = Path("data/journal/engine.log")
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)-5s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stderr),
-        logging.FileHandler(LOG_FILE, mode="a"),
-    ],
-)
+# Force ET timestamps (server runs IST but we trade US markets)
+_et_converter = lambda *args: datetime.now(timezone.utc).astimezone(
+    __import__('zoneinfo').ZoneInfo("US/Eastern")).timetuple()
+
+_fmt = logging.Formatter("%(asctime)s %(levelname)-5s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+_fmt.converter = _et_converter
+
+_sh = logging.StreamHandler(sys.stderr)
+_sh.setLevel(logging.DEBUG)
+_sh.setFormatter(_fmt)
+
+_file_h = logging.FileHandler(LOG_FILE, mode="a")
+_file_h.setLevel(logging.DEBUG)
+_file_h.setFormatter(_fmt)
+
+logging.basicConfig(level=logging.DEBUG, handlers=[_sh, _file_h])
 log = logging.getLogger("live_crypto")
 
 # Silence noisy HTTP/urllib3 debug logs — we don't need request URLs in engine.log

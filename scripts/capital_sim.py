@@ -31,30 +31,30 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root / "scripts"))
 
-# Rust bridge — all math lives here.
-# Paths: engine/.venv is the canonical venv for the project.
-_venv_site = root / "engine" / ".venv" / "lib"
-_site_pkgs = next(_venv_site.glob("python*/site-packages"), None)
-if _site_pkgs and str(_site_pkgs) not in sys.path:
-    sys.path.insert(0, str(_site_pkgs))
-
-try:
-    from openquant import openquant as _oq
-    _compute_priority_score = _oq.compute_priority_score
-    _expected_return_per_dollar_per_day = _oq.expected_return_per_dollar_per_day
-    _compute_max_hold_days = _oq.compute_max_hold_days
-    _compute_remaining_per_day = _oq.compute_remaining_per_day
-    _should_rotate = _oq.should_rotate
-    _compute_capital_metrics = _oq.compute_capital_metrics
-except ImportError as _e:
-    raise ImportError(
-        "openquant pybridge not found. Run: cd engine && maturin develop --release"
-    ) from _e
-
-from daily_walkforward_dashboard import (
+# Shared logic — single source of truth (pairs_core.py)
+from pairs_core import (
+    # Rust bridge
+    compute_priority_score as _compute_priority_score,
+    expected_return_per_dollar_per_day as _expected_return_per_dollar_per_day,
+    compute_max_hold_days as _compute_max_hold_days,
+    compute_remaining_per_day as _compute_remaining_per_day,
+    should_rotate as _should_rotate,
+    compute_capital_metrics as _compute_capital_metrics,
+    # Dashboard functions
     scan_pair, compute_z, ols_simple, PairParams,
-    FORMATION_DAYS, MIN_R2, COST_BPS,
+    FORMATION_DAYS, COST_BPS,
     load_earnings_calendar, is_near_earnings,
+    # Shared config
+    TOTAL_CAPITAL as _TOTAL_CAPITAL_DEFAULT,
+    MIN_R2_ENTRY, MAX_HL_ENTRY, MIN_ADF_ENTRY, MIN_BETA, MIN_SPREAD_STD,
+    HOLD_MULTIPLIER as _HOLD_MULTIPLIER_DEFAULT,
+    MAX_HOLD_CAP as _MAX_HOLD_CAP_DEFAULT,
+    ROTATION_COST_PER_DAY as _ROTATION_COST_DEFAULT,
+    MAX_ROTATIONS_PER_DAY as _MAX_ROTATIONS_DEFAULT,
+    MIN_TRADE_CAPITAL, MAX_PER_TRADE_FRAC,
+    EXIT_DECAY_FLOOR, EXIT_Z_DEFAULT,
+    # Shared logic
+    check_quality_gate, validate_entry, score_signal, compute_frozen_z, decide_exit,
 )
 
 # ── Logger ────────────────────────────────────────────────────────────────────
@@ -72,25 +72,13 @@ _sh.setLevel(logging.INFO)
 _sh.setFormatter(logging.Formatter("%(message)s"))
 logger.addHandler(_sh)
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config — imported from pairs_core (single source of truth) ────────────────
 
-TOTAL_CAPITAL = 10_000
-MIN_TRADE_CAPITAL = 200     # minimum per leg to bother trading
-MAX_PER_TRADE_FRAC = 0.25   # max 25% of total in one trade
-MIN_R2_ENTRY = 0.70
-MAX_HL_ENTRY = 5.0
-MIN_ADF_ENTRY = -2.5
-
-# Dynamic max_hold parameters — passed to Rust compute_max_hold_days.
-# OU theory: after hold_multiplier half-lives, expected reversion is 1 - 2^{-multiplier}.
-# 2.5x gives ~82% reversion; 2.0x gives ~75%.  Default 2.5x matches pair-picker default.
-HOLD_MULTIPLIER = 2.5
-MAX_HOLD_CAP = 10           # sweep shows 7-10d tie at $13/d; longer = more reversions
-
-# Rotation parameters — passed to Rust should_rotate.
-# cost_per_day: one-way 5 bps * 2 legs / expected_hold_days (≈ 2.5d) ≈ 0.001/day
-ROTATION_COST_PER_DAY = 0.001
-MAX_ROTATIONS_PER_DAY = 2   # cap churn to 2 rotations per day
+TOTAL_CAPITAL = _TOTAL_CAPITAL_DEFAULT
+HOLD_MULTIPLIER = _HOLD_MULTIPLIER_DEFAULT
+MAX_HOLD_CAP = _MAX_HOLD_CAP_DEFAULT
+ROTATION_COST_PER_DAY = _ROTATION_COST_DEFAULT
+MAX_ROTATIONS_PER_DAY = _MAX_ROTATIONS_DEFAULT
 
 
 @dataclass
@@ -204,29 +192,25 @@ def run_capital_sim(
             pnl_unrealized = compute_pnl(trade, pa, pb)
             ret_unrealized = pnl_unrealized / (trade.capital_per_leg * 2) * 100 if trade.capital_per_leg > 0 else 0
 
-            # Time-decay exit threshold
-            decay = min(bars_held / trade.max_hold, 1.0)
-            floor = min(0.3, trade.exit_z)
-            eff_exit = trade.exit_z - (trade.exit_z - floor) * decay
+            # Frozen z-score using entry-time params — shared with live_pipeline
+            frozen_z = compute_frozen_z(pa, pb, trade.params.alpha, trade.params.beta,
+                                        trade.params.spread_mean, trade.params.spread_std)
+
+            # Exit decision — shared logic from pairs_core (time-decay enabled)
+            reason = decide_exit(frozen_z, bars_held, trade.max_hold,
+                                 exit_z=trade.exit_z, use_decay=True)
 
             # Per-bar holding log — the key diagnostic for understanding trade evolution
+            fz_str = f"frozen_z={frozen_z:+.3f}" if frozen_z is not None else "frozen_z=None"
             logger.debug(f"[Day {day:>3}] HOLD {trade.pair_id():<12} "
                          f"[{trade.trade_id}] "
                          f"{'L' if trade.direction==1 else 'S'} "
                          f"held={bars_held}/{trade.max_hold}d "
                          f"z_now={z:+.3f} z_entry={trade.entry_z:+.3f} "
-                         f"exit_thresh={eff_exit:.3f} "
+                         f"{fz_str} "
                          f"unreal=${pnl_unrealized:+.2f} ({ret_unrealized:+.2f}%) "
                          f"prio={trade.priority_score:.1f} "
                          f"${trade.capital_per_leg:.0f}/leg")
-
-            reason = None
-            if bars_held >= trade.max_hold:
-                reason = "max_hold"
-            elif trade.direction == 1 and z > -eff_exit:
-                reason = "reversion"
-            elif trade.direction == -1 and z < eff_exit:
-                reason = "reversion"
 
             if reason:
                 pnl = compute_pnl(trade, pa, pb)
@@ -274,10 +258,17 @@ def run_capital_sim(
                 continue
 
             params = scan_pair(leg_a, leg_b, prices[leg_a], prices[leg_b], day)
-            if params is None or params.beta < 0.1:
+            if params is None:
                 continue
 
-            # Beta stability
+            # Quality gate — shared with live_pipeline via pairs_core
+            ok, reasons = check_quality_gate(params)
+            if not ok:
+                logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} quality_gate "
+                             f"{' '.join(reasons)}")
+                continue
+
+            # Beta stability (capital_sim-specific: needs last_beta state across days)
             pair_key = (leg_a, leg_b)
             if pair_key in last_beta:
                 prev = last_beta[pair_key]
@@ -288,24 +279,22 @@ def run_capital_sim(
                     continue
             last_beta[pair_key] = params.beta
 
-            # Quality gate
-            if params.r2 < MIN_R2_ENTRY or params.half_life > MAX_HL_ENTRY or params.adf_stat > MIN_ADF_ENTRY:
-                reject_reasons = []
-                if params.r2 < MIN_R2_ENTRY:
-                    reject_reasons.append(f"r2={params.r2:.3f}")
-                if params.half_life > MAX_HL_ENTRY:
-                    reject_reasons.append(f"hl={params.half_life:.1f}")
-                if params.adf_stat > MIN_ADF_ENTRY:
-                    reject_reasons.append(f"adf={params.adf_stat:.2f}")
-                logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} quality_gate "
-                             f"{' '.join(reject_reasons)}")
-                continue
-
             pa = prices[leg_a][day]
             pb = prices[leg_b][day]
             z = compute_z(params, pa, pb)
 
             entry_z = pcfg.get('entry_z', 1.0)
+            exit_z = pcfg.get('exit_z', EXIT_Z_DEFAULT)
+
+            # Full validation: stability + win rate — shared with live_pipeline
+            # (earnings + quality already checked above, but validate_entry re-checks
+            #  quality gate which is fast — keeps the gate logic in one place)
+            ok, reason = validate_entry(leg_a, leg_b, params, z, prices, day + 1,
+                                        earnings_cal, entry_z=entry_z, exit_z=exit_z)
+            if not ok:
+                logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} {reason}")
+                continue
+
             if abs(z) >= entry_z + 1.5:
                 logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} z_cap "
                              f"z={z:+.3f} cap={entry_z+1.5:.1f} "
@@ -325,19 +314,8 @@ def run_capital_sim(
                     logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} no_capital "
                                  f"z={z:+.3f} need=${actual_capital*2:.0f} pool=${available_capital:.0f}")
                 else:
-                    # Priority score: |z| × sqrt(kappa) / sigma (Rust-computed)
-                    kappa = 0.693147 / params.half_life  # ln(2) / HL
-                    prio = _compute_priority_score(z, kappa, params.spread_std)
-                    # Expected return/$/day for this queued signal (Rust-computed)
-                    # Dynamic max_hold from Rust: ceil(HOLD_MULTIPLIER * HL), capped at MAX_HOLD_CAP
-                    dyn_max_hold = _compute_max_hold_days(
-                        params.half_life,
-                        hold_multiplier=HOLD_MULTIPLIER,
-                        max_hold_cap=MAX_HOLD_CAP,
-                    )
-                    erpdd = _expected_return_per_dollar_per_day(
-                        z, params.spread_std, kappa, float(dyn_max_hold)
-                    )
+                    # Signal scoring — shared with live_pipeline via pairs_core
+                    prio, erpdd, dyn_max_hold, kappa = score_signal(z, params.half_life, params.spread_std)
                     signals.append((leg_a, leg_b, params, z, pa, pb, pcfg,
                                     actual_capital, prio, erpdd, dyn_max_hold))
 
@@ -475,7 +453,7 @@ def run_capital_sim(
                     entry_pa=pa, entry_pb=pb, entry_z=z,
                     capital_per_leg=capital,
                     max_hold=dyn_max_hold,  # dynamic: ceil(HOLD_MULTIPLIER * HL), cap=MAX_HOLD_CAP
-                    exit_z=pcfg.get('exit_z', 0.3),
+                    exit_z=pcfg.get('exit_z', EXIT_Z_DEFAULT),
                     priority_score=prio,
                     trade_id=tid,
                 )
