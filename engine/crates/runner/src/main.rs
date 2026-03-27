@@ -539,7 +539,12 @@ async fn run_live(args: RunArgs) {
                     }
                 }
             }
-            info!("warmup complete");
+            info!("warmup complete — flattening phantom positions");
+            // Reset all positions opened during warmup. Rolling stats are warm,
+            // but we don't want to hold positions that weren't placed on Alpaca.
+            if let Some(ref mut pe) = pairs_engine {
+                pe.flatten_all();
+            }
         }
         Err(e) => {
             error!("warmup fetch failed: {e}");

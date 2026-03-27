@@ -243,6 +243,19 @@ impl PairsEngine {
         info!("pairs engine: daily reset (no-op for pair positions)");
     }
 
+    /// Flatten all positions — close everything in-engine without emitting orders.
+    /// Used after warmup: rolling stats are warmed up but we don't want phantom positions.
+    pub fn flatten_all(&mut self) {
+        let mut flattened = 0;
+        for (_config, state) in &mut self.pairs {
+            if state.position() != super::PairPosition::Flat {
+                state.force_flat();
+                flattened += 1;
+            }
+        }
+        info!(flattened, "pairs engine: flattened all positions (warmup reset)");
+    }
+
     /// Number of configured pairs.
     pub fn pair_count(&self) -> usize {
         self.pairs.len()

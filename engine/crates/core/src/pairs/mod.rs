@@ -827,6 +827,13 @@ impl PairState {
         self.position
     }
 
+    /// Force flat — reset position without emitting orders.
+    /// Used after warmup to clear phantom positions while keeping rolling stats warm.
+    pub fn force_flat(&mut self) {
+        self.position = PairPosition::Flat;
+        self.exit_context = None;
+    }
+
     /// Number of spread observations processed.
     pub fn spread_count(&self) -> usize {
         self.spread_count
