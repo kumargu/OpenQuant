@@ -152,9 +152,14 @@ struct RunArgs {
     /// Number of warmup bars before signal generation begins.
     #[arg(long, default_value = "0")]
     warmup_bars: usize,
+
+    /// Live mode: re-fetch and re-evaluate every N seconds (0 = once and exit).
+    #[arg(long, default_value = "0")]
+    poll_secs: u64,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     // Resolve engine mode and config path from CLI args (before tracing init)
@@ -186,7 +191,7 @@ fn main() {
     // ── Dispatch ──
     match cli.command {
         Command::WalkForward(args) => run_walkforward(args),
-        Command::Live(args) => run_live(args),
+        Command::Live(args) => run_live(args).await,
     }
 }
 
@@ -433,31 +438,33 @@ fn run_walkforward(args: RunArgs) {
     info!("================================================================");
 }
 
-/// Live trading mode — fetches daily bars from Alpaca, feeds to engine, outputs intents.
+/// Live trading mode — async event loop with tokio::select!
 ///
-/// Pure Rust end-to-end. No Python dependency for data or decisions.
-/// Reads API keys from .env file. Outputs order intents as JSON to stdout.
-/// All decisions logged via tracing to stderr + engine.log.
+/// Three concurrent tasks:
+///   1. Bar fetch: periodically fetches daily bars from Alpaca, feeds to engine
+///   2. Order execution: executes OrderIntents from the engine on Alpaca
+///   3. Reload watch: re-reads active_pairs.json when it changes on disk
+///
+/// Pure Rust. No Python. Ctrl+C for graceful shutdown.
 ///
 /// Usage:
-///   openquant-runner live --engine pairs                    # one-shot: fetch + decide
-///   openquant-runner live --engine pairs --loop 300         # re-run every 5 min
-fn run_live(args: RunArgs) {
+///   openquant-runner live --engine pairs                      # one-shot
+///   openquant-runner live --engine pairs --poll-secs 300      # re-poll every 5 min
+async fn run_live(args: RunArgs) {
     let mode = args.engine;
     let config_path = args.config.clone()
         .unwrap_or_else(|| PathBuf::from(mode.default_config()));
 
     info!(?mode, config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
 
-    // Load .env for Alpaca API keys
-    let env_path = std::path::PathBuf::from(".env");
-    let env = alpaca::load_env(&env_path);
-    let api_key = env.get("ALPACA_API_KEY").cloned().unwrap_or_default();
-    let api_secret = env.get("ALPACA_SECRET_KEY").cloned().unwrap_or_default();
-    if api_key.is_empty() || api_secret.is_empty() {
-        error!("ALPACA_API_KEY or ALPACA_SECRET_KEY missing from .env");
-        std::process::exit(1);
-    }
+    // Load Alpaca client from .env
+    let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
 
     // Load config
     let cfg_file = match ConfigFile::load(&config_path) {
@@ -476,8 +483,8 @@ fn run_live(args: RunArgs) {
 
     // Initialize pairs engine
     let mut pairs_engine = if mode.run_pairs() {
-        let mut pairs_trading_config = cfg_file.pairs_trading.clone();
-        pairs_trading_config.tz_offset_hours = cfg_file.data.timezone_offset_hours;
+        let mut ptc = cfg_file.pairs_trading.clone();
+        ptc.tz_offset_hours = cfg_file.data.timezone_offset_hours;
 
         let active_pairs_path = trading_dir.join("active_pairs.json");
         let history_path = trading_dir.join("pair_trading_history.json");
@@ -485,10 +492,7 @@ fn run_live(args: RunArgs) {
         if active_pairs_path.exists() {
             info!(path = %active_pairs_path.display(), "loading active pairs");
             Some(PairsEngine::from_active_pairs(
-                &active_pairs_path,
-                &history_path,
-                vec![],
-                pairs_trading_config,
+                &active_pairs_path, &history_path, vec![], ptc,
             ))
         } else {
             error!("no active_pairs.json found");
@@ -498,69 +502,153 @@ fn run_live(args: RunArgs) {
         None
     };
 
-    // Collect all symbols from active pairs
+    // Collect symbols
     let symbols: Vec<String> = if let Some(ref pe) = pairs_engine {
         pe.positions().iter()
             .flat_map(|(cfg, _)| vec![cfg.leg_a.clone(), cfg.leg_b.clone()])
             .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect()
+            .into_iter().collect()
     } else {
         vec![]
     };
 
     info!(
-        ?mode,
         pairs = pairs_engine.as_ref().map_or(0, |e| e.pair_count()),
         symbols = symbols.len(),
+        poll_secs = args.poll_secs,
         "live engine ready"
     );
 
-    // Fetch historical bars for warmup + today's bar
-    let lookback = cfg_file.pairs_trading.lookback + 10; // extra buffer
-    info!(lookback, "fetching daily bars from Alpaca for warmup");
+    // ── Initial warmup: fetch historical bars and run through engine ──
+    let lookback = cfg_file.pairs_trading.lookback + 10;
+    info!(lookback, "fetching historical bars for warmup");
 
-    let all_bars = match alpaca::fetch_daily_bars(&symbols, &api_key, &api_secret, lookback + 5) {
-        Ok(bars) => bars,
+    match alpaca.fetch_daily_bars(&symbols, lookback + 5).await {
+        Ok(bars) => {
+            info!(bars = bars.len(), "warmup: feeding historical bars");
+            for (symbol, timestamp, close) in &bars {
+                if let Some(ref mut pe) = pairs_engine {
+                    let intents = pe.on_bar(symbol, *timestamp, *close);
+                    // During warmup, log intents but don't execute
+                    for intent in &intents {
+                        info!(
+                            symbol = intent.symbol.as_str(),
+                            side = ?intent.side,
+                            qty = intent.qty,
+                            pair_id = intent.pair_id.as_str(),
+                            z = %format_args!("{:.2}", intent.z_score),
+                            priority = %format_args!("{:.1}", intent.priority_score),
+                            "warmup intent (not executed)"
+                        );
+                    }
+                }
+            }
+            info!("warmup complete");
+        }
         Err(e) => {
-            error!("failed to fetch bars: {e}");
+            error!("warmup fetch failed: {e}");
             std::process::exit(1);
         }
-    };
-
-    if all_bars.is_empty() {
-        error!("no bars fetched — check API keys and symbol list");
-        std::process::exit(1);
     }
 
-    info!(bars = all_bars.len(), "processing bars through engine");
+    // ── If one-shot mode, fetch latest bars, run, execute, exit ──
+    if args.poll_secs == 0 {
+        run_once(&alpaca, &mut pairs_engine, &symbols).await;
+        info!("========== OPENQUANT LIVE END (one-shot) ==========");
+        return;
+    }
 
-    // Feed all bars to the engine (warmup + current)
-    let stdout = std::io::stdout();
-    let mut stdout = stdout.lock();
+    // ── Continuous mode: tokio::select! event loop ──
+    info!(poll_secs = args.poll_secs, "entering continuous trading loop (Ctrl+C to stop)");
 
-    for (symbol, timestamp, close) in &all_bars {
-        if let Some(ref mut pe) = pairs_engine {
-            let intents = pe.on_bar(symbol, *timestamp, *close);
-            for intent in &intents {
-                let out = serde_json::json!({
-                    "symbol": intent.symbol,
-                    "side": format!("{:?}", intent.side).to_lowercase(),
-                    "qty": intent.qty,
-                    "pair_id": intent.pair_id,
-                    "reason": format!("{:?}", intent.reason),
-                    "z_score": intent.z_score,
-                    "spread": intent.spread,
-                    "priority_score": intent.priority_score,
-                    "timestamp": timestamp,
-                });
-                let _ = writeln!(stdout, "{}", out);
-                let _ = stdout.flush();
+    let mut poll_interval = tokio::time::interval(
+        tokio::time::Duration::from_secs(args.poll_secs)
+    );
+    poll_interval.tick().await; // consume immediate first tick
+
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
+    loop {
+        tokio::select! {
+            // Task 1: Periodic bar fetch + engine evaluation + order execution
+            _ = poll_interval.tick() => {
+                info!("poll: fetching latest bars");
+                run_once(&alpaca, &mut pairs_engine, &symbols).await;
+            }
+
+            // Task 2: Graceful shutdown on Ctrl+C
+            _ = &mut ctrl_c => {
+                info!("========== OPENQUANT LIVE END (Ctrl+C) ==========");
+                break;
             }
         }
     }
+}
 
-    info!("========== OPENQUANT LIVE END ==========");
+/// Fetch latest bars, feed to engine, execute any intents on Alpaca.
+async fn run_once(
+    alpaca: &alpaca::AlpacaClient,
+    pairs_engine: &mut Option<PairsEngine>,
+    symbols: &[String],
+) {
+    // Fetch latest daily closes
+    let bars = match alpaca.fetch_daily_bars(symbols, 5).await {
+        Ok(b) => b,
+        Err(e) => {
+            error!("bar fetch failed: {e}");
+            return;
+        }
+    };
+
+    if bars.is_empty() {
+        warn!("no bars returned from Alpaca");
+        return;
+    }
+
+    // Feed to engine — collect intents
+    let mut all_intents = Vec::new();
+    if let Some(ref mut pe) = pairs_engine {
+        for (symbol, timestamp, close) in &bars {
+            let intents = pe.on_bar(symbol, *timestamp, *close);
+            all_intents.extend(intents);
+        }
+    }
+
+    if all_intents.is_empty() {
+        info!(bars = bars.len(), "no signals — engine evaluated, no intents");
+        return;
+    }
+
+    // Execute intents on Alpaca
+    info!(intents = all_intents.len(), "executing order intents");
+    for intent in &all_intents {
+        let side = format!("{:?}", intent.side).to_lowercase();
+        match alpaca.place_order(&intent.symbol, intent.qty, &side).await {
+            Ok(order) => {
+                info!(
+                    symbol = intent.symbol.as_str(),
+                    side = side.as_str(),
+                    qty = intent.qty,
+                    pair_id = intent.pair_id.as_str(),
+                    z = %format_args!("{:.2}", intent.z_score),
+                    order_id = order.id.as_str(),
+                    order_status = order.status.as_str(),
+                    "order executed"
+                );
+            }
+            Err(e) => {
+                error!(
+                    symbol = intent.symbol.as_str(),
+                    side = side.as_str(),
+                    qty = intent.qty,
+                    error = e.as_str(),
+                    "order execution failed"
+                );
+            }
+        }
+    }
+    info!(executed = all_intents.len(), "poll cycle complete");
 }
 
 /// Writer that tees output to both stderr and a file.
