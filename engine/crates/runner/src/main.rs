@@ -59,6 +59,7 @@
 //! - Output: `data/order_intents.json`, `data/trade_results.json`
 //! - Logs:   `data/journal/engine.log` (append mode, run IDs for correlation)
 
+mod alpaca;
 mod bars;
 mod intents;
 mod pnl;
@@ -68,7 +69,7 @@ use intents::{write_intents, write_trade_results, OrderIntentRecord};
 use openquant_core::config::ConfigFile;
 use openquant_core::engine::SingleEngine;
 use openquant_core::pairs::engine::PairsEngine;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
@@ -432,23 +433,31 @@ fn run_walkforward(args: RunArgs) {
     info!("================================================================");
 }
 
-/// Live trading mode — reads bars from stdin, writes intents to stdout.
+/// Live trading mode — fetches daily bars from Alpaca, feeds to engine, outputs intents.
 ///
-/// Protocol:
-///   stdin:  one JSON bar per line: {"symbol":"GLD","timestamp":123,"open":1,"high":2,"low":0.5,"close":1.5,"volume":100}
-///   stdout: one JSON intent per line: {"symbol":"GLD","side":"buy","qty":23,"pair_id":"GLD/SLV","z_score":-2.1}
-///   stderr: tracing logs
+/// Pure Rust end-to-end. No Python dependency for data or decisions.
+/// Reads API keys from .env file. Outputs order intents as JSON to stdout.
+/// All decisions logged via tracing to stderr + engine.log.
 ///
-/// Usage with Python sidecar:
-///   python3 bar_streamer.py | openquant-runner live --config config/pairs.toml | python3 order_executor.py
+/// Usage:
+///   openquant-runner live --engine pairs                    # one-shot: fetch + decide
+///   openquant-runner live --engine pairs --loop 300         # re-run every 5 min
 fn run_live(args: RunArgs) {
     let mode = args.engine;
     let config_path = args.config.clone()
         .unwrap_or_else(|| PathBuf::from(mode.default_config()));
 
-    // Tracing already initialized in main() — logs to stderr + engine.log
-
     info!(?mode, config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
+
+    // Load .env for Alpaca API keys
+    let env_path = std::path::PathBuf::from(".env");
+    let env = alpaca::load_env(&env_path);
+    let api_key = env.get("ALPACA_API_KEY").cloned().unwrap_or_default();
+    let api_secret = env.get("ALPACA_SECRET_KEY").cloned().unwrap_or_default();
+    if api_key.is_empty() || api_secret.is_empty() {
+        error!("ALPACA_API_KEY or ALPACA_SECRET_KEY missing from .env");
+        std::process::exit(1);
+    }
 
     // Load config
     let cfg_file = match ConfigFile::load(&config_path) {
@@ -465,14 +474,7 @@ fn run_live(args: RunArgs) {
         args.data_dir.clone()
     };
 
-    // Initialize engines based on mode
-    let mut single_engine = if mode.run_single() {
-        let engine_config = cfg_file.clone().into_engine_config();
-        Some(SingleEngine::new(engine_config))
-    } else {
-        None
-    };
-
+    // Initialize pairs engine
     let mut pairs_engine = if mode.run_pairs() {
         let mut pairs_trading_config = cfg_file.pairs_trading.clone();
         pairs_trading_config.tz_offset_hours = cfg_file.data.timezone_offset_hours;
@@ -496,52 +498,50 @@ fn run_live(args: RunArgs) {
         None
     };
 
+    // Collect all symbols from active pairs
+    let symbols: Vec<String> = if let Some(ref pe) = pairs_engine {
+        pe.positions().iter()
+            .flat_map(|(cfg, _)| vec![cfg.leg_a.clone(), cfg.leg_b.clone()])
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect()
+    } else {
+        vec![]
+    };
+
     info!(
         ?mode,
         pairs = pairs_engine.as_ref().map_or(0, |e| e.pair_count()),
-        "live engine ready — reading bars from stdin"
+        symbols = symbols.len(),
+        "live engine ready"
     );
 
-    // Read bars from stdin, process, write intents to stdout
-    let stdin = std::io::stdin();
+    // Fetch historical bars for warmup + today's bar
+    let lookback = cfg_file.pairs_trading.lookback + 10; // extra buffer
+    info!(lookback, "fetching daily bars from Alpaca for warmup");
+
+    let all_bars = match alpaca::fetch_daily_bars(&symbols, &api_key, &api_secret, lookback + 5) {
+        Ok(bars) => bars,
+        Err(e) => {
+            error!("failed to fetch bars: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if all_bars.is_empty() {
+        error!("no bars fetched — check API keys and symbol list");
+        std::process::exit(1);
+    }
+
+    info!(bars = all_bars.len(), "processing bars through engine");
+
+    // Feed all bars to the engine (warmup + current)
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(e) => {
-                error!("stdin read error: {e}");
-                break;
-            }
-        };
-
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // Parse bar
-        let bar: serde_json::Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("invalid bar JSON: {e}");
-                continue;
-            }
-        };
-
-        let symbol = bar["symbol"].as_str().unwrap_or("");
-        let timestamp = bar["timestamp"].as_i64().unwrap_or(0);
-        let close = bar["close"].as_f64().unwrap_or(0.0);
-
-        if symbol.is_empty() || timestamp == 0 || close <= 0.0 {
-            warn!(line = line, "skipping bar with missing/invalid fields");
-            continue;
-        }
-
-        // Feed to pairs engine
+    for (symbol, timestamp, close) in &all_bars {
         if let Some(ref mut pe) = pairs_engine {
-            let intents = pe.on_bar(symbol, timestamp, close);
+            let intents = pe.on_bar(symbol, *timestamp, *close);
             for intent in &intents {
                 let out = serde_json::json!({
                     "symbol": intent.symbol,
@@ -554,34 +554,7 @@ fn run_live(args: RunArgs) {
                     "priority_score": intent.priority_score,
                     "timestamp": timestamp,
                 });
-                if let Err(e) = writeln!(stdout, "{}", out) {
-                    error!("stdout write error: {e}");
-                    return;
-                }
-                let _ = stdout.flush();
-            }
-        }
-
-        // Feed to single-symbol engine
-        if let Some(ref mut se) = single_engine {
-            let bar = openquant_core::market_data::Bar {
-                symbol: symbol.to_string(),
-                timestamp,
-                open: close, high: close, low: close, close, volume: 0.0,
-            };
-            let intents = se.on_bar(&bar);
-            for intent in &intents {
-                let out = serde_json::json!({
-                    "symbol": intent.symbol,
-                    "side": format!("{:?}", intent.side).to_lowercase(),
-                    "qty": intent.qty,
-                    "reason": "single_engine",
-                    "timestamp": timestamp,
-                });
-                if let Err(e) = writeln!(stdout, "{}", out) {
-                    error!("stdout write error: {e}");
-                    return;
-                }
+                let _ = writeln!(stdout, "{}", out);
                 let _ = stdout.flush();
             }
         }

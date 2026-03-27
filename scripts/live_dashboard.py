@@ -23,10 +23,14 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
 ET = ZoneInfo("US/Eastern")
 
-from pairs_core import scan_pair, compute_z, compute_frozen_z
+# Rust pybridge — all math
+_venv_site = ROOT / "engine" / ".venv" / "lib"
+_site_pkgs = next(_venv_site.glob("python*/site-packages"), None)
+if _site_pkgs and str(_site_pkgs) not in sys.path:
+    sys.path.insert(0, str(_site_pkgs))
+from openquant import openquant as _oq
 
 
 def load_env():
@@ -61,10 +65,12 @@ def generate():
         start = max(90, n - 60)
         z_series, r2_series, ratio_series = [], [], []
         for day in range(start, n):
-            result = scan_pair(a, b, pa, pb, day)
-            if result:
-                z_series.append(round(compute_z(result, pa[day], pb[day]), 3))
-                r2_series.append(round(result.r2, 3))
+            result = _oq.scan_pair(a, b, pa[:day+1], pb[:day+1])
+            if result and result.get("passed"):
+                z = _oq.compute_z(pa[day], pb[day], result["alpha"], result["beta"],
+                                   result.get("spread_mean", 0), result.get("spread_std", 1))
+                z_series.append(round(z, 3) if z is not None else None)
+                r2_series.append(round(result.get("r2", 0), 3))
             else:
                 z_series.append(None)
                 r2_series.append(None)
@@ -74,8 +80,8 @@ def generate():
         b_now = alpaca_pos.get(b, {}).get("price", pb[-1])
         fz = None
         if sig.get("alpha") is not None and sig.get("spread_std"):
-            fz = compute_frozen_z(a_now, b_now, sig["alpha"], sig["beta"],
-                                   sig["spread_mean"], sig["spread_std"])
+            fz = _oq.compute_z(a_now, b_now, sig["alpha"], sig["beta"],
+                                sig["spread_mean"], sig["spread_std"])
 
         net_pnl = alpaca_pos.get(a, {}).get("pnl", 0) + alpaca_pos.get(b, {}).get("pnl", 0)
 
