@@ -544,13 +544,16 @@ impl PairState {
                 return intents;
             }
 
-            // Position held — log z-scores for spread tracking
-            debug!(
-                pair_a = config.leg_a.as_str(),
-                pair_b = config.leg_b.as_str(),
+            // Position held — log z-scores for spread tracking.
+            // info! level: for daily bars this fires once/day/pair — essential for monitoring.
+            info!(
+                pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
                 rolling_z = %format_args!("{z:.2}"),
-                fixed_exit_z = %format_args!("{exit_z:.2}"),
+                frozen_exit_z = %format_args!("{exit_z:.2}"),
                 bars_held,
+                effective_max_hold,
+                price_a = %format_args!("{price_a:.2}"),
+                price_b = %format_args!("{price_b:.2}"),
                 pos = ?self.position,
                 "pairs: HOLDING"
             );
@@ -563,7 +566,15 @@ impl PairState {
         // If still losing after retry, will re-pause within 5 more trades.
         if self.paused {
             self.pause_bars += 1;
-            let cooldown = 500; // ~2 trading days of bars
+            // Cooldown: unpause after enough bars to retry.
+            // For daily bars: 5 bars = 1 week. For 1-min bars: 500 = ~2 trading days.
+            // Use max_hold_bars as proxy: cooldown = 2× max hold period.
+            let effective_max_hold = if config.max_hold_bars > 0 {
+                config.max_hold_bars
+            } else {
+                trading.max_hold_bars
+            };
+            let cooldown = effective_max_hold.max(5) * 2;
             if self.pause_bars >= cooldown {
                 self.paused = false;
                 self.consecutive_stops = 0;
@@ -729,12 +740,15 @@ impl PairState {
             ];
         }
 
-        // No signal — z-score within thresholds
-        debug!(
-            pair_a = config.leg_a.as_str(),
-            pair_b = config.leg_b.as_str(),
+        // No signal — z-score within entry thresholds.
+        // info! level for daily bars: fires once/day/pair, essential for spread monitoring.
+        info!(
+            pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
             z = %format_args!("{z:.2}"),
             entry_z = %format_args!("{:.2}", trading.entry_z),
+            price_a = %format_args!("{price_a:.2}"),
+            price_b = %format_args!("{price_b:.2}"),
+            spread_count = self.spread_count,
             "pairs: FLAT — z within thresholds"
         );
         vec![]
