@@ -63,6 +63,7 @@ mod alpaca;
 mod bars;
 mod intents;
 mod pnl;
+mod stream;
 
 use clap::Parser;
 use intents::{write_intents, write_trade_results, OrderIntentRecord};
@@ -546,27 +547,62 @@ async fn run_live(args: RunArgs) {
         }
     }
 
-    // ── Main loop: fetch → evaluate → execute → sleep → repeat ──
-    // Runs until the process is killed (Ctrl+C, SIGTERM, etc.)
-    info!("entering main loop — process stays alive until killed");
+    // ── Start real-time bar stream from Alpaca WebSocket ──
+    // The stream drives the engine — when a bar arrives, the engine evaluates.
+    // No polling, no timers. Data in → decisions out.
+    info!("starting Alpaca real-time bar stream");
+
+    let mut bar_rx = stream::start_bar_stream(
+        &alpaca.api_key, &alpaca.api_secret, &symbols
+    ).await;
 
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
-    // For daily bars, check once per hour (bar only changes at close).
-    // For intraday, this interval would be replaced by a WebSocket stream.
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
-    interval.tick().await; // consume immediate first tick
-
-    // Run immediately on startup
-    run_once(&alpaca, &mut pairs_engine, &symbols).await;
+    info!("live — waiting for bars (process stays alive until killed)");
 
     loop {
         tokio::select! {
-            _ = interval.tick() => {
-                info!("heartbeat: re-evaluating");
-                run_once(&alpaca, &mut pairs_engine, &symbols).await;
+            // New bar from Alpaca stream → feed engine → execute intents
+            Some(bar) = bar_rx.recv() => {
+                if let Some(ref mut pe) = pairs_engine {
+                    let intents = pe.on_bar(&bar.symbol, bar.timestamp, bar.close);
+
+                    for intent in &intents {
+                        let side = format!("{:?}", intent.side).to_lowercase();
+                        info!(
+                            symbol = intent.symbol.as_str(),
+                            side = side.as_str(),
+                            qty = intent.qty,
+                            pair_id = intent.pair_id.as_str(),
+                            z = %format_args!("{:.2}", intent.z_score),
+                            priority = %format_args!("{:.1}", intent.priority_score),
+                            reason = ?intent.reason,
+                            "INTENT"
+                        );
+
+                        // Execute on Alpaca
+                        match alpaca.place_order(&intent.symbol, intent.qty, &side).await {
+                            Ok(order) => {
+                                info!(
+                                    order_id = order.id.as_str(),
+                                    status = order.status.as_str(),
+                                    "ORDER FILLED"
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    symbol = intent.symbol.as_str(),
+                                    error = e.as_str(),
+                                    "ORDER FAILED"
+                                );
+                            }
+                        }
+                    }
+                }
             }
+
+            // Graceful shutdown
             _ = &mut ctrl_c => {
                 info!("========== OPENQUANT LIVE END (shutdown) ==========");
                 break;
