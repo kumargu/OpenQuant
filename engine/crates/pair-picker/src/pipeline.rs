@@ -38,7 +38,9 @@ pub const MIN_HISTORY_BARS: usize = 90;
 pub const MAX_VALIDATION_WINDOW: usize = 150;
 
 /// Minimum R² for the hedge ratio OLS — below this the beta is meaningless noise.
-pub const MIN_R_SQUARED: f64 = 0.50;
+/// Note: Python entry gate (pairs_core.MIN_R2_ENTRY) is 0.70 for live trading.
+/// This is the Rust pre-filter; the tighter Python gate catches the rest.
+pub const MIN_R_SQUARED: f64 = 0.70;
 
 /// Price data for a single symbol: ordered daily close prices.
 pub type PriceData = Vec<f64>;
@@ -171,6 +173,14 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     // The ADF regression includes its own constant term, and the AR(1) half-life
     // estimation absorbs any level shift, so subtracting alpha here is unnecessary
     // and would only add noise from the intercept estimate.
+    //
+    // IMPORTANT: pybridge's scan_pair computes spread_mean/spread_std using the
+    // WITH-alpha form (log_a - alpha - beta*log_b) for z-score computation.
+    // This is mathematically safe because:
+    //   - The alpha offset is constant, so it does not affect ADF/HL (AR(1) absorbs it)
+    //   - spread_std is invariant to constant shifts
+    //   - spread_mean in the WITH-alpha form is ~0, making z-score = spread / spread_std
+    // Both forms give identical half-life and ADF results.
     let spread: Vec<f64> = log_a
         .iter()
         .zip(log_b.iter())
@@ -202,7 +212,7 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
             result.half_life_valid = is_half_life_valid(hl.half_life);
             if !result.half_life_valid {
                 result.rejection_reasons.push(format!(
-                    "Half-life {:.1} days outside valid range [3, 40]",
+                    "Half-life {:.1} days outside valid range [1, 40]",
                     hl.half_life
                 ));
             }

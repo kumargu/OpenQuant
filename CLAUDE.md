@@ -119,8 +119,10 @@ Tester agent (worktree)                    Reviewer (main)                     C
 ## Developer best practices
 
 ### Architecture
-- **Rust owns all math and trading logic**: Statistics, signals, risk, scoring — zero Python for anything performance-sensitive or correctness-critical. Python is the data plumbing layer only (Alpaca API, bar fetching)
-- **Minimize Python bridge dependency**: The Python↔Rust bridge (pybridge) is the most fragile boundary — methods can be missing, types can mismatch. Prefer standalone Rust binaries that read/write JSON over Python FFI where possible. When the bridge is used, test it explicitly
+- **Rust owns ALL math**: OLS, ADF, half-life, z-score, priority scoring, exit decisions — everything statistical runs in Rust (`pair-picker` crate) and is called via pybridge. Python does ZERO math. `daily_walkforward_dashboard.py` has been deleted. There is no Python OLS, no Python ADF, no Python half-life estimation.
+- **Python is plumbing only**: Alpaca API calls, file I/O, JSON loading, logging, orchestration. `pairs_core.py` is the Python-side coordinator — it calls Rust functions and manages config constants. It does not implement any statistics.
+- **No ad-hoc Python scripts that duplicate Rust logic**: If you need a new statistical function, add it to the Rust pair-picker crate and expose it via pybridge. NEVER implement math in a Python script "just to test quickly" — that's how `daily_walkforward_dashboard.py` grew into 900 lines of duplicate math that diverged from Rust.
+- **One live entry point**: `scripts/live_pipeline.py` is the ONLY script that places live orders. Do not create parallel live runners.
 - **Separate crates for separate concerns**: Offline analysis tools (e.g., `pair-picker`) are standalone binaries, not linked into the trading engine. Communicate via JSON files, not shared state
 - **Canonical identifiers everywhere**: When two components reference the same entity (a pair, a symbol, a strategy), use a single canonical ID format. Alphabetically ordered, consistent across all producers and consumers. Mismatched IDs cause silent data loss
 - **Config structs with Default**: All tunable parameters in structs with `Default` impls. No magic numbers in function bodies. This makes parameters discoverable, documentable, and overridable without recompilation

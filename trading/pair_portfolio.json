@@ -1,381 +1,1271 @@
 {
-  "_note": "Per-pair trading config. capital_per_leg in $, max_hold in trading days, entry_z/exit_z are z-score thresholds. Pairs without config use global defaults.",
+  "_note": "Auto-generated from S&P 500 win-rate-filtered scan. 140 pairs passing all gates.",
   "defaults": {
     "capital_per_leg": 500,
     "max_hold": 10,
     "entry_z": 1.0,
-    "exit_z": 0.3,
-    "enabled": true
+    "exit_z": 0.2
   },
   "pairs": [
     {
-      "leg_a": "NVDA",
-      "leg_b": "AMD",
-      "capital_per_leg": 1000,
-      "max_hold": 5,
+      "leg_a": "DHI",
+      "leg_b": "PHM",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Strong mean-reverter. 75% win at 3d, 82% at 5d. +221 bps avg at 3d hold."
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.969 HL=4.1 WR_L=14%(4W/24L) WR_S=50%(10W/10L)"
+    },
+    {
+      "leg_a": "MLM",
+      "leg_b": "VMC",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Materials R2=0.957 HL=4.6 WR_L=50%(4W/4L) WR_S=6%(1W/15L)"
+    },
+    {
+      "leg_a": "ETR",
+      "leg_b": "SRE",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.939 HL=3.4 WR_L=33%(5W/10L) WR_S=100%(2W/0L)"
+    },
+    {
+      "leg_a": "IQV",
+      "leg_b": "TMO",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.926 HL=2.8 WR_L=50%(4W/4L) WR_S=N/A"
+    },
+    {
+      "leg_a": "APH",
+      "leg_b": "CIEN",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.926 HL=4.3 WR_L=67%(2W/1L) WR_S=N/A"
+    },
+    {
+      "leg_a": "AVB",
+      "leg_b": "EQR",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Real Estate R2=0.926 HL=3.3 WR_L=N/A WR_S=100%(2W/0L)"
+    },
+    {
+      "leg_a": "CPT",
+      "leg_b": "EQR",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Real Estate R2=0.925 HL=3.5 WR_L=13%(3W/20L) WR_S=50%(2W/2L)"
+    },
+    {
+      "leg_a": "ETR",
+      "leg_b": "FE",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.92 HL=4.4 WR_L=N/A WR_S=42%(5W/7L)"
+    },
+    {
+      "leg_a": "ETR",
+      "leg_b": "XEL",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.918 HL=3.3 WR_L=60%(12W/8L) WR_S=24%(8W/25L)"
+    },
+    {
+      "leg_a": "GLW",
+      "leg_b": "MU",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.911 HL=4.1 WR_L=100%(1W/0L) WR_S=N/A"
     },
     {
       "leg_a": "KLAC",
-      "leg_b": "SNDK",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_b": "MU",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Top P&L pair in S&P500 backtest. 73% win, 7 reversions out of 11 trades."
-    },
-    {
-      "leg_a": "FITB",
-      "leg_b": "PNC",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Regional banks. 92% best win rate, R\u00b2=0.94."
-    },
-    {
-      "leg_a": "CMS",
-      "leg_b": "DUK",
-      "capital_per_leg": 300,
-      "max_hold": 5,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Utilities. 100% win rate in pattern analysis. Low vol, low return per trade."
-    },
-    {
-      "leg_a": "AEE",
-      "leg_b": "XEL",
-      "capital_per_leg": 300,
-      "max_hold": 5,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Utilities. 95% win rate. Tight spreads, steady."
-    },
-    {
-      "leg_a": "MCO",
-      "leg_b": "SPGI",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Credit ratings duopoly. 88% best WR. Consistent reverter."
-    },
-    {
-      "leg_a": "AXP",
-      "leg_b": "BAC",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Financials. 82% best WR. Good reversion signal."
-    },
-    {
-      "leg_a": "DHI",
-      "leg_b": "PHM",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Homebuilders. R\u00b2=0.91, 82% win."
-    },
-    {
-      "leg_a": "EME",
-      "leg_b": "ETN",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Industrials. 89% win, 6 reversions in 9 trades."
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.911 HL=4.1 WR_L=67%(2W/1L) WR_S=40%(2W/3L)"
     },
     {
       "leg_a": "LNT",
-      "leg_b": "NI",
-      "capital_per_leg": 300,
-      "max_hold": 5,
+      "leg_b": "ETR",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Utilities. 88% win, 95% best WR. Fast reverter."
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.909 HL=3.0 WR_L=52%(13W/12L) WR_S=27%(6W/16L)"
     },
     {
-      "leg_a": "DXCM",
-      "leg_b": "SYK",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "ALLE",
+      "leg_b": "URI",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Healthcare. 67% win, AC1=-0.207."
-    },
-    {
-      "leg_a": "COF",
-      "leg_b": "SYF",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "Consumer finance. 87% best WR."
-    },
-    {
-      "leg_a": "GOOG",
-      "leg_b": "GOOGL",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Communication Services: AC1=-0.358"
-    },
-    {
-      "leg_a": "ADSK",
-      "leg_b": "NOW",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Information Technology: AC1=-0.462"
-    },
-    {
-      "leg_a": "NTRS",
-      "leg_b": "STT",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Financials: AC1=-0.193"
-    },
-    {
-      "leg_a": "AZO",
-      "leg_b": "ORLY",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Consumer Discretionary: AC1=-0.496"
-    },
-    {
-      "leg_a": "CPRT",
-      "leg_b": "FAST",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Industrials: AC1=-0.430"
-    },
-    {
-      "leg_a": "INCY",
-      "leg_b": "MTD",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Health Care: AC1=-0.114"
-    },
-    {
-      "leg_a": "AME",
-      "leg_b": "PH",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Industrials: AC1=-0.118"
-    },
-    {
-      "leg_a": "BK",
-      "leg_b": "C",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Financials: AC1=-0.128"
-    },
-    {
-      "leg_a": "APD",
-      "leg_b": "DD",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Materials: AC1=-0.415"
-    },
-    {
-      "leg_a": "ANET",
-      "leg_b": "NVDA",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Information Technology: AC1=-0.298"
-    },
-    {
-      "leg_a": "LYV",
-      "leg_b": "NFLX",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Communication Services: AC1=-0.477"
-    },
-    {
-      "leg_a": "CDNS",
-      "leg_b": "PTC",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Information Technology: AC1=-0.183"
-    },
-    {
-      "leg_a": "A",
-      "leg_b": "WST",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Health Care: AC1=-0.181"
-    },
-    {
-      "leg_a": "KVUE",
-      "leg_b": "TAP",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Consumer Staples: AC1=-0.260"
-    },
-    {
-      "leg_a": "BRO",
-      "leg_b": "MRSH",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Financials: AC1=-0.063"
-    },
-    {
-      "leg_a": "HBAN",
-      "leg_b": "USB",
-      "capital_per_leg": 500,
-      "max_hold": 7,
-      "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Financials: AC1=-0.087"
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.908 HL=4.1 WR_L=55%(6W/5L) WR_S=12%(3W/22L)"
     },
     {
       "leg_a": "LRCX",
-      "leg_b": "MU",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_b": "SNDK",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Information Technology: AC1=-0.040"
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.906 HL=3.0 WR_L=18%(2W/9L) WR_S=45%(14W/17L)"
     },
     {
-      "leg_a": "PWR",
-      "leg_b": "TT",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "MU",
+      "leg_b": "SNDK",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Industrials: AC1=-0.189"
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.906 HL=3.4 WR_L=N/A WR_S=50%(4W/4L)"
     },
     {
-      "leg_a": "IEX",
-      "leg_b": "UPS",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "APP",
+      "leg_b": "STX",
+      "capital_per_leg": 5000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Industrials: AC1=-0.131"
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.9 HL=4.0 WR_L=15%(5W/28L) WR_S=62%(5W/3L)"
     },
     {
-      "leg_a": "COIN",
-      "leg_b": "PYPL",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "CMI",
+      "leg_b": "LDOS",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Financials: AC1=-0.089"
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.897 HL=4.2 WR_L=N/A WR_S=100%(4W/0L)"
     },
     {
-      "leg_a": "RF",
-      "leg_b": "TFC",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "HBAN",
+      "leg_b": "MTB",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Financials: AC1=-0.048"
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.897 HL=3.3 WR_L=60%(6W/4L) WR_S=11%(3W/24L)"
     },
     {
-      "leg_a": "AEP",
-      "leg_b": "EVRG",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "CNP",
+      "leg_b": "ETR",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Utilities: AC1=-0.080"
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.895 HL=2.6 WR_L=40%(2W/3L) WR_S=75%(3W/1L)"
     },
     {
-      "leg_a": "DOV",
-      "leg_b": "JBHT",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "WEC",
+      "leg_b": "XEL",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Industrials: AC1=-0.175"
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.893 HL=3.4 WR_L=33%(7W/14L) WR_S=40%(6W/9L)"
     },
     {
-      "leg_a": "CFG",
-      "leg_b": "KEY",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "BK",
+      "leg_b": "IVZ",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Financials: AC1=-0.144"
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.893 HL=3.3 WR_L=100%(6W/0L) WR_S=36%(4W/7L)"
     },
     {
-      "leg_a": "AON",
-      "leg_b": "WTW",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "APP",
+      "leg_b": "INTC",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Financials: AC1=-0.081"
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.891 HL=3.6 WR_L=83%(5W/1L) WR_S=18%(2W/9L)"
     },
     {
-      "leg_a": "IP",
-      "leg_b": "SW",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "TECH",
+      "leg_b": "CRL",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Materials: AC1=-0.121"
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.888 HL=3.9 WR_L=100%(6W/0L) WR_S=45%(5W/6L)"
     },
     {
-      "leg_a": "ADP",
-      "leg_b": "PAYX",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "APH",
+      "leg_b": "TER",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Industrials: AC1=-0.008"
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.888 HL=2.8 WR_L=30%(6W/14L) WR_S=53%(9W/8L)"
+    },
+    {
+      "leg_a": "VTR",
+      "leg_b": "WELL",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Real Estate R2=0.888 HL=3.2 WR_L=67%(4W/2L) WR_S=N/A"
+    },
+    {
+      "leg_a": "EXPE",
+      "leg_b": "TJX",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.887 HL=2.7 WR_L=67%(6W/3L) WR_S=N/A"
+    },
+    {
+      "leg_a": "FIX",
+      "leg_b": "GE",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.886 HL=3.2 WR_L=N/A WR_S=100%(1W/0L)"
+    },
+    {
+      "leg_a": "CRH",
+      "leg_b": "MLM",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Materials R2=0.886 HL=3.9 WR_L=100%(3W/0L) WR_S=29%(2W/5L)"
+    },
+    {
+      "leg_a": "INTC",
+      "leg_b": "SNDK",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.885 HL=3.7 WR_L=N/A WR_S=57%(4W/3L)"
+    },
+    {
+      "leg_a": "MPWR",
+      "leg_b": "TER",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.882 HL=3.1 WR_L=83%(5W/1L) WR_S=N/A"
+    },
+    {
+      "leg_a": "AXP",
+      "leg_b": "MS",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.882 HL=2.6 WR_L=29%(5W/12L) WR_S=76%(13W/4L)"
+    },
+    {
+      "leg_a": "FSLR",
+      "leg_b": "WDC",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.881 HL=2.2 WR_L=79%(15W/4L) WR_S=64%(9W/5L)"
+    },
+    {
+      "leg_a": "AMCR",
+      "leg_b": "BALL",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Materials R2=0.877 HL=3.8 WR_L=N/A WR_S=55%(6W/5L)"
+    },
+    {
+      "leg_a": "AMT",
+      "leg_b": "INVH",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Real Estate R2=0.874 HL=3.0 WR_L=83%(5W/1L) WR_S=41%(7W/10L)"
+    },
+    {
+      "leg_a": "BAC",
+      "leg_b": "MS",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.873 HL=4.2 WR_L=65%(11W/6L) WR_S=70%(7W/3L)"
+    },
+    {
+      "leg_a": "MPC",
+      "leg_b": "PSX",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Energy R2=0.873 HL=4.4 WR_L=59%(10W/7L) WR_S=N/A"
+    },
+    {
+      "leg_a": "AEE",
+      "leg_b": "FE",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.871 HL=3.9 WR_L=100%(5W/0L) WR_S=71%(5W/2L)"
+    },
+    {
+      "leg_a": "CVS",
+      "leg_b": "HCA",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.868 HL=3.9 WR_L=29%(4W/10L) WR_S=44%(7W/9L)"
+    },
+    {
+      "leg_a": "HPE",
+      "leg_b": "NTAP",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.861 HL=2.5 WR_L=53%(8W/7L) WR_S=N/A"
+    },
+    {
+      "leg_a": "CPAY",
+      "leg_b": "FDS",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.859 HL=3.5 WR_L=12%(2W/14L) WR_S=100%(4W/0L)"
+    },
+    {
+      "leg_a": "DTE",
+      "leg_b": "PPL",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.858 HL=2.9 WR_L=24%(5W/16L) WR_S=57%(12W/9L)"
+    },
+    {
+      "leg_a": "LNT",
+      "leg_b": "AEP",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.856 HL=3.8 WR_L=57%(4W/3L) WR_S=50%(6W/6L)"
+    },
+    {
+      "leg_a": "GD",
+      "leg_b": "J",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.853 HL=4.0 WR_L=57%(8W/6L) WR_S=39%(11W/17L)"
+    },
+    {
+      "leg_a": "VTRS",
+      "leg_b": "ZBH",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.852 HL=3.6 WR_L=100%(4W/0L) WR_S=20%(2W/8L)"
+    },
+    {
+      "leg_a": "JNJ",
+      "leg_b": "TMO",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.851 HL=3.6 WR_L=100%(4W/0L) WR_S=25%(6W/18L)"
+    },
+    {
+      "leg_a": "ATO",
+      "leg_b": "PCG",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.847 HL=3.3 WR_L=N/A WR_S=50%(1W/1L)"
+    },
+    {
+      "leg_a": "LRCX",
+      "leg_b": "STX",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.845 HL=4.6 WR_L=100%(1W/0L) WR_S=N/A"
+    },
+    {
+      "leg_a": "GE",
+      "leg_b": "GD",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.844 HL=3.0 WR_L=N/A WR_S=50%(5W/5L)"
+    },
+    {
+      "leg_a": "DHI",
+      "leg_b": "ORLY",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.843 HL=2.5 WR_L=100%(1W/0L) WR_S=N/A"
+    },
+    {
+      "leg_a": "APD",
+      "leg_b": "CTVA",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Materials R2=0.842 HL=4.1 WR_L=100%(1W/0L) WR_S=N/A"
+    },
+    {
+      "leg_a": "C",
+      "leg_b": "GS",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.841 HL=2.3 WR_L=43%(9W/12L) WR_S=53%(9W/8L)"
+    },
+    {
+      "leg_a": "AEE",
+      "leg_b": "PPL",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.84 HL=4.7 WR_L=54%(7W/6L) WR_S=39%(9W/14L)"
+    },
+    {
+      "leg_a": "CINF",
+      "leg_b": "L",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.838 HL=2.2 WR_L=60%(3W/2L) WR_S=30%(3W/7L)"
+    },
+    {
+      "leg_a": "AAPL",
+      "leg_b": "TER",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.837 HL=4.1 WR_L=53%(8W/7L) WR_S=61%(11W/7L)"
+    },
+    {
+      "leg_a": "CARR",
+      "leg_b": "HON",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.836 HL=2.9 WR_L=48%(13W/14L) WR_S=35%(7W/13L)"
     },
     {
       "leg_a": "CIEN",
-      "leg_b": "MPWR",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_b": "FSLR",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Information Technology: AC1=-0.227"
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.835 HL=3.1 WR_L=94%(15W/1L) WR_S=25%(6W/18L)"
     },
     {
-      "leg_a": "HAS",
-      "leg_b": "HLT",
-      "capital_per_leg": 500,
-      "max_hold": 7,
+      "leg_a": "AMP",
+      "leg_b": "CPAY",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
       "entry_z": 1.0,
-      "exit_z": 0.3,
-      "notes": "S&P500 Consumer Discretionary: AC1=-0.133"
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.834 HL=3.5 WR_L=42%(5W/7L) WR_S=18%(2W/9L)"
+    },
+    {
+      "leg_a": "AEE",
+      "leg_b": "NI",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.83 HL=2.6 WR_L=23%(5W/17L) WR_S=61%(14W/9L)"
+    },
+    {
+      "leg_a": "NEM",
+      "leg_b": "VMC",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Materials R2=0.83 HL=3.1 WR_L=N/A WR_S=44%(4W/5L)"
+    },
+    {
+      "leg_a": "KEY",
+      "leg_b": "RF",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.829 HL=5.0 WR_L=33%(4W/8L) WR_S=62%(5W/3L)"
+    },
+    {
+      "leg_a": "AZO",
+      "leg_b": "GPC",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.829 HL=2.6 WR_L=100%(1W/0L) WR_S=28%(9W/23L)"
+    },
+    {
+      "leg_a": "APP",
+      "leg_b": "HPE",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.826 HL=3.0 WR_L=44%(7W/9L) WR_S=20%(3W/12L)"
+    },
+    {
+      "leg_a": "FIX",
+      "leg_b": "XYL",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.825 HL=2.6 WR_L=100%(2W/0L) WR_S=31%(4W/9L)"
+    },
+    {
+      "leg_a": "FIX",
+      "leg_b": "J",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.823 HL=3.6 WR_L=46%(6W/7L) WR_S=39%(15W/23L)"
+    },
+    {
+      "leg_a": "AAPL",
+      "leg_b": "FSLR",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.823 HL=2.8 WR_L=50%(5W/5L) WR_S=100%(3W/0L)"
+    },
+    {
+      "leg_a": "FSLR",
+      "leg_b": "STX",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.822 HL=2.7 WR_L=67%(10W/5L) WR_S=16%(4W/21L)"
+    },
+    {
+      "leg_a": "GE",
+      "leg_b": "LHX",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.82 HL=3.7 WR_L=100%(3W/0L) WR_S=27%(4W/11L)"
+    },
+    {
+      "leg_a": "HPE",
+      "leg_b": "INTC",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.82 HL=2.3 WR_L=100%(2W/0L) WR_S=N/A"
+    },
+    {
+      "leg_a": "MLM",
+      "leg_b": "NEM",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Materials R2=0.82 HL=2.4 WR_L=32%(6W/13L) WR_S=100%(1W/0L)"
+    },
+    {
+      "leg_a": "MRSH",
+      "leg_b": "PGR",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.818 HL=3.7 WR_L=27%(4W/11L) WR_S=67%(6W/3L)"
+    },
+    {
+      "leg_a": "FSLR",
+      "leg_b": "TEL",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.816 HL=2.9 WR_L=20%(3W/12L) WR_S=46%(11W/13L)"
+    },
+    {
+      "leg_a": "NTAP",
+      "leg_b": "SNDK",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.81 HL=3.2 WR_L=47%(9W/10L) WR_S=29%(4W/10L)"
+    },
+    {
+      "leg_a": "INTC",
+      "leg_b": "NTAP",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.809 HL=4.2 WR_L=N/A WR_S=75%(9W/3L)"
+    },
+    {
+      "leg_a": "COP",
+      "leg_b": "EOG",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Energy R2=0.809 HL=4.7 WR_L=100%(1W/0L) WR_S=N/A"
+    },
+    {
+      "leg_a": "L",
+      "leg_b": "MS",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.808 HL=2.2 WR_L=100%(2W/0L) WR_S=29%(6W/15L)"
+    },
+    {
+      "leg_a": "XOM",
+      "leg_b": "PSX",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Energy R2=0.806 HL=2.7 WR_L=70%(7W/3L) WR_S=47%(7W/8L)"
+    },
+    {
+      "leg_a": "CARR",
+      "leg_b": "TDG",
+      "capital_per_leg": 1000,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.802 HL=3.9 WR_L=N/A WR_S=100%(2W/0L)"
+    },
+    {
+      "leg_a": "KLAC",
+      "leg_b": "STX",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.799 HL=4.1 WR_L=100%(2W/0L) WR_S=N/A"
+    },
+    {
+      "leg_a": "XOM",
+      "leg_b": "VLO",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Energy R2=0.799 HL=2.6 WR_L=80%(8W/2L) WR_S=33%(3W/6L)"
+    },
+    {
+      "leg_a": "CMI",
+      "leg_b": "XYL",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.796 HL=3.9 WR_L=50%(4W/4L) WR_S=42%(5W/7L)"
+    },
+    {
+      "leg_a": "FSLR",
+      "leg_b": "SNDK",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.794 HL=2.9 WR_L=46%(6W/7L) WR_S=39%(9W/14L)"
+    },
+    {
+      "leg_a": "GD",
+      "leg_b": "XYL",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.788 HL=3.3 WR_L=50%(1W/1L) WR_S=100%(8W/0L)"
+    },
+    {
+      "leg_a": "FIX",
+      "leg_b": "LHX",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.787 HL=4.1 WR_L=43%(6W/8L) WR_S=33%(2W/4L)"
+    },
+    {
+      "leg_a": "CARR",
+      "leg_b": "DE",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.785 HL=3.5 WR_L=44%(7W/9L) WR_S=19%(3W/13L)"
+    },
+    {
+      "leg_a": "CAT",
+      "leg_b": "FDX",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.785 HL=3.0 WR_L=N/A WR_S=100%(9W/0L)"
+    },
+    {
+      "leg_a": "GS",
+      "leg_b": "JPM",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.783 HL=4.8 WR_L=29%(6W/15L) WR_S=59%(13W/9L)"
+    },
+    {
+      "leg_a": "LDOS",
+      "leg_b": "XYL",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.781 HL=3.4 WR_L=86%(6W/1L) WR_S=33%(5W/10L)"
+    },
+    {
+      "leg_a": "MPWR",
+      "leg_b": "SNDK",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.781 HL=4.5 WR_L=65%(17W/9L) WR_S=31%(9W/20L)"
+    },
+    {
+      "leg_a": "C",
+      "leg_b": "MS",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.781 HL=3.3 WR_L=100%(3W/0L) WR_S=9%(2W/20L)"
+    },
+    {
+      "leg_a": "CTVA",
+      "leg_b": "PPG",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Materials R2=0.781 HL=3.2 WR_L=15%(2W/11L) WR_S=100%(4W/0L)"
+    },
+    {
+      "leg_a": "CAT",
+      "leg_b": "PWR",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.78 HL=4.1 WR_L=100%(3W/0L) WR_S=33%(2W/4L)"
+    },
+    {
+      "leg_a": "ANET",
+      "leg_b": "FSLR",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.778 HL=3.3 WR_L=37%(10W/17L) WR_S=47%(15W/17L)"
+    },
+    {
+      "leg_a": "LRCX",
+      "leg_b": "NTAP",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.778 HL=4.6 WR_L=58%(7W/5L) WR_S=9%(3W/32L)"
+    },
+    {
+      "leg_a": "CL",
+      "leg_b": "KDP",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Staples R2=0.777 HL=2.5 WR_L=N/A WR_S=100%(1W/0L)"
+    },
+    {
+      "leg_a": "LHX",
+      "leg_b": "NSC",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.774 HL=3.2 WR_L=67%(2W/1L) WR_S=65%(11W/6L)"
+    },
+    {
+      "leg_a": "C",
+      "leg_b": "JPM",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.773 HL=3.2 WR_L=29%(4W/10L) WR_S=58%(7W/5L)"
+    },
+    {
+      "leg_a": "CEG",
+      "leg_b": "ES",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.766 HL=2.3 WR_L=67%(2W/1L) WR_S=54%(13W/11L)"
+    },
+    {
+      "leg_a": "BXP",
+      "leg_b": "HST",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Real Estate R2=0.76 HL=3.8 WR_L=100%(7W/0L) WR_S=7%(1W/13L)"
+    },
+    {
+      "leg_a": "ODFL",
+      "leg_b": "PAYX",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.757 HL=3.5 WR_L=62%(5W/3L) WR_S=100%(2W/0L)"
+    },
+    {
+      "leg_a": "L",
+      "leg_b": "HOOD",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.757 HL=3.2 WR_L=20%(1W/4L) WR_S=100%(3W/0L)"
+    },
+    {
+      "leg_a": "AEP",
+      "leg_b": "CMS",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.755 HL=3.1 WR_L=40%(4W/6L) WR_S=14%(3W/18L)"
+    },
+    {
+      "leg_a": "BK",
+      "leg_b": "MS",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.754 HL=3.5 WR_L=44%(7W/9L) WR_S=25%(1W/3L)"
+    },
+    {
+      "leg_a": "CEG",
+      "leg_b": "EXC",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.753 HL=2.2 WR_L=N/A WR_S=57%(4W/3L)"
+    },
+    {
+      "leg_a": "CHD",
+      "leg_b": "KVUE",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Staples R2=0.753 HL=3.8 WR_L=25%(4W/12L) WR_S=100%(2W/0L)"
+    },
+    {
+      "leg_a": "BBY",
+      "leg_b": "GM",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.749 HL=2.7 WR_L=27%(4W/11L) WR_S=43%(3W/4L)"
+    },
+    {
+      "leg_a": "CMS",
+      "leg_b": "NI",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Utilities R2=0.748 HL=2.7 WR_L=15%(4W/23L) WR_S=50%(7W/7L)"
+    },
+    {
+      "leg_a": "DHI",
+      "leg_b": "WSM",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.748 HL=4.0 WR_L=58%(7W/5L) WR_S=5%(1W/18L)"
+    },
+    {
+      "leg_a": "META",
+      "leg_b": "NWSA",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Communication Services R2=0.745 HL=2.8 WR_L=N/A WR_S=100%(2W/0L)"
+    },
+    {
+      "leg_a": "AXP",
+      "leg_b": "WFC",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.744 HL=2.8 WR_L=50%(2W/2L) WR_S=55%(6W/5L)"
+    },
+    {
+      "leg_a": "EQT",
+      "leg_b": "EXE",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Energy R2=0.742 HL=4.2 WR_L=45%(9W/11L) WR_S=48%(16W/17L)"
+    },
+    {
+      "leg_a": "HUM",
+      "leg_b": "VTRS",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.741 HL=2.6 WR_L=71%(5W/2L) WR_S=100%(6W/0L)"
+    },
+    {
+      "leg_a": "EME",
+      "leg_b": "XYL",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.74 HL=2.3 WR_L=8%(1W/12L) WR_S=83%(5W/1L)"
+    },
+    {
+      "leg_a": "FSLR",
+      "leg_b": "KLAC",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.737 HL=2.7 WR_L=50%(8W/8L) WR_S=32%(7W/15L)"
+    },
+    {
+      "leg_a": "EXPE",
+      "leg_b": "WYNN",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.737 HL=3.9 WR_L=50%(1W/1L) WR_S=31%(4W/9L)"
+    },
+    {
+      "leg_a": "DOV",
+      "leg_b": "WM",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.736 HL=2.6 WR_L=86%(6W/1L) WR_S=N/A"
+    },
+    {
+      "leg_a": "ANET",
+      "leg_b": "AVGO",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.736 HL=2.6 WR_L=14%(1W/6L) WR_S=62%(5W/3L)"
+    },
+    {
+      "leg_a": "ERIE",
+      "leg_b": "ICE",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.736 HL=4.2 WR_L=100%(2W/0L) WR_S=N/A"
+    },
+    {
+      "leg_a": "HPE",
+      "leg_b": "WDC",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.735 HL=3.8 WR_L=12%(5W/35L) WR_S=64%(14W/8L)"
+    },
+    {
+      "leg_a": "DPZ",
+      "leg_b": "NKE",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.735 HL=3.4 WR_L=50%(2W/2L) WR_S=N/A"
+    },
+    {
+      "leg_a": "FRT",
+      "leg_b": "HST",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Real Estate R2=0.734 HL=3.1 WR_L=29%(4W/10L) WR_S=53%(8W/7L)"
+    },
+    {
+      "leg_a": "A",
+      "leg_b": "COR",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.728 HL=2.8 WR_L=N/A WR_S=100%(1W/0L)"
+    },
+    {
+      "leg_a": "CHD",
+      "leg_b": "MKC",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Staples R2=0.727 HL=3.1 WR_L=35%(7W/13L) WR_S=100%(1W/0L)"
+    },
+    {
+      "leg_a": "DE",
+      "leg_b": "WM",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.726 HL=2.4 WR_L=33%(1W/2L) WR_S=50%(3W/3L)"
+    },
+    {
+      "leg_a": "J",
+      "leg_b": "RTX",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.726 HL=4.4 WR_L=57%(4W/3L) WR_S=26%(9W/26L)"
+    },
+    {
+      "leg_a": "BAX",
+      "leg_b": "HSIC",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.725 HL=2.9 WR_L=50%(2W/2L) WR_S=N/A"
+    },
+    {
+      "leg_a": "IT",
+      "leg_b": "MCHP",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Information Technology R2=0.725 HL=2.2 WR_L=100%(4W/0L) WR_S=N/A"
+    },
+    {
+      "leg_a": "NVR",
+      "leg_b": "POOL",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.722 HL=4.3 WR_L=100%(1W/0L) WR_S=50%(4W/4L)"
+    },
+    {
+      "leg_a": "EME",
+      "leg_b": "LHX",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.721 HL=2.3 WR_L=60%(9W/6L) WR_S=23%(3W/10L)"
+    },
+    {
+      "leg_a": "EBAY",
+      "leg_b": "WSM",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Discretionary R2=0.718 HL=2.4 WR_L=86%(6W/1L) WR_S=14%(4W/24L)"
+    },
+    {
+      "leg_a": "ODFL",
+      "leg_b": "GWW",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.714 HL=3.0 WR_L=30%(6W/14L) WR_S=100%(1W/0L)"
+    },
+    {
+      "leg_a": "MAS",
+      "leg_b": "VLTO",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.709 HL=3.0 WR_L=57%(4W/3L) WR_S=22%(5W/18L)"
+    },
+    {
+      "leg_a": "KHC",
+      "leg_b": "TAP",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Consumer Staples R2=0.709 HL=3.0 WR_L=43%(10W/13L) WR_S=N/A"
+    },
+    {
+      "leg_a": "UDR",
+      "leg_b": "WY",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Real Estate R2=0.706 HL=4.1 WR_L=47%(8W/9L) WR_S=100%(6W/0L)"
+    },
+    {
+      "leg_a": "MRNA",
+      "leg_b": "VRTX",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.705 HL=2.2 WR_L=100%(1W/0L) WR_S=100%(5W/0L)"
+    },
+    {
+      "leg_a": "AOS",
+      "leg_b": "FAST",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.703 HL=2.2 WR_L=N/A WR_S=40%(2W/3L)"
+    },
+    {
+      "leg_a": "IEX",
+      "leg_b": "WAB",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.703 HL=2.8 WR_L=25%(3W/9L) WR_S=100%(2W/0L)"
+    },
+    {
+      "leg_a": "BIIB",
+      "leg_b": "CVS",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.702 HL=3.0 WR_L=43%(3W/4L) WR_S=62%(5W/3L)"
+    },
+    {
+      "leg_a": "CINF",
+      "leg_b": "WTW",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Financials R2=0.702 HL=2.6 WR_L=100%(1W/0L) WR_S=100%(3W/0L)"
+    },
+    {
+      "leg_a": "DE",
+      "leg_b": "HON",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Industrials R2=0.701 HL=3.3 WR_L=6%(2W/30L) WR_S=60%(9W/6L)"
+    },
+    {
+      "leg_a": "HOLX",
+      "leg_b": "MTD",
+      "capital_per_leg": 500,
+      "max_hold": 10,
+      "entry_z": 1.0,
+      "exit_z": 0.2,
+      "notes": "Health Care R2=0.701 HL=2.6 WR_L=100%(2W/0L) WR_S=41%(7W/10L)"
     }
   ]
 }

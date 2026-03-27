@@ -32,29 +32,25 @@ root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root / "scripts"))
 
 # Shared logic — single source of truth (pairs_core.py)
+# ALL math goes through Rust via pairs_core. Python is orchestration only.
 from pairs_core import (
-    # Rust bridge
-    compute_priority_score as _compute_priority_score,
+    # Core functions (Rust via pybridge)
+    scan_pair, compute_z, compute_frozen_z, ScanResult,
     expected_return_per_dollar_per_day as _expected_return_per_dollar_per_day,
-    compute_max_hold_days as _compute_max_hold_days,
     compute_remaining_per_day as _compute_remaining_per_day,
     should_rotate as _should_rotate,
     compute_capital_metrics as _compute_capital_metrics,
-    # Dashboard functions
-    scan_pair, compute_z, ols_simple, PairParams,
-    FORMATION_DAYS, COST_BPS,
     load_earnings_calendar, is_near_earnings,
-    # Shared config
+    # Shared logic
+    check_quality_gate, check_beta_drift, validate_entry, score_signal, decide_exit,
+    # Config
     TOTAL_CAPITAL as _TOTAL_CAPITAL_DEFAULT,
-    MIN_R2_ENTRY, MAX_HL_ENTRY, MIN_ADF_ENTRY, MIN_BETA, MIN_SPREAD_STD,
     HOLD_MULTIPLIER as _HOLD_MULTIPLIER_DEFAULT,
     MAX_HOLD_CAP as _MAX_HOLD_CAP_DEFAULT,
     ROTATION_COST_PER_DAY as _ROTATION_COST_DEFAULT,
     MAX_ROTATIONS_PER_DAY as _MAX_ROTATIONS_DEFAULT,
     MIN_TRADE_CAPITAL, MAX_PER_TRADE_FRAC,
-    EXIT_DECAY_FLOOR, EXIT_Z_DEFAULT,
-    # Shared logic
-    check_quality_gate, validate_entry, score_signal, compute_frozen_z, decide_exit,
+    EXIT_DECAY_FLOOR, EXIT_Z_DEFAULT, COST_BPS, FORMATION_DAYS,
 )
 
 # ── Logger ────────────────────────────────────────────────────────────────────
@@ -85,7 +81,7 @@ MAX_ROTATIONS_PER_DAY = _MAX_ROTATIONS_DEFAULT
 class Trade:
     leg_a: str
     leg_b: str
-    params: PairParams
+    params: ScanResult
     direction: int
     entry_day: int
     entry_pa: float
@@ -268,16 +264,15 @@ def run_capital_sim(
                              f"{' '.join(reasons)}")
                 continue
 
-            # Beta stability (capital_sim-specific: needs last_beta state across days)
+            # Beta stability — shared with live_pipeline via pairs_core
             pair_key = (leg_a, leg_b)
-            if pair_key in last_beta:
-                prev = last_beta[pair_key]
-                if prev > 0 and abs(params.beta - prev) / prev > 0.30:
-                    logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} beta_unstable "
-                                 f"beta={params.beta:.3f} prev={prev:.3f} "
-                                 f"change={abs(params.beta-prev)/prev*100:.0f}%")
-                    continue
+            stable, change = check_beta_drift(params.beta, last_beta.get(pair_key))
             last_beta[pair_key] = params.beta
+            if not stable:
+                logger.debug(f"[Day {day:>3}] REJECT {leg_a}/{leg_b} beta_unstable "
+                             f"beta={params.beta:.3f} prev={last_beta.get(pair_key, 0):.3f} "
+                             f"change={change:.0%}")
+                continue
 
             pa = prices[leg_a][day]
             pb = prices[leg_b][day]
