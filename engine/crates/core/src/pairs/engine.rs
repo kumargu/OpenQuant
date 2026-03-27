@@ -29,7 +29,6 @@ pub struct PairsEngine {
     pairs: Vec<(PairConfig, PairState)>,
     /// Shared trading parameters (from openquant.toml).
     trading_config: PairsTradingConfig,
-    /// Global bar counter (shared across all pairs).
     /// Path to active_pairs.json (for reloading).
     active_pairs_path: Option<PathBuf>,
     /// Trading history (for Thompson sampling feedback).

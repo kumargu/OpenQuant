@@ -510,7 +510,7 @@ lookback = 30
 # Maximum bars (days) to hold before forced exit.
 # 10 days = 2 weeks. Pair-picker computes per-pair max_hold_days from HL
 # (typically ceil(2.5 * HL) capped at 10), but the engine currently uses
-# this global value. TODO: wire per-pair max_hold_days from active_pairs.json.
+# this global value. Per-pair override from active_pairs.json is wired (max_hold_days → PairConfig.max_hold_bars).
 max_hold_bars = 10
 
 # Minimum bars (days) to hold before reversion exit. Stop loss still fires.

@@ -259,30 +259,42 @@ fn run_walkforward(args: RunArgs) {
         "single-symbol engine config"
     );
 
-    let engine_config = cfg_file.into_engine_config();
-
-    // ── Initialize engines ──
-    let mut engine = SingleEngine::new(engine_config);
-    engine.set_warmup_mode(true);
-    info!("single-symbol engine initialized (warmup mode)");
+    // ── Initialize engines (only what EngineMode requires) ──
+    let mut single_engine = if mode.run_single() {
+        let engine_config = cfg_file.into_engine_config();
+        let mut e = SingleEngine::new(engine_config);
+        e.set_warmup_mode(true);
+        info!("single-symbol engine initialized (warmup mode)");
+        Some(e)
+    } else {
+        None
+    };
 
     let active_pairs_path = trading_dir.join("active_pairs.json");
     let history_path = trading_dir.join("pair_trading_history.json");
 
-    let mut pairs_engine = if active_pairs_path.exists() {
-        info!(path = %active_pairs_path.display(), "loading active pairs");
-        PairsEngine::from_active_pairs(
-            &active_pairs_path,
-            &history_path,
-            vec![],
-            pairs_trading_config,
-        )
+    let mut pairs_engine = if mode.run_pairs() {
+        if active_pairs_path.exists() {
+            info!(path = %active_pairs_path.display(), "loading active pairs");
+            Some(PairsEngine::from_active_pairs(
+                &active_pairs_path,
+                &history_path,
+                vec![],
+                pairs_trading_config,
+            ))
+        } else {
+            warn!("no active_pairs.json found — pairs engine disabled");
+            None
+        }
     } else {
-        warn!("no active_pairs.json found — running single-symbol engine only");
-        PairsEngine::new(vec![], pairs_trading_config)
+        None
     };
 
-    info!(pairs = pairs_engine.pair_count(), "engines initialized");
+    info!(
+        pairs = pairs_engine.as_ref().map_or(0, |e| e.pair_count()),
+        single = single_engine.is_some(),
+        "engines initialized"
+    );
     info!("========== STARTUP COMPLETE ==========");
 
     // ── Load bars ──
@@ -316,20 +328,19 @@ fn run_walkforward(args: RunArgs) {
     const DAY_GAP_MS: i64 = 6 * 3600 * 1000;
 
     for (i, bar) in all_bars.iter().enumerate() {
-        if i == args.warmup_bars {
-            engine.set_warmup_mode(false);
-            info!("warmup complete — live signal generation enabled");
+        if let Some(ref mut se) = single_engine {
+            if i == args.warmup_bars {
+                se.set_warmup_mode(false);
+                info!("warmup complete — live signal generation enabled");
+            }
         }
 
         // Detect day boundary and reset daily state
         if let Some(prev) = prev_day {
             if bar.timestamp - prev > DAY_GAP_MS {
-                engine.reset_daily();
-                pairs_engine.reset_daily();
-                info!(
-                    timestamp = bar.timestamp,
-                    "day boundary — reset daily state"
-                );
+                if let Some(ref mut se) = single_engine { se.reset_daily(); }
+                if let Some(ref mut pe) = pairs_engine { pe.reset_daily(); }
+                info!(timestamp = bar.timestamp, "day boundary — reset daily state");
             }
         }
         prev_day = Some(bar.timestamp);
@@ -337,19 +348,19 @@ fn run_walkforward(args: RunArgs) {
         // Track prices for P&L computation
         pnl_tracker.update_price(&bar.symbol, bar.close);
 
-        // Single-symbol engine (skip in pairs-only mode)
-        if mode.run_single() {
-            let single_intents = engine.on_bar(bar);
+        // Single-symbol engine
+        if let Some(ref mut se) = single_engine {
+            let single_intents = se.on_bar(bar);
             for intent in &single_intents {
                 all_intents.push(OrderIntentRecord::from_engine_intent(intent, bar.timestamp));
-                engine.on_fill(&intent.symbol, intent.side, intent.qty, bar.close);
+                se.on_fill(&intent.symbol, intent.side, intent.qty, bar.close);
             }
             single_intent_count += single_intents.len();
         }
 
-        // Pairs engine (skip in single-only mode)
-        let pair_intents = if mode.run_pairs() {
-            pairs_engine.on_bar(&bar.symbol, bar.timestamp, bar.close)
+        // Pairs engine
+        let pair_intents = if let Some(ref mut pe) = pairs_engine {
+            pe.on_bar(&bar.symbol, bar.timestamp, bar.close)
         } else {
             vec![]
         };
