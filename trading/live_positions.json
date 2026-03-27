@@ -2,45 +2,69 @@
   "_note": "Active paper trading positions. Persist across sessions.",
   "positions": [
     {
-      "pair": "COIN/PYPL",
-      "direction": "LONG",
-      "entry_date": "2026-03-26",
-      "entry_time_et": "10:52",
-      "leg_a": {"symbol": "COIN", "side": "long", "qty": 28, "entry_price": 176.66},
-      "leg_b": {"symbol": "PYPL", "side": "short", "qty": 118, "entry_price": 45.76},
-      "signal": {"z_entry": -0.92, "r2": 0.885, "half_life_days": 2.2, "beta": 1.086},
-      "capital_per_leg": 5000,
-      "max_hold_days": 5,
-      "exit_z_threshold": 0.2
-    },
-    {
-      "pair": "PNC/USB",
+      "pair": "DLR/IRM",
       "direction": "SHORT",
-      "entry_date": "2026-03-26",
-      "entry_time_et": "11:06",
-      "leg_a": {"symbol": "PNC", "side": "short", "qty": 24, "entry_price": 204.56},
-      "leg_b": {"symbol": "USB", "side": "long", "qty": 103, "entry_price": 51.56},
-      "signal": {"z_entry": 1.89, "r2": 0.978, "half_life_days": 2.4, "beta": 1.074},
-      "capital_per_leg": 5000,
-      "max_hold_days": 5,
+      "entry_date": "2026-03-27",
+      "entry_time_et": "10:13",
+      "leg_a": {
+        "symbol": "DLR",
+        "side": "short",
+        "qty": 5,
+        "entry_price": 171.96
+      },
+      "leg_b": {
+        "symbol": "IRM",
+        "side": "long",
+        "qty": 4,
+        "entry_price": 103.67
+      },
+      "signal": {
+        "z_entry": 1.096,
+        "r2": 0.866,
+        "half_life_days": 3.9,
+        "beta": 0.51,
+        "alpha": 2.794718628512363,
+        "spread_mean": 2.575717417130363e-15,
+        "spread_std": 0.019138891091314374
+      },
+      "capital_per_leg": 1000,
+      "max_hold_days": 10,
       "exit_z_threshold": 0.2
     },
     {
-      "pair": "HD/LOW",
+      "pair": "CTSH/EPAM",
       "direction": "LONG",
-      "entry_date": "2026-03-26",
-      "entry_time_et": "11:06",
-      "leg_a": {"symbol": "HD", "side": "long", "qty": 15, "entry_price": 332.97},
-      "leg_b": {"symbol": "LOW", "side": "short", "qty": 13, "entry_price": 237.38},
-      "signal": {"z_entry": -1.70, "r2": 0.852, "half_life_days": 3.4, "beta": 0.661},
-      "capital_per_leg": 5000,
-      "max_hold_days": 5,
+      "entry_date": "2026-03-27",
+      "entry_time_et": "10:13",
+      "leg_a": {
+        "symbol": "CTSH",
+        "side": "long",
+        "qty": 34,
+        "entry_price": 72.73
+      },
+      "leg_b": {
+        "symbol": "EPAM",
+        "side": "short",
+        "qty": 10,
+        "entry_price": 161.71
+      },
+      "signal": {
+        "z_entry": -1.094,
+        "r2": 0.949,
+        "half_life_days": 2.7,
+        "beta": 0.656,
+        "alpha": 0.907500698137238,
+        "spread_mean": 1.391479524196863e-16,
+        "spread_std": 0.024066258128456957
+      },
+      "capital_per_leg": 2500,
+      "max_hold_days": 7,
       "exit_z_threshold": 0.2
     }
   ],
   "account": {
     "broker": "alpaca_paper",
-    "total_deployed": 28619,
-    "cash_remaining": 70778
+    "total_deployed": 7000,
+    "cash_remaining": 3000
   }
 }

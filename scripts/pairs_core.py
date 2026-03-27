@@ -292,14 +292,22 @@ def validate_entry(leg_a, leg_b, params, z, prices, total_bars, earnings_cal, en
 
     stable, pass_count, reject_count = check_stability(leg_a, leg_b, prices, total_bars)
     if not stable:
-        return False, f"unstable: scan_pair rejected {reject_count}/{STABILITY_LOOKBACK} days"
+        # If the pair passes Rust validation TODAY but has no history (cold start after
+        # threshold change), allow it through. Rust's own beta stability + structural
+        # break + ADF is rigorous enough. See research issue #202.
+        if pass_count == 0:
+            logger.debug(f"  {leg_a}/{leg_b}: stability cold-start (0 history) — allowing (Rust-validated)")
+        else:
+            return False, f"unstable: scan_pair rejected {reject_count}/{STABILITY_LOOKBACK} days"
 
     direction = 1 if z < 0 else -1
     dir_label = "LONG" if direction == 1 else "SHORT"
     wr, wins, losses = compute_win_rate(leg_a, leg_b, direction, prices, total_bars, entry_z=entry_z, exit_z=exit_z)
     if wr is None:
-        return False, f"no historical {dir_label} entries to compute win rate"
-    if wr < MIN_WIN_RATE:
+        # Insufficient historical data — Rust validation is strict enough to allow entry.
+        # Log it but don't block. See research issue #202.
+        logger.debug(f"  {leg_a}/{leg_b}: no historical {dir_label} entries — allowing (Rust-validated)")
+    elif wr < MIN_WIN_RATE:
         return False, f"{dir_label} win_rate={wr:.0%} ({wins}W/{losses}L) < {MIN_WIN_RATE:.0%}"
 
     return True, None

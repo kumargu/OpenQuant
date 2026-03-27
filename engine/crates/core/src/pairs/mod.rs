@@ -34,7 +34,8 @@
 
 pub mod active_pairs;
 pub mod engine;
-pub mod shadow;
+// shadow.rs deleted — was fully implemented but never wired into PairsEngine.
+// Promotion/demotion logic can be re-added when needed.
 
 use crate::features::rolling_stats::RollingStats;
 use crate::signals::{Side, SignalReason};
@@ -71,10 +72,18 @@ pub struct PairsTradingConfig {
     /// Force close hour (ET, 0-23). All positions closed at this hour.
     /// Default 15 = close at 15:30 ET (30 min before close).
     pub force_close_minute: u32,
+    /// Round-trip cost in basis points for regime gate P&L tracking.
+    /// Default 10 bps (5 bps per leg for Alpaca zero-commission, ~3-5 bps bid-ask).
+    #[serde(default = "default_cost_bps")]
+    pub cost_bps: f64,
     /// Timezone offset from UTC in hours. Used for entry cutoff and force close.
     /// -5 = EST, -4 = EDT. Should match `[data].timezone_offset_hours`.
     #[serde(default = "default_tz_offset")]
     pub tz_offset_hours: i32,
+}
+
+fn default_cost_bps() -> f64 {
+    10.0
 }
 
 fn default_tz_offset() -> i32 {
@@ -93,6 +102,7 @@ impl Default for PairsTradingConfig {
             notional_per_leg: 10_000.0,
             last_entry_hour: 14,
             force_close_minute: 930, // 15:30 ET = 15*60+30 = 930
+            cost_bps: 10.0,
             tz_offset_hours: -5,
         }
     }
@@ -123,6 +133,9 @@ pub struct PairConfig {
     ///
     /// A value of 0.0 means the half-life was unknown or invalid.
     pub kappa: f64,
+    /// Per-pair max hold in bars (days for daily data). 0 = use global max_hold_bars.
+    /// Set by pair-picker: min(ceil(2.5 × half_life), 10).
+    pub max_hold_bars: usize,
 }
 
 impl Default for PairConfig {
@@ -133,6 +146,7 @@ impl Default for PairConfig {
             alpha: 0.0,
             beta: 1.0,
             kappa: 0.0,
+            max_hold_bars: 0, // 0 = use global
         }
     }
 }
@@ -326,7 +340,7 @@ impl PairState {
         self.spread_count += 1;
 
         // Need enough spread history for z-score
-        let min_lookback = trading.lookback.min(256); // capped by RollingStats<256>
+        let min_lookback = trading.lookback.min(32); // capped by RollingStats<32>
         if self.spread_count < min_lookback {
             debug!(
                 pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
@@ -417,8 +431,13 @@ impl PairState {
                 PairPosition::Flat => false,
             };
 
-            // Exit condition: max hold
-            let max_held = trading.max_hold_bars > 0 && bars_held >= trading.max_hold_bars;
+            // Exit condition: max hold (per-pair override from pair-picker, or global fallback)
+            let effective_max_hold = if config.max_hold_bars > 0 {
+                config.max_hold_bars // per-pair HL-adaptive: ceil(2.5 * HL) capped at 10
+            } else {
+                trading.max_hold_bars // global fallback from TOML
+            };
+            let max_held = effective_max_hold > 0 && bars_held >= effective_max_hold;
 
             // Exit condition: force close before end of day (no overnight holding)
             let force_close = et_minutes >= trading.force_close_minute;
@@ -489,7 +508,7 @@ impl PairState {
                     PairPosition::ShortSpread => (ret_b - ret_a) * 10_000.0,
                     PairPosition::Flat => 0.0,
                 };
-                let net_bps = gross_bps - 12.0; // 12 bps round-trip cost
+                let net_bps = gross_bps - trading.cost_bps;
                 if self.trade_pnl_history.len() >= 10 {
                     self.trade_pnl_history.pop_front();
                 }
@@ -819,6 +838,7 @@ mod tests {
             alpha: 0.0,
             beta: 0.37,
             kappa: 0.0, // unknown in unit tests
+            max_hold_bars: 0,
         }
     }
 
@@ -869,6 +889,7 @@ mod tests {
             alpha: 0.0,
             beta: 1.0,
             kappa: f64::ln(2.0) / 10.0, // 10-day OU half-life for test priority scoring
+            max_hold_bars: 0,
         }
     }
 
@@ -886,6 +907,7 @@ mod tests {
             last_entry_hour: 24,       // never block entries
             force_close_minute: 1_500, // never force close
             tz_offset_hours: -5,
+            cost_bps: 10.0,
         }
     }
 
@@ -1266,6 +1288,7 @@ mod tests {
             last_entry_hour: 24,
             force_close_minute: 1_500,
             tz_offset_hours: -5,
+            cost_bps: 10.0,
         };
 
         // Warmup: stable spread = ln(100) - ln(100) = 0
@@ -1398,6 +1421,7 @@ mod tests {
             last_entry_hour: 24,
             force_close_minute: 1_500,
             tz_offset_hours: -5,
+            cost_bps: 10.0,
         };
 
         // Warmup: stable spread = 0
@@ -1510,6 +1534,7 @@ mod tests {
         let mut state = PairState::new();
         let config = PairConfig {
             kappa: 0.0, // unknown half-life
+            max_hold_bars: 0,
             ..easy_trigger_config()
         };
         let trading = easy_trigger_trading();

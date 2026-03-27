@@ -12,7 +12,7 @@
 use super::active_pairs::{ClosedPairTrade, PairTradingHistory, load_active_pairs};
 use super::{PairConfig, PairOrderIntent, PairPosition, PairState, PairsTradingConfig};
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Canonical pair ID — alphabetically ordered to match Thompson sampling's pair_id().
 fn canonical_pair_id(a: &str, b: &str) -> String {
@@ -30,7 +30,6 @@ pub struct PairsEngine {
     /// Shared trading parameters (from openquant.toml).
     trading_config: PairsTradingConfig,
     /// Global bar counter (shared across all pairs).
-    bar_counter: usize,
     /// Path to active_pairs.json (for reloading).
     active_pairs_path: Option<PathBuf>,
     /// Trading history (for Thompson sampling feedback).
@@ -58,7 +57,6 @@ impl PairsEngine {
         Self {
             pairs,
             trading_config,
-            bar_counter: 0,
             active_pairs_path: None,
             trade_history: PairTradingHistory { trades: Vec::new() },
             history_path: None,
@@ -106,7 +104,6 @@ impl PairsEngine {
         Self {
             pairs,
             trading_config,
-            bar_counter: 0,
             active_pairs_path: Some(active_pairs_path.to_path_buf()),
             trade_history,
             history_path: Some(history_path.to_path_buf()),
@@ -222,14 +219,21 @@ impl PairsEngine {
     /// Iterates over all configured pairs and checks if this symbol is a leg.
     /// Returns order intents for any pairs that fire entry/exit signals.
     pub fn on_bar(&mut self, symbol: &str, timestamp: i64, close: f64) -> Vec<PairOrderIntent> {
-        self.bar_counter += 1;
+        let mut matched = false;
         let mut all_intents = Vec::new();
 
         for (config, state) in &mut self.pairs {
+            if config.leg_a == symbol || config.leg_b == symbol {
+                matched = true;
+            }
             let intents = state.on_price(symbol, close, config, &self.trading_config, timestamp);
             if !intents.is_empty() {
                 all_intents.extend(intents);
             }
+        }
+
+        if !matched {
+            debug!(symbol, "pairs: bar for unknown symbol — not a leg in any pair");
         }
 
         all_intents
@@ -279,6 +283,7 @@ mod tests {
             alpha: 0.0,
             beta: 0.37,
             kappa: 0.0,
+            max_hold_bars: 0,
         }
     }
 
@@ -289,6 +294,7 @@ mod tests {
             alpha: 0.0,
             beta: 1.39,
             kappa: 0.0,
+            max_hold_bars: 0,
         }
     }
 

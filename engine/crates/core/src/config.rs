@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::engine::{EngineConfig, SymbolOverrides};
+use crate::engine::{SingleEngineConfig as EngineConfig, SymbolOverrides};
 use crate::exit::ExitConfig;
 use crate::features::{GarchConfig, RegimeConfig};
 use crate::pairs::PairsTradingConfig;

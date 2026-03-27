@@ -37,10 +37,11 @@ pub const MIN_HISTORY_BARS: usize = 90;
 /// current regime rather than averaging across historical regime changes.
 pub const MAX_VALIDATION_WINDOW: usize = 150;
 
-/// Minimum R² for the hedge ratio OLS — below this the beta is meaningless noise.
-/// Note: Python entry gate (pairs_core.MIN_R2_ENTRY) is 0.70 for live trading.
-/// This is the Rust pre-filter; the tighter Python gate catches the rest.
-pub const MIN_R_SQUARED: f64 = 0.70;
+/// Minimum R² for the hedge ratio OLS — loose pre-filter.
+/// R² measures co-movement, not cointegration — ADF is the proper cointegration gate.
+/// Python entry gate (pairs_core.MIN_R2_ENTRY=0.70) applies the tighter threshold.
+/// Lowered from 0.70 to 0.40 per research issue #202.
+pub const MIN_R_SQUARED: f64 = 0.40;
 
 /// Price data for a single symbol: ordered daily close prices.
 pub type PriceData = Vec<f64>;
@@ -287,11 +288,14 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         result.structural_break,
     );
 
-    // Pass criteria: cointegrated + valid half-life + stable beta + adequate R²
+    // Pass criteria: cointegrated + valid half-life + no structural break + adequate R²
+    // Beta CV is a SCORE penalty (handled by compute_score), not a hard gate.
+    // Structural break remains a hard gate — it indicates a genuinely broken relationship.
+    // See research issue #202 and Principal Engineer review for justification.
     let r_squared_ok = result.beta_r_squared.unwrap_or(0.0) >= MIN_R_SQUARED;
     result.passed = result.is_cointegrated
         && result.half_life_valid
-        && result.beta_stable
+        && !result.structural_break
         && r_squared_ok
         && !result.etf_excluded;
 

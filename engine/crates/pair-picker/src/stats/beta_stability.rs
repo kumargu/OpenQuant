@@ -28,7 +28,13 @@ pub struct BetaStabilityResult {
 }
 
 /// Maximum acceptable coefficient of variation for beta.
-pub const MAX_BETA_CV: f64 = 0.20;
+/// Raised from 0.20 to 0.35: the 0.20 threshold was calibrated for 60-bar windows
+/// but ROLLING_WINDOW was halved to 30 without recalibrating CV. With 30-bar OLS,
+/// estimation noise inflates CV by ~sqrt(2), so 0.20 was below the noise floor.
+/// 0.35 allows moderately stable pairs through while still catching high-CV garbage.
+/// Beta CV also feeds into compute_score() as a continuous penalty — it does not need
+/// to be a strict hard gate. See research issue #202.
+pub const MAX_BETA_CV: f64 = 0.35;
 
 /// Rolling window size for beta estimation.
 /// Lowered from 60 to 30 to work with 90-day validation windows.

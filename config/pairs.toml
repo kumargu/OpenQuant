@@ -489,40 +489,48 @@ asset_class = "disabled"
 
 [pairs_trading]
 
+# ── DAILY BAR configuration ──
+# These values are tuned for DAILY bars (1 bar per day per symbol).
+# For intraday (1-min bars), see the git history for old values.
+
 # Z-score threshold to enter a position. Entry when |z| > entry_z.
-# Higher = fewer trades but higher conviction per trade.
-entry_z = 2.0
+entry_z = 1.0
 
 # Z-score threshold to exit (spread reverted). Exit when |z| < exit_z.
-# Lower = wait for stronger reversion before closing.
-exit_z = 0.25
+exit_z = 0.2
 
 # Z-score threshold for stop loss (spread diverged further). Exit when |z| > stop_z.
-stop_z = 5.0
+stop_z = 4.0
 
 # Rolling window size for spread z-score computation.
-# Capped at 32 bars (RollingStats<32>). Higher = smoother z-scores.
-lookback = 32
+# Capped at 32 bars by RollingStats<32> compile-time constant.
+# 30 days = ~6 weeks of daily history for rolling mean/std.
+lookback = 30
 
-# Maximum bars to hold before forced exit (0 = no limit).
-# At 1-minute bars, 150 bars = ~2.5 hours.
-max_hold_bars = 150
+# Maximum bars (days) to hold before forced exit.
+# 10 days = 2 weeks. Pair-picker computes per-pair max_hold_days from HL
+# (typically ceil(2.5 * HL) capped at 10), but the engine currently uses
+# this global value. TODO: wire per-pair max_hold_days from active_pairs.json.
+max_hold_bars = 10
 
-# Minimum bars to hold before strategy-driven exits (reversion).
-# Stop loss always fires regardless. Prevents churn on brief z-score crosses.
-min_hold_bars = 20
+# Minimum bars (days) to hold before reversion exit. Stop loss still fires.
+# 1 day = allow next-day exit if spread reverts overnight.
+min_hold_bars = 1
 
 # Dollar notional per leg. Total exposure per trade = 2 x notional_per_leg.
-notional_per_leg = 10000.0
+# With $10K capital and ~5 concurrent pairs, $1000/leg keeps total < $10K.
+notional_per_leg = 1000.0
 
-# Last hour (ET) to allow new entries. No new positions after this hour.
-# 14 = no entries after 14:59 ET (avoids overnight risk from late-day entries).
-last_entry_hour = 14
+# Last hour (ET) to allow new entries.
+# 23 = effectively disabled for daily bars (daily close arrives at 16:00 ET).
+last_entry_hour = 23
 
 # Force close all positions at this time (ET minutes since midnight).
-# 930 = 15:30 ET (30 min before market close). Set to 960 (16:00) to disable.
-force_close_minute = 930
+# 1440 = effectively disabled (no minute-of-day reaches 1440).
+# Daily bars hold overnight by design — exits are z-score or max_hold driven.
+force_close_minute = 1440
 
 # Timezone offset from UTC in hours. Must match [data].timezone_offset_hours.
-# -5 = EST, -4 = EDT. Update when DST changes (or use -4 during Mar-Nov).
+# -4 = EDT (March-November), -5 = EST (November-March).
+# TODO: Replace with timezone name for automatic DST handling.
 tz_offset_hours = -4

@@ -57,7 +57,7 @@ pub struct BarOutcome {
     pub qty_approved: Option<f64>,
 }
 
-/// Per-symbol parameter overrides. None = use default from EngineConfig.
+/// Per-symbol parameter overrides. None = use default from SingleEngineConfig.
 /// If `asset_class` is set, fields from the named asset class fill in
 /// any None values before falling back to global defaults.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -84,7 +84,7 @@ pub struct SymbolOverrides {
 
 /// Engine configuration.
 #[derive(Debug, Clone, Default)]
-pub struct EngineConfig {
+pub struct SingleEngineConfig {
     pub signal: mean_reversion::Config,
     pub momentum: momentum::Config,
     pub vwap_reversion: vwap_reversion::Config,
@@ -110,7 +110,7 @@ pub struct EngineConfig {
 }
 
 /// The core engine. Maintains all state, processes bars, emits order intents.
-pub struct Engine {
+pub struct SingleEngine {
     default_strategy: Box<dyn Strategy>,
     symbol_strategies: HashMap<String, Box<dyn Strategy>>,
     default_exit_config: ExitConfig,
@@ -134,10 +134,10 @@ pub struct Engine {
     timezone_offset_hours: i32,
 }
 
-impl Engine {
+impl SingleEngine {
     /// Build the default strategy combiner from config.
     /// Only includes strategies that are enabled and have weight > 0.
-    fn build_combiner(config: &EngineConfig) -> Box<dyn Strategy> {
+    fn build_combiner(config: &SingleEngineConfig) -> Box<dyn Strategy> {
         let mut strategies = Vec::new();
 
         if config.combiner.weight_mean_reversion > 0.0 {
@@ -188,7 +188,7 @@ impl Engine {
     }
 
     /// Build the strategy from config — combiner or single mean-reversion.
-    fn build_strategy(config: &EngineConfig) -> Box<dyn Strategy> {
+    fn build_strategy(config: &SingleEngineConfig) -> Box<dyn Strategy> {
         if config.combiner.enabled {
             Self::build_combiner(config)
         } else {
@@ -197,7 +197,7 @@ impl Engine {
     }
 
     /// Create engine with strategy combiner (mean-reversion + momentum + optional VWAP/breakout).
-    pub fn new(config: EngineConfig) -> Self {
+    pub fn new(config: SingleEngineConfig) -> Self {
         let default_strategy = Self::build_strategy(&config);
 
         // Build per-symbol strategies and exit configs from overrides
@@ -232,7 +232,7 @@ impl Engine {
                     .unwrap_or(config.combiner.weight_breakout),
                 ..config.combiner.clone()
             };
-            let sym_config = EngineConfig {
+            let sym_config = SingleEngineConfig {
                 signal: sig,
                 combiner: sym_combiner,
                 ..config.clone()
@@ -806,7 +806,7 @@ mod tests {
 
     #[test]
     fn warmup_produces_no_signals() {
-        let mut engine = Engine::new(EngineConfig::default());
+        let mut engine = SingleEngine::new(SingleEngineConfig::default());
         for i in 0..63 {
             let bar = steady_bar("AAPL", 100.0 + (i as f64 * 0.01), 1000.0);
             assert!(
@@ -818,7 +818,7 @@ mod tests {
 
     #[test]
     fn big_drop_triggers_buy() {
-        let config = EngineConfig {
+        let config = SingleEngineConfig {
             risk: RiskConfig {
                 min_reward_cost_ratio: 0.0,
                 ..Default::default()
@@ -830,7 +830,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut engine = Engine::new(config);
+        let mut engine = SingleEngine::new(config);
 
         for _ in 0..65 {
             engine.on_bar(&steady_bar("AAPL", 100.0, 1000.0));
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn kill_switch_blocks_after_loss() {
-        let config = EngineConfig {
+        let config = SingleEngineConfig {
             risk: RiskConfig {
                 max_daily_loss: 100.0,
                 ..Default::default()
@@ -860,7 +860,7 @@ mod tests {
             exit: no_exit_config(),
             ..Default::default()
         };
-        let mut engine = Engine::new(config);
+        let mut engine = SingleEngine::new(config);
 
         engine.on_fill("AAPL", Side::Buy, 10.0, 100.0);
         engine.on_fill("AAPL", Side::Sell, 10.0, 85.0);
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn stop_loss_exits_position() {
-        let config = EngineConfig {
+        let config = SingleEngineConfig {
             risk: RiskConfig {
                 min_reward_cost_ratio: 0.0,
                 ..Default::default()
@@ -901,7 +901,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut engine = Engine::new(config);
+        let mut engine = SingleEngine::new(config);
 
         // Warm up and trigger buy
         for _ in 0..65 {
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn max_hold_exits_position() {
-        let config = EngineConfig {
+        let config = SingleEngineConfig {
             risk: RiskConfig {
                 min_reward_cost_ratio: 0.0,
                 ..Default::default()
@@ -952,7 +952,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut engine = Engine::new(config);
+        let mut engine = SingleEngine::new(config);
 
         // Simulate a fill
         engine.on_fill("AAPL", Side::Buy, 10.0, 100.0);
@@ -968,7 +968,7 @@ mod tests {
 
     #[test]
     fn take_profit_exits_position() {
-        let config = EngineConfig {
+        let config = SingleEngineConfig {
             risk: RiskConfig {
                 min_reward_cost_ratio: 0.0,
                 ..Default::default()
@@ -982,7 +982,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut engine = Engine::new(config);
+        let mut engine = SingleEngine::new(config);
 
         engine.on_fill("AAPL", Side::Buy, 10.0, 100.0);
 
@@ -1016,7 +1016,7 @@ mod tests {
             .collect();
 
         let run = |bars: &[Bar]| -> Vec<Vec<OrderIntent>> {
-            let mut engine = Engine::new(EngineConfig::default());
+            let mut engine = SingleEngine::new(SingleEngineConfig::default());
             bars.iter().map(|b| engine.on_bar(b)).collect()
         };
 
@@ -1036,7 +1036,7 @@ mod tests {
 
     #[test]
     fn stale_data_skips_signals() {
-        let config = EngineConfig {
+        let config = SingleEngineConfig {
             risk: RiskConfig {
                 min_reward_cost_ratio: 0.0,
                 ..Default::default()
@@ -1049,7 +1049,7 @@ mod tests {
             max_bar_age_ms: 60_000, // 1 minute staleness window
             ..Default::default()
         };
-        let mut engine = Engine::new(config);
+        let mut engine = SingleEngine::new(config);
 
         // Use a timestamp far in the past (definitely stale)
         let old_ts = 1_000_000_000_000_i64; // year 2001
@@ -1095,7 +1095,7 @@ mod tests {
     #[test]
     fn stale_data_disabled_allows_old_bars() {
         // max_bar_age_ms = 0 means disabled (default for backtesting)
-        let config = EngineConfig {
+        let config = SingleEngineConfig {
             risk: RiskConfig {
                 min_reward_cost_ratio: 0.0,
                 ..Default::default()
@@ -1108,7 +1108,7 @@ mod tests {
             max_bar_age_ms: 0, // disabled
             ..Default::default()
         };
-        let mut engine = Engine::new(config);
+        let mut engine = SingleEngine::new(config);
 
         let old_ts = 1_000_000_000_000_i64;
         for i in 0..65 {

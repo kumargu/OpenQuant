@@ -66,7 +66,7 @@ mod pnl;
 use clap::Parser;
 use intents::{write_intents, write_trade_results, OrderIntentRecord};
 use openquant_core::config::ConfigFile;
-use openquant_core::engine::Engine;
+use openquant_core::engine::SingleEngine;
 use openquant_core::pairs::engine::PairsEngine;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -85,28 +85,56 @@ struct Cli {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
-    /// Backtest — replay historical bar files through the engine.
-    Backtest(RunArgs),
+    /// Walk-forward — replay historical bars sequentially through the engine.
+    /// Bars are processed in order with rolling state — no look-ahead bias.
+    /// This is the only way to evaluate strategy performance.
+    WalkForward(RunArgs),
 
-    /// Walk-forward — backtest with per-window P&L reporting.
-    WalkForward {
-        #[command(flatten)]
-        run: RunArgs,
-
-        /// Window size in trading days.
-        #[arg(long, default_value = "10")]
-        window_days: usize,
-    },
-
-    /// Live — paper/live trading via Python sidecar (not yet implemented).
+    /// Live — streaming bars from stdin, order intents to stdout.
+    /// Python feeds Alpaca bars → Rust decides → Python executes orders.
     Live(RunArgs),
+}
+
+/// Which engine to run — CLI flag picks the engine AND its config.
+/// No ambiguity: `--engine pairs` uses config/pairs.toml, `--engine single` uses config/single.toml.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
+enum EngineMode {
+    /// Single-symbol mean-reversion engine (config/single.toml)
+    Single,
+    /// Pairs spread-trading engine (config/pairs.toml)
+    Pairs,
+    /// Run both engines simultaneously
+    Both,
+}
+
+impl EngineMode {
+    fn run_single(self) -> bool {
+        matches!(self, EngineMode::Single | EngineMode::Both)
+    }
+
+    fn run_pairs(self) -> bool {
+        matches!(self, EngineMode::Pairs | EngineMode::Both)
+    }
+
+    /// Default config path for this engine mode.
+    fn default_config(self) -> &'static str {
+        match self {
+            EngineMode::Single => "config/single.toml",
+            EngineMode::Pairs => "config/pairs.toml",
+            EngineMode::Both => "config/pairs.toml",
+        }
+    }
 }
 
 #[derive(clap::Args, Debug, Clone)]
 struct RunArgs {
-    /// Path to TOML config file.
-    #[arg(long, default_value = "config/pairs.toml")]
-    config: PathBuf,
+    /// Which engine to run.
+    #[arg(long, value_enum, default_value = "pairs")]
+    engine: EngineMode,
+
+    /// Path to TOML config file. Defaults based on --engine flag.
+    #[arg(long)]
+    config: Option<PathBuf>,
 
     /// Directory containing experiment_bars.json (bar data).
     #[arg(long, default_value = "data")]
@@ -128,32 +156,14 @@ struct RunArgs {
 fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
-        Command::Backtest(args) => run_backtest(args),
-        Command::WalkForward { run, window_days } => {
-            run_backtest(run);
-            // Walk-forward window analysis is done post-hoc on trade_results.json
-            // by slicing trades into time windows. The runner already processes
-            // bars sequentially with rolling state — that IS walk-forward.
-            info!(
-                window_days,
-                "Walk-forward complete — slice trade_results.json by date windows for per-window P&L"
-            );
-        }
-        Command::Live(args) => run_live(args),
-    }
-}
-
-fn run_backtest(args: RunArgs) {
-    let output_dir = args.output_dir.as_ref().unwrap_or(&args.data_dir);
-    // Fall back to data_dir if trading_dir doesn't exist (backward compat + tests)
-    let trading_dir = if args.trading_dir.exists() {
-        args.trading_dir.clone()
-    } else {
-        args.data_dir.clone()
+    // Resolve engine mode and config path from CLI args (before tracing init)
+    let args = match &cli.command {
+        Command::WalkForward(a) | Command::Live(a) => a,
     };
 
-    // Log to both stderr and data/journal/engine.log (append mode)
+    // ── Initialize tracing ONCE — stderr + data/journal/engine.log ──
+    // All tracing from Rust (PairsEngine, SingleEngine, pair-picker, runner)
+    // flows here. This is the single source of logs for the entire process.
     let journal_dir = args.data_dir.join("journal");
     std::fs::create_dir_all(&journal_dir).ok();
     let log_file = std::fs::OpenOptions::new()
@@ -171,6 +181,25 @@ fn run_backtest(args: RunArgs) {
         .with_ansi(false)
         .with_writer(tee)
         .init();
+
+    // ── Dispatch ──
+    match cli.command {
+        Command::WalkForward(args) => run_walkforward(args),
+        Command::Live(args) => run_live(args),
+    }
+}
+
+fn run_walkforward(args: RunArgs) {
+    let mode = args.engine;
+    let config_path = args.config.clone()
+        .unwrap_or_else(|| PathBuf::from(mode.default_config()));
+    let output_dir = args.output_dir.as_ref().unwrap_or(&args.data_dir);
+    let trading_dir = if args.trading_dir.exists() {
+        args.trading_dir.clone()
+    } else {
+        args.data_dir.clone()
+    };
+    // Tracing already initialized in main()
 
     // Run ID: git commit short hash + sequence number for log correlation
     let git_commit = std::process::Command::new("git")
@@ -193,7 +222,7 @@ fn run_backtest(args: RunArgs) {
         "========== OPENQUANT RUN START =========="
     );
     info!(
-        config = %args.config.display(),
+        config = %config_path.display(),
         data_dir = %args.data_dir.display(),
         output_dir = %output_dir.display(),
         warmup_bars = args.warmup_bars,
@@ -202,7 +231,7 @@ fn run_backtest(args: RunArgs) {
     );
 
     // ── Load config ──
-    let cfg_file = match ConfigFile::load(&args.config) {
+    let cfg_file = match ConfigFile::load(&config_path) {
         Ok(c) => {
             info!("config loaded successfully");
             c
@@ -213,10 +242,7 @@ fn run_backtest(args: RunArgs) {
         }
     };
 
-    use openquant_core::config::TradingMode;
-    let run_single = matches!(cfg_file.mode, TradingMode::Single | TradingMode::Both);
-    let run_pairs = matches!(cfg_file.mode, TradingMode::Pairs | TradingMode::Both);
-    info!(mode = ?cfg_file.mode, run_single, run_pairs, "trading mode");
+    info!(?mode, single = mode.run_single(), pairs = mode.run_pairs(), "engine mode");
 
     let mut pairs_trading_config = cfg_file.pairs_trading.clone();
     // Sync timezone from [data] config so pairs engine uses the same offset
@@ -236,7 +262,7 @@ fn run_backtest(args: RunArgs) {
     let engine_config = cfg_file.into_engine_config();
 
     // ── Initialize engines ──
-    let mut engine = Engine::new(engine_config);
+    let mut engine = SingleEngine::new(engine_config);
     engine.set_warmup_mode(true);
     info!("single-symbol engine initialized (warmup mode)");
 
@@ -312,7 +338,7 @@ fn run_backtest(args: RunArgs) {
         pnl_tracker.update_price(&bar.symbol, bar.close);
 
         // Single-symbol engine (skip in pairs-only mode)
-        if run_single {
+        if mode.run_single() {
             let single_intents = engine.on_bar(bar);
             for intent in &single_intents {
                 all_intents.push(OrderIntentRecord::from_engine_intent(intent, bar.timestamp));
@@ -322,7 +348,7 @@ fn run_backtest(args: RunArgs) {
         }
 
         // Pairs engine (skip in single-only mode)
-        let pair_intents = if run_pairs {
+        let pair_intents = if mode.run_pairs() {
             pairs_engine.on_bar(&bar.symbol, bar.timestamp, bar.close)
         } else {
             vec![]
@@ -405,20 +431,16 @@ fn run_backtest(args: RunArgs) {
 /// Usage with Python sidecar:
 ///   python3 bar_streamer.py | openquant-runner live --config config/pairs.toml | python3 order_executor.py
 fn run_live(args: RunArgs) {
-    // Log to stderr only (stdout is for intents)
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_ansi(false)
-        .with_writer(std::io::stderr)
-        .init();
+    let mode = args.engine;
+    let config_path = args.config.clone()
+        .unwrap_or_else(|| PathBuf::from(mode.default_config()));
 
-    info!("========== OPENQUANT LIVE MODE ==========");
+    // Tracing already initialized in main() — logs to stderr + engine.log
+
+    info!(?mode, config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
 
     // Load config
-    let cfg_file = match ConfigFile::load(&args.config) {
+    let cfg_file = match ConfigFile::load(&config_path) {
         Ok(c) => c,
         Err(e) => {
             error!("failed to load config: {e}");
@@ -432,27 +454,40 @@ fn run_live(args: RunArgs) {
         args.data_dir.clone()
     };
 
-    let mut pairs_trading_config = cfg_file.pairs_trading.clone();
-    pairs_trading_config.tz_offset_hours = cfg_file.data.timezone_offset_hours;
-
-    let active_pairs_path = trading_dir.join("active_pairs.json");
-    let history_path = trading_dir.join("pair_trading_history.json");
-
-    let mut pairs_engine = if active_pairs_path.exists() {
-        info!(path = %active_pairs_path.display(), "loading active pairs");
-        PairsEngine::from_active_pairs(
-            &active_pairs_path,
-            &history_path,
-            vec![],
-            pairs_trading_config,
-        )
+    // Initialize engines based on mode
+    let mut single_engine = if mode.run_single() {
+        let engine_config = cfg_file.clone().into_engine_config();
+        Some(SingleEngine::new(engine_config))
     } else {
-        error!("no active_pairs.json found");
-        std::process::exit(1);
+        None
+    };
+
+    let mut pairs_engine = if mode.run_pairs() {
+        let mut pairs_trading_config = cfg_file.pairs_trading.clone();
+        pairs_trading_config.tz_offset_hours = cfg_file.data.timezone_offset_hours;
+
+        let active_pairs_path = trading_dir.join("active_pairs.json");
+        let history_path = trading_dir.join("pair_trading_history.json");
+
+        if active_pairs_path.exists() {
+            info!(path = %active_pairs_path.display(), "loading active pairs");
+            Some(PairsEngine::from_active_pairs(
+                &active_pairs_path,
+                &history_path,
+                vec![],
+                pairs_trading_config,
+            ))
+        } else {
+            error!("no active_pairs.json found");
+            std::process::exit(1);
+        }
+    } else {
+        None
     };
 
     info!(
-        pairs = pairs_engine.pair_count(),
+        ?mode,
+        pairs = pairs_engine.as_ref().map_or(0, |e| e.pair_count()),
         "live engine ready — reading bars from stdin"
     );
 
@@ -489,29 +524,55 @@ fn run_live(args: RunArgs) {
         let close = bar["close"].as_f64().unwrap_or(0.0);
 
         if symbol.is_empty() || timestamp == 0 || close <= 0.0 {
+            warn!(line = line, "skipping bar with missing/invalid fields");
             continue;
         }
 
         // Feed to pairs engine
-        let intents = pairs_engine.on_bar(symbol, timestamp, close);
-
-        // Write intents to stdout as JSON lines
-        for intent in &intents {
-            let out = serde_json::json!({
-                "symbol": intent.symbol,
-                "side": format!("{:?}", intent.side).to_lowercase(),
-                "qty": intent.qty,
-                "pair_id": intent.pair_id,
-                "reason": format!("{:?}", intent.reason),
-                "z_score": intent.z_score,
-                "spread": intent.spread,
-                "timestamp": timestamp,
-            });
-            if let Err(e) = writeln!(stdout, "{}", out) {
-                error!("stdout write error: {e}");
-                return;
+        if let Some(ref mut pe) = pairs_engine {
+            let intents = pe.on_bar(symbol, timestamp, close);
+            for intent in &intents {
+                let out = serde_json::json!({
+                    "symbol": intent.symbol,
+                    "side": format!("{:?}", intent.side).to_lowercase(),
+                    "qty": intent.qty,
+                    "pair_id": intent.pair_id,
+                    "reason": format!("{:?}", intent.reason),
+                    "z_score": intent.z_score,
+                    "spread": intent.spread,
+                    "priority_score": intent.priority_score,
+                    "timestamp": timestamp,
+                });
+                if let Err(e) = writeln!(stdout, "{}", out) {
+                    error!("stdout write error: {e}");
+                    return;
+                }
+                let _ = stdout.flush();
             }
-            let _ = stdout.flush();
+        }
+
+        // Feed to single-symbol engine
+        if let Some(ref mut se) = single_engine {
+            let bar = openquant_core::market_data::Bar {
+                symbol: symbol.to_string(),
+                timestamp,
+                open: close, high: close, low: close, close, volume: 0.0,
+            };
+            let intents = se.on_bar(&bar);
+            for intent in &intents {
+                let out = serde_json::json!({
+                    "symbol": intent.symbol,
+                    "side": format!("{:?}", intent.side).to_lowercase(),
+                    "qty": intent.qty,
+                    "reason": "single_engine",
+                    "timestamp": timestamp,
+                });
+                if let Err(e) = writeln!(stdout, "{}", out) {
+                    error!("stdout write error: {e}");
+                    return;
+                }
+                let _ = stdout.flush();
+            }
         }
     }
 

@@ -4,7 +4,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict};
 
-use openquant_core::engine::{Engine as CoreEngine, EngineConfig, SymbolOverrides};
+use openquant_core::engine::{SingleEngine as CoreEngine, SingleEngineConfig as EngineConfig, SymbolOverrides};
 use openquant_core::market_data::Bar;
 use openquant_core::signals::Side;
 use openquant_core::signals::mean_reversion;
@@ -13,15 +13,15 @@ use std::collections::HashMap;
 use openquant_journal::DataRuntime;
 use openquant_journal::writer::{BarRecord, FillRecord};
 
-#[pyclass]
-struct Engine {
+#[pyclass(name = "SingleEngine")]
+struct SingleEngineWrapper {
     inner: CoreEngine,
     journal: Option<DataRuntime>,
     engine_version: String,
 }
 
 #[pymethods]
-impl Engine {
+impl SingleEngineWrapper {
     #[new]
     #[pyo3(signature = (
         max_position_notional = 10_000.0,
@@ -435,7 +435,7 @@ impl Engine {
     }
 }
 
-impl Drop for Engine {
+impl Drop for SingleEngineWrapper {
     fn drop(&mut self) {
         if let Some(rt) = self.journal.take() {
             rt.shutdown();
@@ -1192,7 +1192,7 @@ fn openquant(m: &Bound<'_, PyModule>) -> PyResult<()> {
         )
         .try_init();
 
-    m.add_class::<Engine>()?;
+    m.add_class::<SingleEngineWrapper>()?;
     m.add_class::<PairsEngineWrapper>()?;
     m.add_function(wrap_pyfunction!(backtest, m)?)?;
     m.add_function(wrap_pyfunction!(backtest_toml, m)?)?;

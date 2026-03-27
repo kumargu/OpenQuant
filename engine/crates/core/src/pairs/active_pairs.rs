@@ -111,6 +111,7 @@ pub fn load_active_pairs(path: &Path) -> Option<(ActivePairsFile, Vec<PairConfig
                 alpha: p.alpha,
                 beta: p.beta,
                 kappa,
+                max_hold_bars: p.max_hold_days,
             }
         })
         .collect();
