@@ -65,15 +65,17 @@ logger.propagate = False
 
 _fh = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
 _fh.setLevel(logging.DEBUG)
-_fh.setFormatter(logging.Formatter(
-    "%(asctime)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-))
+# Force ET timestamps (server runs IST but we trade US markets)
+_et_fmt = logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+_et_fmt.converter = lambda *args: datetime.now(ET).timetuple()
+_fh.setFormatter(_et_fmt)
 logger.addHandler(_fh)
 
 _sh = logging.StreamHandler(sys.stderr)
 _sh.setLevel(logging.INFO)
-_sh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+_sh_fmt = logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S")
+_sh_fmt.converter = lambda *args: datetime.now(ET).timetuple()
+_sh.setFormatter(_sh_fmt)
 logger.addHandler(_sh)
 
 # ── Pybridge import ────────────────────────────────────────────────────────────

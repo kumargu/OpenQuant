@@ -144,6 +144,48 @@ Tester agent (worktree)                    Reviewer (main)                     C
 - **Reload preserves state**: When refreshing config from an updated file, update parameters (e.g., hedge ratio) on existing objects but preserve their runtime state (warm-up data, open positions). Don't reset what doesn't need resetting
 - **Remove dead code aggressively**: If a function is defined but never called, delete it or wire it in. Dead code misleads readers and rots. No "keeping it for later"
 
+## Live trading execution — single pipeline, no shortcuts
+
+**This is the #1 rule: live trades must flow through the same code path as backtests.**
+
+The PNC/USB (-$580) and HD/LOW losses came from bypassing the systematic pipeline — picking pairs ad-hoc that were never backtested, never in the portfolio, and never passed quality gates. Every dollar of loss was preventable by running the existing code.
+
+### Daily workflow
+
+There is exactly ONE command to run each trading day:
+
+```bash
+python3 scripts/live_pipeline.py run          # Full cycle: exit → scan → enter → monitor → eod
+python3 scripts/live_pipeline.py run --dry    # Same cycle, no orders (signal watching)
+```
+
+This single command handles everything in order:
+1. Close positions that reverted or hit max_hold
+2. Scan the portfolio for new signals (all quality gates applied)
+3. Place orders for validated signals
+4. Monitor all positions with frozen z-scores and P&L
+5. Log end-of-day summary
+
+Individual steps are available (`monitor`, `scan`, `exit`, `eod`) but the `run` command is the primary entry point. Market-hours safety: if run outside 9:30-16:00 ET, it scans and monitors but does not place or close orders.
+
+### Hard rules for live execution
+
+1. **Portfolio gate**: Every live trade must exist in `trading/pair_portfolio.json`. No ad-hoc pair selection. If a pair isn't in the portfolio, it hasn't been backtested and MUST NOT be traded
+2. **Same quality gates**: Live entry uses the same `scan_pair()` + quality thresholds as `capital_sim.py` — R²≥0.70, HL≤5.0, ADF≤-2.5, beta>0.1, beta stability, spread_std>0.005
+3. **Win rate gate**: Block pair+direction combos with <40% historical win rate in the backtest
+4. **Stability gate**: Reject pairs that failed `scan_pair()` on >5 of the last 10 trading days — sign of regime instability
+5. **No manual overrides**: Claude MUST NOT place trades by calling Alpaca directly or assembling orders outside the pipeline. If the pipeline rejects a trade, the trade doesn't happen
+6. **Single positions file**: `trading/live_positions.json` is the source of truth. Only `live_pipeline.py` writes to it
+
+### What this prevents
+
+| Past failure | Gate that blocks it |
+|---|---|
+| PNC/USB traded but never backtested | Portfolio gate — PNC/USB not in pair_portfolio.json |
+| HD/LOW entered during unstable regime | Stability gate — rejected 12 of 15 prior days |
+| PNC/USB SHORT had 20% win rate | Win rate gate — below 40% threshold |
+| Ad-hoc pair selection bypassing quality checks | No manual overrides rule |
+
 ## Build commands
 
 - Build engine: `cd engine && maturin develop --release`

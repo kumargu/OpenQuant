@@ -118,8 +118,8 @@ def is_near_earnings(symbol, day_idx, total_bars, earnings_cal, blackout=EARNING
     # starting from ~14 months ago. Day 0 ≈ 2025-01-02, Day 358 ≈ 2026-03-24
     # 359 bars over ~14.5 months. Approximate: day_idx / 252 years from start.
     from datetime import datetime, timedelta
-    # End date is approximately today (2026-03-24), bar 0 is ~359 trading days before
-    end_date = datetime(2026, 3, 24)
+    # End date is approximately today, bar 0 is ~total_bars trading days before
+    end_date = datetime.now()
     # Trading days ≈ calendar days * 252/365
     cal_days_back = int(total_bars * 365 / 252)
     start_date = end_date - timedelta(days=cal_days_back)
