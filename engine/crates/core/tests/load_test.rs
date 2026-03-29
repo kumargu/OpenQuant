@@ -12,7 +12,7 @@
 use std::time::{Duration, Instant};
 
 use openquant_core::backtest;
-use openquant_core::engine::{Engine, EngineConfig};
+use openquant_core::engine::{SingleEngine as Engine, SingleEngineConfig as EngineConfig};
 use openquant_core::market_data::Bar;
 
 // ---------------------------------------------------------------------------
