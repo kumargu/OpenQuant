@@ -14,7 +14,8 @@ use tracing::{debug, error, info, warn};
 const ALPACA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
 
 /// Alpaca reports bar OPEN time in the `t` field (both REST and WebSocket).
-/// The engine expects bar CLOSE time. Add 60s for 1Min bars.
+/// Add 60s so the timestamp reflects when the bar data is finalized.
+/// This matters for force_close_minute: a 15:29 bar completes at 15:30.
 const MINUTE_BAR_DURATION_MS: i64 = 60_000;
 
 /// A bar received from the Alpaca stream.

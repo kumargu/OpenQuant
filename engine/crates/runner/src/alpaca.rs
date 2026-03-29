@@ -151,6 +151,8 @@ impl AlpacaClient {
         start: &str, // "2026-03-01"
         end: &str,   // "2026-03-28"
     ) -> Result<Vec<(String, i64, f64)>, String> {
+        // Alpaca reports bar OPEN time. Add 60s so timestamp = bar completion time.
+        // Matches the same adjustment in stream.rs for WebSocket bars.
         const MINUTE_BAR_DURATION_MS: i64 = 60_000;
         let mut all_bars = Vec::new();
 
