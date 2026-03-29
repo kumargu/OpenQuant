@@ -37,11 +37,12 @@ pub const MIN_HISTORY_BARS: usize = 90;
 /// current regime rather than averaging across historical regime changes.
 pub const MAX_VALIDATION_WINDOW: usize = 150;
 
-/// Minimum R² for the hedge ratio OLS — loose pre-filter.
+/// Minimum R² for the hedge ratio regression — loose pre-filter.
 /// R² measures co-movement, not cointegration — ADF is the proper cointegration gate.
-/// Python entry gate (pairs_core.MIN_R2_ENTRY=0.70) applies the tighter threshold.
-/// Lowered from 0.70 to 0.40 per research issue #202.
-pub const MIN_R_SQUARED: f64 = 0.40;
+/// Set to 0.30 per #178 spec: excludes pairs with essentially no linear relationship
+/// (e.g., NVDA/AMD at R²=0.21) while remaining below the strict production threshold.
+/// Lowered from 0.40 to 0.30 per issue #180.
+pub const MIN_R_SQUARED: f64 = 0.30;
 
 /// Price data for a single symbol: ordered daily close prices.
 pub type PriceData = Vec<f64>;
