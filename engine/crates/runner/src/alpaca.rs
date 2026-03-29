@@ -124,10 +124,15 @@ impl AlpacaClient {
                 .await
                 .map_err(|e| format!("JSON parse failed: {e}"))?;
 
+            // Alpaca daily bars have timestamp at bar OPEN (09:30 ET).
+            // Adjust to market close (16:00 ET = +6h30m) so the engine's
+            // is_daily_close check (et_minutes >= 950) recognizes them.
+            const OPEN_TO_CLOSE_MS: i64 = 6 * 3600 * 1000 + 30 * 60 * 1000; // 6h30m
             for (symbol, bars) in &data.bars {
                 for bar in bars {
                     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
-                        all_bars.push((symbol.clone(), dt.timestamp_millis(), bar.c));
+                        let close_ts = dt.timestamp_millis() + OPEN_TO_CLOSE_MS;
+                        all_bars.push((symbol.clone(), close_ts, bar.c));
                     }
                 }
             }

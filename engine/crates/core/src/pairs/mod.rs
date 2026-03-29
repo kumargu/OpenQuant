@@ -380,11 +380,9 @@ impl PairState {
         // Risk clock (every bar): check stop loss via frozen ExitContext.
         //
         // Daily close = bar with ET time >= 15:50 (last 10 minutes of session).
-        // During warmup (daily bars from fetch_daily_bars), timestamps are midnight —
-        // treat as daily close (hour 0 < 4, which is outside market hours, so we use
-        // the bar_count-based warmup detection below).
-        let is_daily_close = et_minutes >= 950 // 15:50 ET
-            || et_hour < 4; // pre-market = warmup daily bars (always treat as close)
+        // Warmup daily bars are adjusted to 16:00 ET by the runner, so they also
+        // satisfy this check.
+        let is_daily_close = et_minutes >= 950; // 15:50 ET
 
         if is_daily_close {
             self.spread_stats.push(spread);

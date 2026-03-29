@@ -29,6 +29,11 @@ fn test_pair() -> PairConfig {
 }
 
 /// Feed neutral bars with tiny jitter to build spread history.
+/// 15:55 UTC in millis from epoch. With tz_offset=0: et_minutes=955 >= 950 → daily close.
+const DAILY_CLOSE_TS: i64 = 57_300_000;
+/// 1 day in ms — bars step by 1 day to stay at the same time of day.
+const DAY_MS: i64 = 86_400_000;
+
 fn warmup(
     state: &mut PairState,
     config: &PairConfig,
@@ -40,7 +45,7 @@ fn warmup(
         let jitter = 0.001 * ((i as f64 * 0.7).sin());
         state.on_price(&config.leg_a, 100.0 * (1.0 + jitter), config, trading, *ts);
         state.on_price(&config.leg_b, 100.0, config, trading, *ts);
-        *ts += 60_000;
+        *ts += DAY_MS;
     }
 }
 
@@ -81,8 +86,8 @@ timezone_offset_hours = 0
 "#,
     );
 
-    let mut ts1: i64 = 1_000_000;
-    let mut ts2: i64 = 1_000_000;
+    let mut ts1: i64 = DAILY_CLOSE_TS;
+    let mut ts2: i64 = DAILY_CLOSE_TS;
     let mut state_enters = PairState::new();
     let mut state_blocks = PairState::new();
 
@@ -132,7 +137,7 @@ timezone_offset_hours = 0
     );
 
     let mut state = PairState::new();
-    let mut ts: i64 = 1_000_000;
+    let mut ts: i64 = DAILY_CLOSE_TS;
     warmup(&mut state, &config, &trading, &mut ts, 35);
 
     // Entry
@@ -140,7 +145,7 @@ timezone_offset_hours = 0
     let entry = state.on_price("B", 100.0, &config, &trading, ts);
     assert!(!entry.is_empty(), "should enter");
     assert_eq!(state.position(), PairPosition::LongSpread);
-    ts += 60_000;
+    ts += DAY_MS;
 
     // Immediate reversion on bar 1 — should NOT exit (min_hold_bars=5)
     state.on_price("A", 100.0, &config, &trading, ts);
@@ -150,13 +155,13 @@ timezone_offset_hours = 0
         "min_hold_bars=5 should block exit at bar 1"
     );
     assert_eq!(state.position(), PairPosition::LongSpread);
-    ts += 60_000;
+    ts += DAY_MS;
 
     // Feed a few more bars (bars 2-4) with A still reverted
     for _ in 0..3 {
         state.on_price("A", 100.0, &config, &trading, ts);
         state.on_price("B", 100.0, &config, &trading, ts);
-        ts += 60_000;
+        ts += DAY_MS;
     }
 
     // Bar 5 (past min_hold_bars) — reversion should now exit
@@ -193,7 +198,7 @@ timezone_offset_hours = 0
     );
 
     let mut state = PairState::new();
-    let mut ts: i64 = 1_000_000;
+    let mut ts: i64 = DAILY_CLOSE_TS;
     warmup(&mut state, &config, &trading, &mut ts, 35);
 
     // Entry at A=90, B=100
@@ -297,7 +302,7 @@ timezone_offset_hours = -5
 
     let mut state = PairState::new();
 
-    // Warmup with daily-close timestamps (midnight UTC → ET < 4 → daily close)
+    // Warmup: midnight UTC = 19:00 EST → et_minutes=1140 >= 950 → daily close
     let base_utc = 1_768_435_200_000_i64;
     let mut ts = base_utc;
 
@@ -385,7 +390,7 @@ tz_offset_hours = 0
     // Build a PairState and verify it uses these values
     let config = test_pair();
     let mut state = PairState::new();
-    let mut ts: i64 = 1_000_000;
+    let mut ts: i64 = DAILY_CLOSE_TS;
     warmup(&mut state, &config, &ptc, &mut ts, 35);
 
     // Entry at A=90, B=100

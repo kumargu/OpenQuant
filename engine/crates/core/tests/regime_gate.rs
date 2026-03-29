@@ -49,9 +49,13 @@ fn easy_trading() -> PairsTradingConfig {
 /// far beyond any reasonable stop-loss threshold — triggering a stop on the very
 /// first hold bar. Realistic oscillation gives entry_std ≈ 0.05, so entry at A=90
 /// produces exit_z ≈ -2, within the normal [-stop_z, -entry_z] operating range.
-/// Increment between bars in tests. Use daily intervals so every bar is a
-/// daily close (midnight UTC → ET hour < 4 → is_daily_close = true).
+/// Increment between bars in tests. Use daily intervals so each bar lands
+/// at the same time of day (daily close window).
 const BAR_STEP: i64 = 86_400_000; // 1 day in ms
+
+/// Base timestamp: 15:55 UTC on day 1. With tz_offset=0, et_minutes=955 >= 950
+/// → is_daily_close = true. Each BAR_STEP adds 1 day, keeping the same time.
+const BASE_TS: i64 = 57_300_000; // 15:55:00 UTC in millis from epoch
 
 fn feed_neutral(
     state: &mut PairState,
@@ -171,7 +175,7 @@ fn regime_gate_pauses_after_five_losers() {
     let config = test_config();
     let trading = easy_trading();
     let mut state = PairState::new();
-    let mut ts: i64 = 1_000_000;
+    let mut ts: i64 = BASE_TS;
 
     // Execute 5 losing trades (re-centering between each)
     for i in 0..5 {
@@ -203,7 +207,7 @@ fn regime_gate_resumes_after_cooldown() {
     let config = test_config();
     let trading = easy_trading();
     let mut state = PairState::new();
-    let mut ts: i64 = 1_000_000;
+    let mut ts: i64 = BASE_TS;
 
     // Trigger regime gate with 5 losers
     for _ in 0..5 {
@@ -235,7 +239,7 @@ fn regime_gate_repauses_after_resume() {
     let config = test_config();
     let trading = easy_trading();
     let mut state = PairState::new();
-    let mut ts: i64 = 1_000_000;
+    let mut ts: i64 = BASE_TS;
 
     // Trigger first pause
     for _ in 0..5 {
@@ -275,7 +279,7 @@ fn regime_gate_pauses_after_three_stop_losses() {
     let config = test_config();
     let trading = easy_trading();
     let mut state = PairState::new();
-    let mut ts: i64 = 1_000_000;
+    let mut ts: i64 = BASE_TS;
 
     // Execute 3 stop-loss trades
     for i in 0..3 {
@@ -311,7 +315,7 @@ fn regime_gate_is_per_pair() {
 
     let mut state_ab = PairState::new();
     let mut state_cd = PairState::new();
-    let mut ts: i64 = 1_000_000;
+    let mut ts: i64 = BASE_TS;
 
     // Pause A/B with 5 losers
     for _ in 0..5 {
