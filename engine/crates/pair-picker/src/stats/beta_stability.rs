@@ -4,7 +4,7 @@
 //! 1. **Rolling window**: compute beta over rolling 60-day windows, check std/mean < 0.20
 //! 2. **Structural break detection**: max mean-shift test on rolling betas
 
-use super::ols::ols_simple;
+use super::ols::tls_simple;
 
 /// Result of beta stability analysis.
 #[derive(Debug, Clone)]
@@ -54,8 +54,8 @@ pub fn check_beta_stability(
         return None;
     }
 
-    // Full-sample beta
-    let full_ols = ols_simple(log_prices_b, log_prices_a)?;
+    // Full-sample beta (TLS for symmetric hedge ratio)
+    let full_ols = tls_simple(log_prices_b, log_prices_a)?;
     let beta = full_ols.beta;
 
     // Rolling betas
@@ -66,7 +66,7 @@ pub fn check_beta_stability(
         let end = start + ROLLING_WINDOW;
         let x = &log_prices_b[start..end];
         let y = &log_prices_a[start..end];
-        if let Some(result) = ols_simple(x, y) {
+        if let Some(result) = tls_simple(x, y) {
             rolling_betas.push(result.beta);
         }
     }
