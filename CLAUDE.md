@@ -157,11 +157,10 @@ The PNC/USB (-$580) and HD/LOW losses came from bypassing the systematic pipelin
 The Rust binary is the trading engine. Python feeds it bars and executes orders.
 
 ```bash
-# Live trading (stdin/stdout protocol):
-python3 bar_feeder.py | openquant-runner live --engine pairs | python3 order_executor.py
-
-# Walk-forward evaluation:
-openquant-runner walk-forward --engine pairs
+# Live trading:
+openquant-runner live --engine pairs                     # paper trading (default)
+openquant-runner live --engine pairs --execution noop    # dry run (log only)
+openquant-runner live --engine pairs --execution live    # real money
 ```
 
 The Rust engine handles: z-score computation, entry/exit decisions, frozen exit context, regime gate, stop loss, max hold, per-pair HL-adaptive hold limits, priority scoring. All decisions are logged via `tracing` to `data/journal/engine.log`.

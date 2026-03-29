@@ -4,10 +4,28 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 const DATA_URL: &str = "https://data.alpaca.markets/v2/stocks/bars";
-const TRADING_URL: &str = "https://paper-api.alpaca.markets/v2";
+
+/// Alpaca execution mode — controls the trading API endpoint.
+/// Replay mode never calls place_order, so it doesn't need a variant here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExecutionMode {
+    /// paper-api.alpaca.markets
+    Paper,
+    /// api.alpaca.markets (real money)
+    Live,
+}
+
+impl ExecutionMode {
+    fn trading_url(self) -> &'static str {
+        match self {
+            Self::Paper => "https://paper-api.alpaca.markets/v2",
+            Self::Live => "https://api.alpaca.markets/v2",
+        }
+    }
+}
 
 /// Alpaca API credentials.
 #[derive(Clone)]
@@ -35,16 +53,6 @@ pub struct AlpacaBarsResponse {
     pub bars: HashMap<String, Vec<AlpacaBar>>,
     #[serde(default)]
     pub next_page_token: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct AlpacaPosition {
-    pub symbol: String,
-    pub qty: String,
-    pub current_price: String,
-    pub unrealized_pl: String,
-    pub side: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,13 +142,97 @@ impl AlpacaClient {
         Ok(all_bars)
     }
 
-    /// Place a market order. Returns order ID.
+    /// Fetch minute bars for a date range. Paginates automatically.
+    /// Returns (symbol, timestamp_ms, close) sorted by (timestamp, symbol).
+    /// Timestamp is adjusted to bar CLOSE time (Alpaca REST returns bar open time).
+    pub async fn fetch_minute_bars(
+        &self,
+        symbols: &[String],
+        start: &str, // "2026-03-01"
+        end: &str,   // "2026-03-28"
+    ) -> Result<Vec<(String, i64, f64)>, String> {
+        const MINUTE_BAR_DURATION_MS: i64 = 60_000;
+        let mut all_bars = Vec::new();
+
+        for chunk in symbols.chunks(50) {
+            let symbols_param = chunk.join(",");
+            let mut page_token: Option<String> = None;
+
+            loop {
+                let mut query = vec![
+                    ("symbols".to_string(), symbols_param.clone()),
+                    ("timeframe".to_string(), "1Min".to_string()),
+                    ("start".to_string(), start.to_string()),
+                    ("end".to_string(), end.to_string()),
+                    ("limit".to_string(), "10000".to_string()),
+                    ("feed".to_string(), "iex".to_string()),
+                ];
+                if let Some(ref token) = page_token {
+                    query.push(("page_token".to_string(), token.clone()));
+                }
+
+                let response = self
+                    .http
+                    .get(DATA_URL)
+                    .header("APCA-API-KEY-ID", &self.api_key)
+                    .header("APCA-API-SECRET-KEY", &self.api_secret)
+                    .query(&query)
+                    .send()
+                    .await
+                    .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    return Err(format!("Alpaca data API error {status}: {body}"));
+                }
+
+                let data: AlpacaBarsResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| format!("JSON parse failed: {e}"))?;
+
+                for (symbol, bars) in &data.bars {
+                    for bar in bars {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
+                            // Add timeframe duration: REST returns bar OPEN time,
+                            // but live WebSocket emits after bar CLOSE. The engine
+                            // expects close-time semantics.
+                            let close_ts = dt.timestamp_millis() + MINUTE_BAR_DURATION_MS;
+                            all_bars.push((symbol.clone(), close_ts, bar.c));
+                        }
+                    }
+                }
+
+                match data.next_page_token {
+                    Some(token) if !token.is_empty() => {
+                        page_token = Some(token);
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        all_bars.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        info!(
+            symbols = symbols.len(),
+            bars = all_bars.len(),
+            start,
+            end,
+            "fetched minute bars for replay"
+        );
+        Ok(all_bars)
+    }
+
+    /// Place a market order. URL determined by execution mode.
     pub async fn place_order(
         &self,
         symbol: &str,
         qty: f64,
-        side: &str, // "buy" or "sell"
+        side: &str,
+        execution: ExecutionMode,
     ) -> Result<AlpacaOrder, String> {
+        let url = format!("{}/orders", execution.trading_url());
         let body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -149,11 +241,11 @@ impl AlpacaClient {
             "time_in_force": "day",
         });
 
-        info!(symbol, qty, side, "placing order");
+        info!(symbol, qty, side, ?execution, "placing order");
 
         let response = self
             .http
-            .post(format!("{TRADING_URL}/orders"))
+            .post(&url)
             .header("APCA-API-KEY-ID", &self.api_key)
             .header("APCA-API-SECRET-KEY", &self.api_secret)
             .json(&body)
@@ -181,52 +273,6 @@ impl AlpacaClient {
             "order placed"
         );
         Ok(order)
-    }
-
-    /// Get all open positions.
-    #[allow(dead_code)]
-    pub async fn get_positions(&self) -> Result<Vec<AlpacaPosition>, String> {
-        let response = self
-            .http
-            .get(format!("{TRADING_URL}/positions"))
-            .header("APCA-API-KEY-ID", &self.api_key)
-            .header("APCA-API-SECRET-KEY", &self.api_secret)
-            .send()
-            .await
-            .map_err(|e| format!("positions request failed: {e}"))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("positions API error {status}: {body}"));
-        }
-
-        response
-            .json()
-            .await
-            .map_err(|e| format!("positions parse failed: {e}"))
-    }
-
-    /// Close a position by symbol.
-    #[allow(dead_code)]
-    pub async fn close_position(&self, symbol: &str) -> Result<(), String> {
-        info!(symbol, "closing position");
-        let response = self
-            .http
-            .delete(format!("{TRADING_URL}/positions/{symbol}"))
-            .header("APCA-API-KEY-ID", &self.api_key)
-            .header("APCA-API-SECRET-KEY", &self.api_secret)
-            .send()
-            .await
-            .map_err(|e| format!("close request failed: {e}"))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!(symbol, %status, "close position failed");
-            return Err(format!("close failed {status}: {body}"));
-        }
-        Ok(())
     }
 }
 

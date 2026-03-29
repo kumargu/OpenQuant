@@ -24,10 +24,8 @@ pub mod lockfile;
 pub mod pipeline;
 pub mod regime;
 pub mod scorer;
-pub mod sensitivity;
 pub mod stats;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_utils;
 pub mod thompson;
 pub mod types;
-pub mod walk_forward;
