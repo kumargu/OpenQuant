@@ -49,6 +49,37 @@ struct Cli {
 enum Command {
     /// Live — connect to Alpaca, stream bars, execute intents.
     Live(RunArgs),
+    /// Replay — fetch historical minute bars from Alpaca and feed them through
+    /// the exact same engine code path as live mode. No orders placed (noop).
+    /// The engine doesn't know it's replaying history.
+    Replay(ReplayArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct ReplayArgs {
+    /// Which engine to run.
+    #[arg(long, value_enum, default_value = "pairs")]
+    engine: EngineMode,
+
+    /// Path to TOML config file.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Directory containing active_pairs.json.
+    #[arg(long, default_value = "trading")]
+    trading_dir: PathBuf,
+
+    /// Data directory for logs.
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+
+    /// Replay start date (YYYY-MM-DD).
+    #[arg(long)]
+    start: String,
+
+    /// Replay end date (YYYY-MM-DD).
+    #[arg(long)]
+    end: String,
 }
 
 /// Which engine to run — CLI flag picks the engine AND its config.
@@ -118,13 +149,16 @@ struct RunArgs {
 async fn main() {
     let cli = Cli::parse();
 
-    // Resolve args from CLI
-    let Command::Live(args) = &cli.command;
+    // Resolve args from CLI (for tracing init we need data_dir)
+    let data_dir = match &cli.command {
+        Command::Live(a) => &a.data_dir,
+        Command::Replay(a) => &a.data_dir,
+    };
 
     // ── Initialize tracing ONCE — stderr + data/journal/engine.log ──
     // All tracing from Rust (PairsEngine, SingleEngine, pair-picker, runner)
     // flows here. This is the single source of logs for the entire process.
-    let journal_dir = args.data_dir.join("journal");
+    let journal_dir = data_dir.join("journal");
     std::fs::create_dir_all(&journal_dir).ok();
     let log_file = std::fs::OpenOptions::new()
         .create(true)
@@ -143,8 +177,10 @@ async fn main() {
         .init();
 
     // ── Dispatch ──
-    let Command::Live(args) = cli.command;
-    run_live(args).await;
+    match cli.command {
+        Command::Live(args) => run_live(args).await,
+        Command::Replay(args) => run_replay(args).await,
+    }
 }
 
 /// Live trading mode — async event loop with Alpaca WebSocket.
@@ -337,6 +373,170 @@ async fn run_live(args: RunArgs) {
             }
         }
     }
+}
+
+/// Replay mode — fetch historical minute bars from Alpaca, feed through the
+/// exact same engine code path as live. The engine doesn't know it's replaying.
+/// Always noop execution — no orders placed.
+async fn run_replay(args: ReplayArgs) {
+    let mode = args.engine;
+    let config_path = args
+        .config
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(mode.default_config()));
+
+    info!(
+        ?mode,
+        config = %config_path.display(),
+        start = args.start.as_str(),
+        end = args.end.as_str(),
+        "========== OPENQUANT REPLAY MODE =========="
+    );
+    info!("execution mode: NOOP (replay — no orders placed)");
+
+    // Load Alpaca client (for data API only — no orders)
+    let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Load config — same as live
+    let cfg_file = match ConfigFile::load(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("failed to load config: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let trading_dir = if args.trading_dir.exists() {
+        args.trading_dir.clone()
+    } else {
+        args.data_dir.clone()
+    };
+
+    // Initialize pairs engine — same as live
+    let mut pairs_engine = if mode.run_pairs() {
+        let mut ptc = cfg_file.pairs_trading.clone();
+        ptc.tz_offset_hours = cfg_file.data.timezone_offset_hours;
+
+        let active_pairs_path = trading_dir.join("active_pairs.json");
+        let history_path = trading_dir.join("pair_trading_history.json");
+
+        if active_pairs_path.exists() {
+            info!(path = %active_pairs_path.display(), "loading active pairs");
+            Some(PairsEngine::from_active_pairs(
+                &active_pairs_path,
+                &history_path,
+                vec![],
+                ptc,
+            ))
+        } else {
+            error!("no active_pairs.json found");
+            std::process::exit(1);
+        }
+    } else {
+        None
+    };
+
+    // Collect symbols — same as live
+    let symbols: Vec<String> = if let Some(ref pe) = pairs_engine {
+        pe.positions()
+            .iter()
+            .flat_map(|(cfg, _)| vec![cfg.leg_a.clone(), cfg.leg_b.clone()])
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect()
+    } else {
+        vec![]
+    };
+
+    info!(
+        pairs = pairs_engine.as_ref().map_or(0, |e| e.pair_count()),
+        symbols = symbols.len(),
+        "replay engine ready"
+    );
+
+    // ── Warmup: fetch daily bars before replay start (same as live) ──
+    let lookback = cfg_file.pairs_trading.lookback + 10;
+    info!(lookback, "fetching daily bars for warmup");
+
+    match alpaca.fetch_daily_bars(&symbols, lookback + 5).await {
+        Ok(bars) => {
+            info!(bars = bars.len(), "warmup: feeding historical daily bars");
+            for (symbol, timestamp, close) in &bars {
+                if let Some(ref mut pe) = pairs_engine {
+                    let _intents = pe.on_bar(symbol, *timestamp, *close);
+                    // Warmup intents are discarded — same as live
+                }
+            }
+            info!("warmup complete — flattening phantom positions");
+            if let Some(ref mut pe) = pairs_engine {
+                pe.flatten_all();
+            }
+        }
+        Err(e) => {
+            error!("warmup fetch failed: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    // ── Fetch minute bars for replay period ──
+    info!(
+        start = args.start.as_str(),
+        end = args.end.as_str(),
+        "fetching minute bars for replay"
+    );
+
+    let bars = match alpaca
+        .fetch_minute_bars(&symbols, &args.start, &args.end)
+        .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            error!("minute bar fetch failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if bars.is_empty() {
+        error!("no bars fetched — nothing to replay");
+        std::process::exit(1);
+    }
+
+    // ── Replay: feed bars through engine — same on_bar() as live ──
+    info!(bars = bars.len(), "starting replay");
+    let mut intent_count: usize = 0;
+
+    for (symbol, timestamp, close) in &bars {
+        if let Some(ref mut pe) = pairs_engine {
+            let intents = pe.on_bar(symbol, *timestamp, *close);
+
+            for intent in &intents {
+                let side = format!("{:?}", intent.side).to_lowercase();
+                info!(
+                    symbol = intent.symbol.as_str(),
+                    side = side.as_str(),
+                    qty = intent.qty,
+                    pair_id = intent.pair_id.as_str(),
+                    z = %format_args!("{:.2}", intent.z_score),
+                    priority = %format_args!("{:.1}", intent.priority_score),
+                    reason = ?intent.reason,
+                    "INTENT"
+                );
+                intent_count += 1;
+            }
+        }
+    }
+
+    info!(
+        bars = bars.len(),
+        intents = intent_count,
+        "========== OPENQUANT REPLAY END =========="
+    );
 }
 
 /// Writer that tees output to both stderr and a file.

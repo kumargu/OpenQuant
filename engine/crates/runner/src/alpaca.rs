@@ -144,6 +144,88 @@ impl AlpacaClient {
         Ok(all_bars)
     }
 
+    /// Fetch minute bars for a date range. Paginates automatically.
+    /// Returns (symbol, timestamp_ms, close) sorted by (timestamp, symbol).
+    /// Timestamp is adjusted to bar CLOSE time (Alpaca REST returns bar open time).
+    pub async fn fetch_minute_bars(
+        &self,
+        symbols: &[String],
+        start: &str, // "2026-03-01"
+        end: &str,   // "2026-03-28"
+    ) -> Result<Vec<(String, i64, f64)>, String> {
+        let mut all_bars = Vec::new();
+        let timeframe_offset_ms: i64 = 60_000; // 1 minute bar → close = open + 60s
+
+        for chunk in symbols.chunks(50) {
+            let symbols_param = chunk.join(",");
+            let mut page_token: Option<String> = None;
+
+            loop {
+                let mut query = vec![
+                    ("symbols".to_string(), symbols_param.clone()),
+                    ("timeframe".to_string(), "1Min".to_string()),
+                    ("start".to_string(), start.to_string()),
+                    ("end".to_string(), end.to_string()),
+                    ("limit".to_string(), "10000".to_string()),
+                    ("feed".to_string(), "iex".to_string()),
+                ];
+                if let Some(ref token) = page_token {
+                    query.push(("page_token".to_string(), token.clone()));
+                }
+
+                let response = self
+                    .http
+                    .get(DATA_URL)
+                    .header("APCA-API-KEY-ID", &self.api_key)
+                    .header("APCA-API-SECRET-KEY", &self.api_secret)
+                    .query(&query)
+                    .send()
+                    .await
+                    .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    return Err(format!("Alpaca data API error {status}: {body}"));
+                }
+
+                let data: AlpacaBarsResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| format!("JSON parse failed: {e}"))?;
+
+                for (symbol, bars) in &data.bars {
+                    for bar in bars {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
+                            // Add timeframe duration: REST returns bar OPEN time,
+                            // but live WebSocket emits after bar CLOSE. The engine
+                            // expects close-time semantics.
+                            let close_ts = dt.timestamp_millis() + timeframe_offset_ms;
+                            all_bars.push((symbol.clone(), close_ts, bar.c));
+                        }
+                    }
+                }
+
+                match data.next_page_token {
+                    Some(token) if !token.is_empty() => {
+                        page_token = Some(token);
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        all_bars.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        info!(
+            symbols = symbols.len(),
+            bars = all_bars.len(),
+            start,
+            end,
+            "fetched minute bars for replay"
+        );
+        Ok(all_bars)
+    }
+
     /// Place a market order. URL determined by execution mode.
     pub async fn place_order(
         &self,
