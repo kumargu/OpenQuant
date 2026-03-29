@@ -1,19 +1,16 @@
 # OpenQuant Configuration
 #
-# Central config for all tunable engine parameters. Tweak values here
-# instead of changing code — much faster for experimentation.
+# The runner reads [pairs_trading] and [data] sections.
+# Other sections (signal, momentum, combiner, etc.) are for the single-symbol
+# engine which is not currently wired into the runner. They must remain because
+# ConfigFile expects them — they'll be cleaned up when single-symbol is removed
+# from openquant-core.
 #
-# Precedence (highest wins):
-#   1. CLI flags / Python kwargs
-#   2. This TOML file
-#   3. Rust-side defaults (compiled into the binary)
+# Usage:
+#   openquant-runner live                                # paper trading
+#   openquant-runner paper                               # same as live
+#   openquant-runner replay --start 2026-03-01 --end 2026-03-28
 
-# ---------------------------------------------------------------------------
-# Trading mode — which engines to run
-# ---------------------------------------------------------------------------
-# "pairs" = pairs engine only (GLD/SLV, GS/MS, etc.)
-# "single" = single-symbol engine only (mean-reversion, momentum, etc.)
-# "both" = run both engines (mixed P&L, harder to attribute)
 mode = "pairs"
 
 
@@ -478,59 +475,29 @@ asset_class = "disabled"
 
 
 # ---------------------------------------------------------------------------
-# Pairs Trading — market-neutral spread reversion
+# Pairs Trading — the only section the runner uses
 # ---------------------------------------------------------------------------
-# Pairs are sourced from data/active_pairs.json (produced by pair-picker).
-# No hardcoded pairs in this file — pair-picker handles discovery, validation,
-# and beta estimation. See: cargo run -p pair-picker -- --help
+# Pairs sourced from trading/active_pairs.json (produced by pair-picker).
+# Per-pair identity (legs, beta, half-life) comes from that file.
+# These are shared trading parameters.
 #
-# Trading parameters shared by all pairs. Per-pair identity (legs, alpha, beta)
-# comes from active_pairs.json; these control entry/exit thresholds and sizing.
+# Tuned for DAILY bars.
 
 [pairs_trading]
 
-# ── DAILY BAR configuration ──
-# These values are tuned for DAILY bars (1 bar per day per symbol).
-# For intraday (1-min bars), see the git history for old values.
+entry_z = 1.0           # Enter when |z| > entry_z
+exit_z = 0.2            # Exit when |z| < exit_z (spread reverted)
+stop_z = 4.0            # Stop loss when |z| > stop_z
 
-# Z-score threshold to enter a position. Entry when |z| > entry_z.
-entry_z = 1.0
-
-# Z-score threshold to exit (spread reverted). Exit when |z| < exit_z.
-exit_z = 0.2
-
-# Z-score threshold for stop loss (spread diverged further). Exit when |z| > stop_z.
-stop_z = 4.0
-
-# Default rolling window size for spread z-score computation.
-# Per-pair windows are derived from half-life: min(2 × ceil(HL), 60).
-# This value is the fallback when a pair has no half-life data.
+# Default lookback for spread z-score. Per-pair windows from half-life
+# take precedence: min(2 × ceil(HL), 60). This is the fallback.
 lookback = 30
 
-# Maximum bars (days) to hold before forced exit.
-# 10 days = 2 weeks. Pair-picker computes per-pair max_hold_days from HL
-# (typically ceil(2.5 * HL) capped at 10), but the engine currently uses
-# this global value. Per-pair override from active_pairs.json is wired (max_hold_days → PairConfig.max_hold_bars).
-max_hold_bars = 10
+max_hold_bars = 10      # Max days to hold. Per-pair override from active_pairs.json.
+min_hold_bars = 1       # Min days before reversion exit. Stop loss always fires.
+notional_per_leg = 1000.0  # $1000/leg × ~5 pairs ≤ $10K capital
 
-# Minimum bars (days) to hold before reversion exit. Stop loss still fires.
-# 1 day = allow next-day exit if spread reverts overnight.
-min_hold_bars = 1
-
-# Dollar notional per leg. Total exposure per trade = 2 x notional_per_leg.
-# With $10K capital and ~5 concurrent pairs, $1000/leg keeps total < $10K.
-notional_per_leg = 1000.0
-
-# Last hour (ET) to allow new entries.
-# 23 = effectively disabled for daily bars (daily close arrives at 16:00 ET).
-last_entry_hour = 23
-
-# Force close all positions at this time (ET minutes since midnight).
-# 1440 = effectively disabled (no minute-of-day reaches 1440).
-# Daily bars hold overnight by design — exits are z-score or max_hold driven.
-force_close_minute = 1440
-
-# Timezone offset from UTC in hours. Must match [data].timezone_offset_hours.
-# -4 = EDT (March-November), -5 = EST (November-March).
-# TODO: Replace with timezone name for automatic DST handling.
-tz_offset_hours = -4
+last_entry_hour = 23    # Effectively disabled for daily bars
+force_close_minute = 1440  # Disabled — exits are z-score or max_hold driven
+tz_offset_hours = -4    # EDT. Must match [data].timezone_offset_hours.
+cost_bps = 10.0         # Round-trip cost in bps (used by regime gate P&L)
