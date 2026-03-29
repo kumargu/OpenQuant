@@ -55,9 +55,13 @@ const MAX_STALENESS_HOURS: i64 = 48;
 
 /// Load active pairs from JSON file and convert to PairConfigs.
 ///
-/// Returns `None` if file is missing, unparseable, or stale (>48h old).
-/// The caller should fall back to last known good pairs in that case.
-pub fn load_active_pairs(path: &Path) -> Option<(ActivePairsFile, Vec<PairConfig>)> {
+/// Returns `None` if file is missing or unparseable. If `skip_staleness` is false,
+/// also returns `None` when the file is >48h old (live trading safety).
+/// Replay mode passes `skip_staleness = true`.
+pub fn load_active_pairs(
+    path: &Path,
+    skip_staleness: bool,
+) -> Option<(ActivePairsFile, Vec<PairConfig>)> {
     let contents = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
@@ -74,16 +78,18 @@ pub fn load_active_pairs(path: &Path) -> Option<(ActivePairsFile, Vec<PairConfig
         }
     };
 
-    // Check staleness
-    let age = Utc::now().signed_duration_since(file.generated_at);
-    if age.num_hours() > MAX_STALENESS_HOURS {
-        warn!(
-            age_hours = age.num_hours(),
-            generated_at = %file.generated_at,
-            "active_pairs.json is stale (>{}h) — using fallback",
-            MAX_STALENESS_HOURS
-        );
-        return None;
+    // Check staleness (skipped in replay mode)
+    if !skip_staleness {
+        let age = Utc::now().signed_duration_since(file.generated_at);
+        if age.num_hours() > MAX_STALENESS_HOURS {
+            warn!(
+                age_hours = age.num_hours(),
+                generated_at = %file.generated_at,
+                "active_pairs.json is stale (>{}h) — using fallback",
+                MAX_STALENESS_HOURS
+            );
+            return None;
+        }
     }
 
     let configs: Vec<PairConfig> = file

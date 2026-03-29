@@ -599,7 +599,10 @@ impl PairState {
                 return intents;
             }
 
-            // Log holding status — info on daily close (once/day), debug on intraday
+            // Log holding status:
+            // - Daily close: full HOLDING log with z-scores, days_held
+            // - Every 30 bars (~30 min): intraday risk snapshot showing exit_z
+            //   approach toward stop threshold (important for debugging)
             if is_daily_close {
                 info!(
                     pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
@@ -609,8 +612,22 @@ impl PairState {
                     effective_max_hold,
                     price_a = %format_args!("{price_a:.2}"),
                     price_b = %format_args!("{price_b:.2}"),
+                    spread = %format_args!("{spread:.6}"),
                     pos = ?self.position,
                     "pairs: HOLDING"
+                );
+            } else if self.bar_count % 10 == 0 {
+                // Intraday risk snapshot every ~10 minutes
+                info!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    frozen_exit_z = %format_args!("{exit_z:.2}"),
+                    stop_z = %format_args!("{effective_stop_z:.2}"),
+                    exit_threshold = %format_args!("{effective_exit_z:.2}"),
+                    spread = %format_args!("{spread:.6}"),
+                    price_a = %format_args!("{price_a:.2}"),
+                    price_b = %format_args!("{price_b:.2}"),
+                    pos = ?self.position,
+                    "pairs: RISK CHECK"
                 );
             }
             return vec![];

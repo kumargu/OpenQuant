@@ -76,6 +76,7 @@ impl PairsEngine {
         history_path: &Path,
         fallback_configs: Vec<PairConfig>,
         trading_config: PairsTradingConfig,
+        skip_staleness: bool,
     ) -> Self {
         let trade_history = PairTradingHistory::load(history_path);
         info!(
@@ -83,7 +84,7 @@ impl PairsEngine {
             "Loaded trading history"
         );
 
-        let configs = match load_active_pairs(active_pairs_path) {
+        let configs = match load_active_pairs(active_pairs_path, skip_staleness) {
             Some((_file, configs)) => configs,
             None => {
                 warn!(
@@ -132,7 +133,7 @@ impl PairsEngine {
             None => return false,
         };
 
-        let (_file, new_configs) = match load_active_pairs(&path) {
+        let (_file, new_configs) = match load_active_pairs(&path, false) {
             Some(result) => result,
             None => return false,
         };

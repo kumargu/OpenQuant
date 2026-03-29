@@ -1084,6 +1084,7 @@ impl PairsEngineWrapper {
                 std::path::Path::new(history_path),
                 Vec::new(),
                 trading_config,
+                false, // staleness check enabled for pybridge
             ),
         })
     }

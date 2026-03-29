@@ -209,9 +209,15 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
         std::process::exit(1);
     }
 
-    info!(path = %active_pairs_path.display(), "loading active pairs");
-    let mut pairs_engine =
-        PairsEngine::from_active_pairs(&active_pairs_path, &history_path, vec![], ptc);
+    let skip_staleness = matches!(run_mode, RunMode::Replay { .. });
+    info!(path = %active_pairs_path.display(), skip_staleness, "loading active pairs");
+    let mut pairs_engine = PairsEngine::from_active_pairs(
+        &active_pairs_path,
+        &history_path,
+        vec![],
+        ptc,
+        skip_staleness,
+    );
 
     // ── Collect symbols ──
     let symbols: Vec<String> = pairs_engine
@@ -235,8 +241,25 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
     let lookback = cfg_file.pairs_trading.lookback + 10;
     info!(lookback, "fetching daily bars for warmup");
 
+    // For replay: only feed warmup bars BEFORE the replay start date.
+    // Otherwise the engine sees daily-close bars from the replay period during warmup,
+    // which contaminates rolling stats with future data.
+    let warmup_cutoff_ms: Option<i64> = match &run_mode {
+        RunMode::Replay { start, .. } => {
+            let d =
+                chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").expect("invalid start date");
+            Some(d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis())
+        }
+        _ => None,
+    };
+
     match alpaca.fetch_daily_bars(&symbols, lookback + 5).await {
         Ok(bars) => {
+            let bars: Vec<_> = if let Some(cutoff) = warmup_cutoff_ms {
+                bars.into_iter().filter(|(_, ts, _)| *ts < cutoff).collect()
+            } else {
+                bars
+            };
             info!(bars = bars.len(), "warmup: feeding historical bars");
             for (symbol, timestamp, close) in &bars {
                 let _intents = pairs_engine.on_bar(symbol, *timestamp, *close);
