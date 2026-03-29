@@ -48,9 +48,7 @@ enum Command {
 /// Shared args for live and paper (both use WebSocket streaming).
 #[derive(clap::Args, Debug, Clone)]
 struct StreamArgs {
-    #[arg(long, value_enum, default_value = "pairs")]
-    engine: EngineMode,
-
+    /// Path to TOML config file (default: config/pairs.toml).
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -61,12 +59,10 @@ struct StreamArgs {
     trading_dir: PathBuf,
 }
 
-/// Args for replay (adds date range, no execution flag).
+/// Args for replay (adds date range).
 #[derive(clap::Args, Debug, Clone)]
 struct ReplayArgs {
-    #[arg(long, value_enum, default_value = "pairs")]
-    engine: EngineMode,
-
+    /// Path to TOML config file (default: config/pairs.toml).
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -85,25 +81,7 @@ struct ReplayArgs {
     end: String,
 }
 
-#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
-enum EngineMode {
-    Single,
-    Pairs,
-    Both,
-}
-
-impl EngineMode {
-    fn run_pairs(self) -> bool {
-        matches!(self, Self::Pairs | Self::Both)
-    }
-
-    fn default_config(self) -> &'static str {
-        match self {
-            Self::Single => "config/single.toml",
-            Self::Pairs | Self::Both => "config/pairs.toml",
-        }
-    }
-}
+const DEFAULT_CONFIG: &str = "config/pairs.toml";
 
 /// What the runner does after the engine emits intents.
 enum RunMode {
@@ -143,24 +121,21 @@ async fn main() {
         .with_writer(tee)
         .init();
 
-    // Convert CLI command → (engine_mode, config, trading_dir, data_dir, run_mode)
-    let (engine_mode, config, trading_dir, data_dir, run_mode) = match cli.command {
+    // Convert CLI command → (config, trading_dir, data_dir, run_mode)
+    let (config, trading_dir, data_dir, run_mode) = match cli.command {
         Command::Live(a) => (
-            a.engine,
             a.config,
             a.trading_dir,
             a.data_dir,
             RunMode::Stream(ExecutionMode::Live),
         ),
         Command::Paper(a) => (
-            a.engine,
             a.config,
             a.trading_dir,
             a.data_dir,
             RunMode::Stream(ExecutionMode::Paper),
         ),
         Command::Replay(a) => (
-            a.engine,
             a.config,
             a.trading_dir,
             a.data_dir,
@@ -171,32 +146,25 @@ async fn main() {
         ),
     };
 
-    run(engine_mode, config, trading_dir, data_dir, run_mode).await;
+    run(config, trading_dir, data_dir, run_mode).await;
 }
 
 // ── Unified run function ─────────────────────────────────────────────
 
-async fn run(
-    engine_mode: EngineMode,
-    config: Option<PathBuf>,
-    trading_dir: PathBuf,
-    data_dir: PathBuf,
-    run_mode: RunMode,
-) {
-    let config_path = config.unwrap_or_else(|| PathBuf::from(engine_mode.default_config()));
+async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, run_mode: RunMode) {
+    let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
 
     // ── Log mode ──
     match &run_mode {
         RunMode::Stream(ExecutionMode::Paper) => {
-            info!(?engine_mode, config = %config_path.display(), "========== OPENQUANT PAPER MODE ==========");
+            info!(config = %config_path.display(), "========== OPENQUANT PAPER MODE ==========");
         }
         RunMode::Stream(ExecutionMode::Live) => {
-            info!(?engine_mode, config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
+            info!(config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
             warn!("LIVE MODE — real money orders will be placed");
         }
         RunMode::Replay { start, end } => {
             info!(
-                ?engine_mode,
                 config = %config_path.display(),
                 start = start.as_str(),
                 end = end.as_str(),
@@ -230,43 +198,32 @@ async fn run(
     };
 
     // ── Initialize pairs engine ──
-    let mut pairs_engine = if engine_mode.run_pairs() {
-        let mut ptc = cfg_file.pairs_trading.clone();
-        ptc.tz_offset_hours = cfg_file.data.timezone_offset_hours;
+    let mut ptc = cfg_file.pairs_trading.clone();
+    ptc.tz_offset_hours = cfg_file.data.timezone_offset_hours;
 
-        let active_pairs_path = trading_dir.join("active_pairs.json");
-        let history_path = trading_dir.join("pair_trading_history.json");
+    let active_pairs_path = trading_dir.join("active_pairs.json");
+    let history_path = trading_dir.join("pair_trading_history.json");
 
-        if active_pairs_path.exists() {
-            info!(path = %active_pairs_path.display(), "loading active pairs");
-            Some(PairsEngine::from_active_pairs(
-                &active_pairs_path,
-                &history_path,
-                vec![],
-                ptc,
-            ))
-        } else {
-            error!("no active_pairs.json found");
-            std::process::exit(1);
-        }
-    } else {
-        None
-    };
+    if !active_pairs_path.exists() {
+        error!("no active_pairs.json found");
+        std::process::exit(1);
+    }
+
+    info!(path = %active_pairs_path.display(), "loading active pairs");
+    let mut pairs_engine =
+        PairsEngine::from_active_pairs(&active_pairs_path, &history_path, vec![], ptc);
 
     // ── Collect symbols ──
-    let symbols: Vec<String> = if let Some(ref pe) = pairs_engine {
-        pe.positions()
-            .iter()
-            .flat_map(|(cfg, _)| vec![cfg.leg_a.clone(), cfg.leg_b.clone()])
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect()
-    } else {
-        vec![]
-    };
+    let symbols: Vec<String> = pairs_engine
+        .positions()
+        .iter()
+        .flat_map(|(cfg, _)| vec![cfg.leg_a.clone(), cfg.leg_b.clone()])
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
 
     info!(
-        pairs = pairs_engine.as_ref().map_or(0, |e| e.pair_count()),
+        pairs = pairs_engine.pair_count(),
         symbols = symbols.len(),
         "engine ready"
     );
@@ -279,14 +236,10 @@ async fn run(
         Ok(bars) => {
             info!(bars = bars.len(), "warmup: feeding historical bars");
             for (symbol, timestamp, close) in &bars {
-                if let Some(ref mut pe) = pairs_engine {
-                    let _intents = pe.on_bar(symbol, *timestamp, *close);
-                }
+                let _intents = pairs_engine.on_bar(symbol, *timestamp, *close);
             }
             info!("warmup complete — flattening phantom positions");
-            if let Some(ref mut pe) = pairs_engine {
-                pe.flatten_all();
-            }
+            pairs_engine.flatten_all();
         }
         Err(e) => {
             error!("warmup fetch failed: {e}");
@@ -309,7 +262,7 @@ async fn run(
 
 async fn run_stream(
     alpaca: &alpaca::AlpacaClient,
-    pairs_engine: &mut Option<PairsEngine>,
+    engine: &mut PairsEngine,
     symbols: &[String],
     execution: ExecutionMode,
 ) {
@@ -325,31 +278,28 @@ async fn run_stream(
     loop {
         tokio::select! {
             Some(bar) = bar_rx.recv() => {
-                if let Some(ref mut pe) = pairs_engine {
-                    let intents = pe.on_bar(&bar.symbol, bar.timestamp, bar.close);
-                    for intent in &intents {
-                        let side = format!("{:?}", intent.side).to_lowercase();
-                        log_intent(intent, &side);
+                let intents = engine.on_bar(&bar.symbol, bar.timestamp, bar.close);
+                for intent in &intents {
+                    let side = format!("{:?}", intent.side).to_lowercase();
+                    log_intent(intent, &side);
 
-                        // Paper and Live both call Alpaca; URL differs via trading_url()
-                        match alpaca
-                            .place_order(&intent.symbol, intent.qty, &side, execution)
-                            .await
-                        {
-                            Ok(order) => {
-                                info!(
-                                    order_id = order.id.as_str(),
-                                    status = order.status.as_str(),
-                                    "ORDER FILLED"
-                                );
-                            }
-                            Err(e) => {
-                                error!(
-                                    symbol = intent.symbol.as_str(),
-                                    error = e.as_str(),
-                                    "ORDER FAILED"
-                                );
-                            }
+                    match alpaca
+                        .place_order(&intent.symbol, intent.qty, &side, execution)
+                        .await
+                    {
+                        Ok(order) => {
+                            info!(
+                                order_id = order.id.as_str(),
+                                status = order.status.as_str(),
+                                "ORDER FILLED"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                symbol = intent.symbol.as_str(),
+                                error = e.as_str(),
+                                "ORDER FAILED"
+                            );
                         }
                     }
                 }
@@ -367,7 +317,7 @@ async fn run_stream(
 
 async fn run_replay_bars(
     alpaca: &alpaca::AlpacaClient,
-    pairs_engine: &mut Option<PairsEngine>,
+    engine: &mut PairsEngine,
     symbols: &[String],
     start: &str,
     end: &str,
@@ -391,13 +341,11 @@ async fn run_replay_bars(
     let mut intent_count: usize = 0;
 
     for (symbol, timestamp, close) in &bars {
-        if let Some(ref mut pe) = pairs_engine {
-            let intents = pe.on_bar(symbol, *timestamp, *close);
-            for intent in &intents {
-                let side = format!("{:?}", intent.side).to_lowercase();
-                log_intent(intent, &side);
-                intent_count += 1;
-            }
+        let intents = engine.on_bar(symbol, *timestamp, *close);
+        for intent in &intents {
+            let side = format!("{:?}", intent.side).to_lowercase();
+            log_intent(intent, &side);
+            intent_count += 1;
         }
     }
 
