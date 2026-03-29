@@ -616,7 +616,7 @@ impl PairState {
                     pos = ?self.position,
                     "pairs: HOLDING"
                 );
-            } else if self.bar_count % 10 == 0 {
+            } else if self.bar_count.is_multiple_of(10) {
                 // Intraday risk snapshot every ~10 minutes
                 info!(
                     pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),

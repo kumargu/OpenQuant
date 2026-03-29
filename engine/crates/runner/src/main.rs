@@ -244,11 +244,21 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
     // For replay: only feed warmup bars BEFORE the replay start date.
     // Otherwise the engine sees daily-close bars from the replay period during warmup,
     // which contaminates rolling stats with future data.
+    // Cutoff: exclude daily bars for the replay start date and after.
+    // Daily bars are adjusted +16h from midnight ET, so a bar for March 23
+    // has ts at ~March 23 20:00 UTC. Cutoff at start_date 12:00 UTC ensures:
+    //   March 22 bar (ts ~22 20:00 UTC) < March 23 12:00 UTC → included ✓
+    //   March 23 bar (ts ~23 20:00 UTC) > March 23 12:00 UTC → excluded ✓
     let warmup_cutoff_ms: Option<i64> = match &run_mode {
         RunMode::Replay { start, .. } => {
             let d =
                 chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").expect("invalid start date");
-            Some(d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis())
+            Some(
+                d.and_hms_opt(12, 0, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp_millis(),
+            )
         }
         _ => None,
     };
@@ -392,13 +402,24 @@ async fn run_replay_bars(
             continue;
         }
 
-        // Group bars by timestamp and feed one minute at a time.
-        // Bars within each minute are in Alpaca's return order (no sort).
+        // Sort by (minute, symbol) for deterministic replay.
+        // Alpaca's return order is undocumented and varies between requests.
+        let mut bars = bars;
+        bars.sort_by(|a, b| {
+            let ma = a.1 / 60_000;
+            let mb = b.1 / 60_000;
+            ma.cmp(&mb).then(a.0.cmp(&b.0))
+        });
+
+        // Group bars by minute (truncate to 60s boundary).
+        // IEX bars for different symbols may differ by sub-second timestamps.
+        // Without truncation, pair legs land in separate groups and never match.
+        let truncate = |ts: i64| ts / 60_000 * 60_000;
         let mut minute_group: Vec<&(String, i64, f64)> = Vec::new();
-        let mut current_ts: i64 = bars[0].1;
+        let mut current_minute: i64 = truncate(bars[0].1);
 
         for bar in &bars {
-            if bar.1 != current_ts {
+            if truncate(bar.1) != current_minute {
                 // New minute — feed the previous group
                 for (symbol, timestamp, close) in &minute_group {
                     let intents = engine.on_bar(symbol, *timestamp, *close);
@@ -409,7 +430,7 @@ async fn run_replay_bars(
                     }
                 }
                 minute_group.clear();
-                current_ts = bar.1;
+                current_minute = truncate(bar.1);
             }
             minute_group.push(bar);
         }
