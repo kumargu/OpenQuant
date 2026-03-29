@@ -123,6 +123,7 @@ fn multi_pair_bars() -> String {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // spawns binary which requires ALPACA_API_KEY
 fn multi_pair_both_generate_trades() {
     let dir = TempDir::new().unwrap();
 
@@ -198,6 +199,7 @@ fn multi_pair_both_generate_trades() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // spawns binary which requires ALPACA_API_KEY
 fn pnl_cost_deduction() {
     // This test uses the in-process PairPnlTracker directly
     use std::collections::HashMap;
@@ -309,6 +311,7 @@ fn pnl_cost_deduction() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // spawns binary which requires ALPACA_API_KEY
 fn pnl_deterministic_results() {
     let dir = TempDir::new().unwrap();
 
