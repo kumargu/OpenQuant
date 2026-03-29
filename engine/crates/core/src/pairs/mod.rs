@@ -670,8 +670,11 @@ impl PairState {
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
 
+            // Beta-weighted sizing: leg B notional = notional * |beta| to match
+            // the hedge ratio from the spread model (spread = ln(A) - β·ln(B)).
+            // This ensures the traded position is beta-neutral.
             let qty_a = (trading.notional_per_leg / price_a).floor();
-            let qty_b = (trading.notional_per_leg / price_b).floor();
+            let qty_b = (trading.notional_per_leg * config.beta.abs() / price_b).floor();
 
             return vec![
                 PairOrderIntent {
@@ -740,7 +743,7 @@ impl PairState {
             self.entry_price_b = price_b;
 
             let qty_a = (trading.notional_per_leg / price_a).floor();
-            let qty_b = (trading.notional_per_leg / price_b).floor();
+            let qty_b = (trading.notional_per_leg * config.beta.abs() / price_b).floor();
 
             return vec![
                 PairOrderIntent {
@@ -790,8 +793,9 @@ impl PairState {
         spread: f64,
     ) -> Vec<PairOrderIntent> {
         let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
+        // Use same beta-weighted sizing as entry to ensure clean close
         let qty_a = (trading.notional_per_leg / self.entry_price_a).floor();
-        let qty_b = (trading.notional_per_leg / self.entry_price_b).floor();
+        let qty_b = (trading.notional_per_leg * config.beta.abs() / self.entry_price_b).floor();
 
         match self.position {
             PairPosition::LongSpread => {
@@ -1219,17 +1223,23 @@ mod tests {
     }
 
     #[test]
-    fn test_qty_computation() {
+    fn test_qty_beta_weighted() {
         let trading = PairsTradingConfig {
             notional_per_leg: 10_000.0,
             ..PairsTradingConfig::default()
         };
-        // $10,000 / $420 = 23.8 → floor = 23 shares
-        let qty = (trading.notional_per_leg / 420.0).floor();
-        assert_eq!(qty, 23.0);
-        // $10,000 / $64 = 156.25 → floor = 156 shares
-        let qty_b = (trading.notional_per_leg / 64.0).floor();
-        assert_eq!(qty_b, 156.0);
+        // Leg A: $10,000 / $420 = 23.8 → floor = 23 shares
+        let qty_a = (trading.notional_per_leg / 420.0).floor();
+        assert_eq!(qty_a, 23.0);
+
+        // Leg B with beta=0.50: $10,000 * 0.50 / $64 = 78.125 → floor = 78
+        let beta = 0.50;
+        let qty_b = (trading.notional_per_leg * beta / 64.0).floor();
+        assert_eq!(qty_b, 78.0);
+
+        // With beta=1.0 (equal), sizing matches old equal-dollar behavior
+        let qty_b_unit = (trading.notional_per_leg * 1.0 / 64.0).floor();
+        assert_eq!(qty_b_unit, 156.0);
     }
 
     // ── ExitContext and fixed-reference exit z-score tests ──────────────────

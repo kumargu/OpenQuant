@@ -441,6 +441,19 @@ pub fn refresh_beta(
         let log_b: Vec<f64> = pb.iter().map(|p| p.ln()).collect();
 
         if let Some(ols) = tls_simple(&log_b, &log_a) {
+            // Guard against extreme betas from noisy/decoupled windows.
+            // TLS can produce wild betas when covariance is small-but-nonzero
+            // (e.g., during temporary regime breaks). Keep old beta if R² is
+            // too low or beta is unreasonable. Ref: PR #215 review.
+            if ols.r_squared < MIN_R_SQUARED || ols.beta.abs() > 5.0 {
+                warn!(
+                    pair = format!("{}/{}", pair.leg_a, pair.leg_b).as_str(),
+                    r_squared = format!("{:.3}", ols.r_squared).as_str(),
+                    beta = format!("{:.4}", ols.beta).as_str(),
+                    "Beta refresh rejected: weak fit or extreme beta — keeping old value"
+                );
+                continue;
+            }
             let old_beta = pair.beta;
             let old_alpha = pair.alpha;
             pair.alpha = ols.alpha;
@@ -455,7 +468,7 @@ pub fn refresh_beta(
                 new_alpha = format!("{:.4}", ols.alpha).as_str(),
                 r_squared = format!("{:.3}", ols.r_squared).as_str(),
                 bars = n,
-                "Beta refreshed via OLS"
+                "Beta refreshed via TLS"
             );
         }
     }
