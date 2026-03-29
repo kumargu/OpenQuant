@@ -215,12 +215,13 @@ timezone_offset_hours = 0
 fn last_entry_hour_blocks_late_entries() {
     let config = test_pair();
 
+    // Start with last_entry_hour = 16 (allows entries at 15:55 ET)
     let trading = parse_pairs_config(
         r#"
 [pairs_trading]
 entry_z = 1.5
 min_hold_bars = 0
-last_entry_hour = 14
+last_entry_hour = 16
 force_close_minute = 1500
 tz_offset_hours = -5
 
@@ -230,40 +231,42 @@ timezone_offset_hours = -5
     );
 
     let mut state = PairState::new();
-    let mut ts: i64 = 1_000_000;
-
-    // Warmup at 10:00 ET (15:00 UTC) — within entry hours
-    // 10:00 ET = 15:00 UTC = 15*3600 = 54000 seconds after midnight UTC
-    // Use midnight UTC as base: 2026-01-15 00:00 UTC
-    let base_utc = 1_768_435_200_000_i64; // some midnight UTC
-    ts = base_utc + 15 * 3600 * 1000; // 15:00 UTC = 10:00 ET
+    let base_utc = 1_768_435_200_000_i64;
+    let mut ts = base_utc; // midnight UTC → daily close bar
 
     warmup(&mut state, &config, &trading, &mut ts, 35);
 
-    // Now ts is about 10:35 ET. Try entry — should work.
+    // Entry at 15:55 ET — daily close bar, last_entry_hour=16 allows it
+    ts = base_utc + 20 * 3600 * 1000 + 55 * 60 * 1000; // 15:55 EST
     state.on_price("A", 90.0, &config, &trading, ts);
     let intents = state.on_price("B", 100.0, &config, &trading, ts);
     assert!(
         !intents.is_empty(),
-        "10:35 ET should allow entry (before last_entry_hour=14)"
+        "15:55 ET should allow entry (daily close, before last_entry_hour=16)"
     );
-    ts += 60_000;
 
-    // Exit first
+    // Exit
+    ts += 86_400_000; // next day midnight (daily close)
     state.on_price("A", 100.0, &config, &trading, ts);
     state.on_price("B", 100.0, &config, &trading, ts);
-    ts += 60_000;
 
     // Re-center
-    warmup(&mut state, &config, &trading, &mut ts, 35);
+    for i in 0..35 {
+        let jitter = 0.05 * ((i as f64 * 0.7).sin());
+        ts = base_utc + 86_400_000 * (i + 2) as i64; // daily close timestamps
+        state.on_price("A", 100.0 * (1.0 + jitter), &config, &trading, ts);
+        state.on_price("B", 100.0, &config, &trading, ts);
+    }
 
-    // Now try at 14:30 ET (19:30 UTC) — should be blocked
-    ts = base_utc + 19 * 3600 * 1000 + 30 * 60 * 1000; // 19:30 UTC = 14:30 ET
-    state.on_price("A", 90.0, &config, &trading, ts);
-    let intents = state.on_price("B", 100.0, &config, &trading, ts);
+    // Now test with last_entry_hour = 14 — should block entry at 15:55 ET
+    let mut trading_blocked = trading.clone();
+    trading_blocked.last_entry_hour = 14;
+    ts = base_utc + 20 * 3600 * 1000 + 55 * 60 * 1000; // 15:55 EST
+    state.on_price("A", 90.0, &config, &trading_blocked, ts);
+    let intents = state.on_price("B", 100.0, &config, &trading_blocked, ts);
     assert!(
         intents.is_empty(),
-        "14:30 ET should block entry (past last_entry_hour=14)"
+        "15:55 ET should block entry (past last_entry_hour=14)"
     );
 }
 
@@ -294,21 +297,22 @@ timezone_offset_hours = -5
 
     let mut state = PairState::new();
 
-    // Warmup at 10:00 ET (15:00 UTC)
+    // Warmup with daily-close timestamps (midnight UTC → ET < 4 → daily close)
     let base_utc = 1_768_435_200_000_i64;
-    let mut ts = base_utc + 15 * 3600 * 1000; // 10:00 ET
+    let mut ts = base_utc;
 
     warmup(&mut state, &config, &trading, &mut ts, 35);
 
-    // Entry at ~10:35 ET
+    // Entry at 15:55 ET (20:55 UTC) — daily close bar, last_entry_hour=24 allows it
+    ts = base_utc + 20 * 3600 * 1000 + 55 * 60 * 1000; // 15:55 EST
     state.on_price("A", 90.0, &config, &trading, ts);
     let entry = state.on_price("B", 100.0, &config, &trading, ts);
-    assert!(!entry.is_empty(), "should enter at 10:35 ET");
-    ts += 60_000;
+    assert!(!entry.is_empty(), "should enter at 15:55 ET (daily close)");
 
-    // Hold with spread extended (no reversion) until 15:30 ET
-    // 15:30 ET = 20:30 UTC = 930 minutes from midnight ET
-    let close_ts = base_utc + 20 * 3600 * 1000 + 30 * 60 * 1000; // 20:30 UTC = 15:30 ET
+    // Next day: hold with spread extended (no reversion) at 15:30 ET
+    // 15:30 ET = 930 minutes from midnight ET → triggers force_close_minute=930
+    let next_day = base_utc + 86_400_000; // next day
+    let close_ts = next_day + 20 * 3600 * 1000 + 30 * 60 * 1000; // 15:30 EST
     state.on_price("A", 90.0, &config, &trading, close_ts);
     let exit = state.on_price("B", 100.0, &config, &trading, close_ts);
 

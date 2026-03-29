@@ -229,6 +229,9 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
     );
 
     // ── Warmup: fetch daily bars, feed engine, flatten ──
+    // Daily bars warm up the rolling stats (which only accept daily-close observations).
+    // After warmup, flatten phantom positions — we don't want to hold positions that
+    // weren't placed on Alpaca. Rolling stats remain warm.
     let lookback = cfg_file.pairs_trading.lookback + 10;
     info!(lookback, "fetching daily bars for warmup");
 
@@ -238,19 +241,8 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
             for (symbol, timestamp, close) in &bars {
                 let _intents = pairs_engine.on_bar(symbol, *timestamp, *close);
             }
-            // Flatten positions opened during warmup.
-            // For replay: also reset rolling stats because daily-bar variance
-            // would corrupt minute-bar z-scores (different timeframe).
-            match &run_mode {
-                RunMode::Replay { .. } => {
-                    info!("warmup complete — flattening + resetting stats (timeframe switch)");
-                    pairs_engine.flatten_and_reset_stats();
-                }
-                RunMode::Stream(_) => {
-                    info!("warmup complete — flattening phantom positions");
-                    pairs_engine.flatten_all();
-                }
-            }
+            info!("warmup complete — flattening phantom positions");
+            pairs_engine.flatten_all();
         }
         Err(e) => {
             error!("warmup fetch failed: {e}");

@@ -49,6 +49,10 @@ fn easy_trading() -> PairsTradingConfig {
 /// far beyond any reasonable stop-loss threshold — triggering a stop on the very
 /// first hold bar. Realistic oscillation gives entry_std ≈ 0.05, so entry at A=90
 /// produces exit_z ≈ -2, within the normal [-stop_z, -entry_z] operating range.
+/// Increment between bars in tests. Use daily intervals so every bar is a
+/// daily close (midnight UTC → ET hour < 4 → is_daily_close = true).
+const BAR_STEP: i64 = 86_400_000; // 1 day in ms
+
 fn feed_neutral(
     state: &mut PairState,
     config: &PairConfig,
@@ -61,7 +65,7 @@ fn feed_neutral(
         let jitter = 0.05 * ((i as f64 * 0.7).sin());
         state.on_price(&config.leg_a, 100.0 * (1.0 + jitter), config, trading, *ts);
         state.on_price(&config.leg_b, 100.0, config, trading, *ts);
-        *ts += 60_000;
+        *ts += BAR_STEP;
     }
 }
 
@@ -83,7 +87,7 @@ fn execute_losing_trade(
     // Entry: sharp drop in leg_a
     state.on_price(&config.leg_a, 90.0, config, trading, *ts);
     let entry = state.on_price(&config.leg_b, 100.0, config, trading, *ts);
-    *ts += 60_000;
+    *ts += BAR_STEP;
 
     if entry.is_empty() {
         return false; // blocked by regime gate
@@ -96,7 +100,7 @@ fn execute_losing_trade(
     for _ in 0..5 {
         state.on_price(&config.leg_a, 90.0, config, trading, *ts);
         let exit = state.on_price(&config.leg_b, 100.0, config, trading, *ts);
-        *ts += 60_000;
+        *ts += BAR_STEP;
         if !exit.is_empty() {
             break;
         }
@@ -124,7 +128,7 @@ fn execute_stop_loss_trade(
 
     state.on_price(&config.leg_a, 90.0, config, trading, *ts);
     let entry = state.on_price(&config.leg_b, 100.0, config, trading, *ts);
-    *ts += 60_000;
+    *ts += BAR_STEP;
 
     if entry.is_empty() {
         return false;
@@ -135,7 +139,7 @@ fn execute_stop_loss_trade(
     // Stop loss: drop leg_a much further → spread diverges → |z| > stop_z
     state.on_price(&config.leg_a, 70.0, config, trading, *ts);
     let exit = state.on_price(&config.leg_b, 100.0, config, trading, *ts);
-    *ts += 60_000;
+    *ts += BAR_STEP;
 
     assert!(
         !exit.is_empty(),
@@ -154,7 +158,7 @@ fn try_entry(
 ) -> bool {
     state.on_price(&config.leg_a, 90.0, config, trading, *ts);
     let intents = state.on_price(&config.leg_b, 100.0, config, trading, *ts);
-    *ts += 60_000;
+    *ts += BAR_STEP;
     !intents.is_empty()
 }
 
@@ -180,7 +184,7 @@ fn regime_gate_pauses_after_five_losers() {
     // Feed just 1 neutral bar so the gate check runs (needs both legs).
     state.on_price(&config.leg_a, 100.0, &config, &trading, ts);
     state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
-    ts += 60_000;
+    ts += BAR_STEP;
 
     let blocked = !try_entry(&mut state, &config, &trading, &mut ts);
     assert!(
@@ -249,7 +253,7 @@ fn regime_gate_repauses_after_resume() {
     for _ in 0..5 {
         state.on_price(&config.leg_a, 90.0, &config, &trading, ts);
         let exit = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
-        ts += 60_000;
+        ts += BAR_STEP;
         if !exit.is_empty() {
             break;
         }

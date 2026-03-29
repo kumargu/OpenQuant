@@ -237,15 +237,17 @@ pub struct PairState {
     spread_count: usize,
     /// Current position state.
     position: PairPosition,
-    /// Bar counter at entry (for max-hold tracking).
-    entry_bar: usize,
+    /// Daily bar counter at entry (for max-hold tracking in days).
+    entry_daily_bar: usize,
     /// Prices at entry (for real dollar P&L on exit).
     entry_price_a: f64,
     entry_price_b: f64,
     /// Hedge ratio at entry (for consistent close sizing if beta refreshes mid-trade).
     entry_beta: f64,
-    /// Internal bar counter (incremented each time both legs have new data).
+    /// Incremented every bar (minute or daily). Used for logging only.
     bar_count: usize,
+    /// Incremented only on daily close bars. Used for max_hold/min_hold counting.
+    daily_bar_count: usize,
     /// Per-pair exit_z override (for graceful exit of removed pairs).
     pub exit_z_override: Option<f64>,
     /// Per-pair stop_z override (for graceful exit of removed pairs).
@@ -303,11 +305,12 @@ impl PairState {
             spread_stats: RollingStats::new(window),
             spread_count: 0,
             position: PairPosition::Flat,
-            entry_bar: 0,
+            entry_daily_bar: 0,
             entry_price_a: 0.0,
             entry_price_b: 0.0,
             entry_beta: 1.0,
             bar_count: 0,
+            daily_bar_count: 0,
             exit_z_override: None,
             stop_z_override: None,
             trade_pnl_history: VecDeque::with_capacity(10),
@@ -358,35 +361,10 @@ impl PairState {
         // Clear buffered prices — require fresh data for next evaluation
         self.last_price_a = None;
         self.last_price_b = None;
-        self.bar_count += 1;
 
         // Compute log-spread: spread = ln(price_A) - alpha - beta × ln(price_B)
-        // Alpha from OLS ensures z-scores are centered correctly.
+        // Alpha from TLS ensures z-scores are centered correctly.
         let spread = price_a.ln() - config.alpha - config.beta * price_b.ln();
-
-        // Feed spread into rolling stats
-        self.spread_stats.push(spread);
-        self.spread_count += 1;
-
-        // Need enough spread history for z-score
-        let min_lookback = self.spread_stats.window(); // window set per pair at construction
-        if self.spread_count < min_lookback {
-            debug!(
-                pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
-                count = self.spread_count,
-                needed = min_lookback,
-                "pairs: warming up spread stats"
-            );
-            return vec![];
-        }
-
-        // Compute z-score
-        let mean = self.spread_stats.mean();
-        let std = self.spread_stats.std_dev();
-        if std < 1e-10 {
-            return vec![];
-        }
-        let z = (spread - mean) / std;
 
         // Compute time of day in local timezone (minutes since midnight)
         let tz_offset_ms: i64 = (trading.tz_offset_hours as i64) * 3600 * 1000;
@@ -396,9 +374,54 @@ impl PairState {
         let et_min = ((secs_of_day % 3600) / 60) as u32;
         let et_minutes = et_hour * 60 + et_min;
 
+        // ── Two-clock architecture ──
+        // Signal clock (daily): push spread into rolling stats at daily close only.
+        // Half-life is measured in days — rolling z-score must use daily observations.
+        // Risk clock (every bar): check stop loss via frozen ExitContext.
+        //
+        // Daily close = bar with ET time >= 15:50 (last 10 minutes of session).
+        // During warmup (daily bars from fetch_daily_bars), timestamps are midnight —
+        // treat as daily close (hour 0 < 4, which is outside market hours, so we use
+        // the bar_count-based warmup detection below).
+        let is_daily_close = et_minutes >= 950 // 15:50 ET
+            || et_hour < 4; // pre-market = warmup daily bars (always treat as close)
+
+        if is_daily_close {
+            self.spread_stats.push(spread);
+            self.spread_count += 1;
+            self.daily_bar_count += 1;
+        }
+        self.bar_count += 1;
+
+        // Rolling z-score — only valid after enough daily observations
+        let min_lookback = self.spread_stats.window();
+        let rolling_z_ready = self.spread_count >= min_lookback;
+
+        let z = if rolling_z_ready {
+            let mean = self.spread_stats.mean();
+            let sd = self.spread_stats.std_dev();
+            if sd < 1e-10 {
+                return vec![];
+            }
+            (spread - mean) / sd
+        } else {
+            // Not enough daily observations for z-score.
+            // But if we have a position, still check exits below (stop loss uses ExitContext).
+            if self.position == PairPosition::Flat {
+                debug!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    count = self.spread_count,
+                    needed = min_lookback,
+                    "pairs: warming up spread stats (daily observations)"
+                );
+                return vec![];
+            }
+            0.0 // dummy — exits use ExitContext, not rolling z
+        };
+
         // ── Check exits first (if we have a position) ──
         if self.position != PairPosition::Flat {
-            let bars_held = self.bar_count - self.entry_bar;
+            let days_held = self.daily_bar_count.saturating_sub(self.entry_daily_bar);
 
             // Use per-pair overrides if set (for graceful exit of removed pairs)
             let effective_exit_z = self.exit_z_override.unwrap_or(trading.exit_z);
@@ -426,7 +449,7 @@ impl PairState {
                             rolling_z = %format_args!("{z:.2}"),
                             fixed_exit_z = %format_args!("{ez:.2}"),
                             drift = %format_args!("{drift:.2}"),
-                            bars_held,
+                            days_held,
                             "pairs: DRIFT DETECTED — rolling z diverges from fixed exit z (rolling-stat adaptation)"
                         );
                     }
@@ -466,7 +489,7 @@ impl PairState {
             } else {
                 trading.max_hold_bars // global fallback from TOML
             };
-            let max_held = effective_max_hold > 0 && bars_held >= effective_max_hold;
+            let max_held = effective_max_hold > 0 && days_held >= effective_max_hold;
 
             // Exit condition: force close before end of day (no overnight holding)
             let force_close = et_minutes >= trading.force_close_minute;
@@ -483,7 +506,7 @@ impl PairState {
             }
 
             // Minimum hold: block reversion exits (but NOT stop loss) until min_hold_bars
-            let past_min_hold = bars_held >= trading.min_hold_bars;
+            let past_min_hold = days_held >= trading.min_hold_bars;
             let can_exit_reversion = reverted && past_min_hold;
 
             if can_exit_reversion || stopped || max_held || force_close {
@@ -513,7 +536,7 @@ impl PairState {
                         ts = timestamp,
                         rolling_z = %format_args!("{z:.2}"),
                         fixed_exit_z = %format_args!("{exit_z:.2}"),
-                        bars_held,
+                        days_held,
                         "pairs: STOP LOSS — spread diverged further from entry baseline"
                     );
                 }
@@ -522,7 +545,7 @@ impl PairState {
                     ts = timestamp,
                     rolling_z = format!("{:.2}", z).as_str(),
                     fixed_exit_z = format!("{:.2}", exit_z).as_str(),
-                    bars_held,
+                    days_held,
                     price_a = format!("{:.2}", price_a).as_str(),
                     price_b = format!("{:.2}", price_b).as_str(),
                     exit = exit_reason,
@@ -578,26 +601,35 @@ impl PairState {
                 return intents;
             }
 
-            // Position held — log z-scores for spread tracking.
-            // info! level: for daily bars this fires once/day/pair — essential for monitoring.
-            info!(
-                pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
-                rolling_z = %format_args!("{z:.2}"),
-                frozen_exit_z = %format_args!("{exit_z:.2}"),
-                bars_held,
-                effective_max_hold,
-                price_a = %format_args!("{price_a:.2}"),
-                price_b = %format_args!("{price_b:.2}"),
-                pos = ?self.position,
-                "pairs: HOLDING"
-            );
+            // Log holding status — info on daily close (once/day), debug on intraday
+            if is_daily_close {
+                info!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    rolling_z = %format_args!("{z:.2}"),
+                    frozen_exit_z = %format_args!("{exit_z:.2}"),
+                    days_held,
+                    effective_max_hold,
+                    price_a = %format_args!("{price_a:.2}"),
+                    price_b = %format_args!("{price_b:.2}"),
+                    pos = ?self.position,
+                    "pairs: HOLDING"
+                );
+            }
             return vec![];
         }
 
         // ── Check entries (if flat) ──
+        // Entry signals only fire on daily close bars — the z-score is computed
+        // from daily observations, so entries should align with the signal clock.
+        if !is_daily_close || !rolling_z_ready {
+            return vec![];
+        }
+
         // Regime gate: block entries when paused due to consecutive losses.
-        // Cooldown: unpause after 500 bars (~2 trading days) to retry.
-        // If still losing after retry, will re-pause within 5 more trades.
+        // Cooldown uses bar_count which increments every minute — this means
+        // cooldown is in minute bars, but the threshold scales with max_hold_bars
+        // (which is in daily units). For daily-close-only entries, the cooldown
+        // effectively counts trading days of exposure.
         if self.paused {
             self.pause_bars += 1;
             // Cooldown: unpause after enough bars to retry.
@@ -652,8 +684,8 @@ impl PairState {
             // Priority score: |z| × sqrt(κ) / σ_spread
             // Ranks this signal against concurrent pair signals.
             // 0.0 when κ=0 (unknown half-life from legacy pairs without half_life_days).
-            let priority_score = if config.kappa > 0.0 && std > 1e-10 {
-                z.abs() * config.kappa.sqrt() / std
+            let priority_score = if config.kappa > 0.0 && entry_std > 1e-10 {
+                z.abs() * config.kappa.sqrt() / entry_std
             } else {
                 0.0
             };
@@ -674,7 +706,7 @@ impl PairState {
             );
 
             self.position = PairPosition::LongSpread;
-            self.entry_bar = self.bar_count;
+            self.entry_daily_bar = self.daily_bar_count;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
             self.entry_beta = config.beta;
@@ -725,8 +757,8 @@ impl PairState {
             // Priority score: |z| × sqrt(κ) / σ_spread
             // Ranks this signal against concurrent pair signals.
             // 0.0 when κ=0 (unknown half-life from legacy pairs without half_life_days).
-            let priority_score = if config.kappa > 0.0 && std > 1e-10 {
-                z.abs() * config.kappa.sqrt() / std
+            let priority_score = if config.kappa > 0.0 && entry_std > 1e-10 {
+                z.abs() * config.kappa.sqrt() / entry_std
             } else {
                 0.0
             };
@@ -747,7 +779,7 @@ impl PairState {
             );
 
             self.position = PairPosition::ShortSpread;
-            self.entry_bar = self.bar_count;
+            self.entry_daily_bar = self.daily_bar_count;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
             self.entry_beta = config.beta;
