@@ -13,6 +13,10 @@ use tracing::{debug, error, info, warn};
 
 const ALPACA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
 
+/// Alpaca reports bar OPEN time in the `t` field (both REST and WebSocket).
+/// The engine expects bar CLOSE time. Add 60s for 1Min bars.
+const MINUTE_BAR_DURATION_MS: i64 = 60_000;
+
 /// A bar received from the Alpaca stream.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -67,8 +71,10 @@ pub async fn start_bar_stream(
             info!("connecting to Alpaca stream");
             match run_stream(&api_key, &api_secret, &symbols, &tx).await {
                 Ok(()) => {
-                    info!("stream ended cleanly");
-                    break;
+                    // Server closed the connection (end of day, maintenance).
+                    // Always reconnect — the runner loop expects bars indefinitely.
+                    warn!("stream closed by server — reconnecting in 5s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
                 Err(e) => {
                     error!("stream error: {e} — reconnecting in 5s");
@@ -164,7 +170,7 @@ async fn run_stream(
             }
 
             let ts = chrono::DateTime::parse_from_rfc3339(&msg.timestamp)
-                .map(|dt| dt.timestamp_millis())
+                .map(|dt| dt.timestamp_millis() + MINUTE_BAR_DURATION_MS)
                 .unwrap_or(0);
 
             if ts == 0 || msg.close <= 0.0 {

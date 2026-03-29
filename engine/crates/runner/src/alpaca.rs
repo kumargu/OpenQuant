@@ -213,13 +213,14 @@ impl AlpacaClient {
             }
         }
 
-        all_bars.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        // No sort — bars are in Alpaca's natural return order.
+        // The caller groups by timestamp to feed one minute at a time.
         info!(
             symbols = symbols.len(),
             bars = all_bars.len(),
             start,
             end,
-            "fetched minute bars for replay"
+            "fetched minute bars"
         );
         Ok(all_bars)
     }

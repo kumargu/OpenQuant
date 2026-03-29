@@ -875,6 +875,15 @@ impl PairState {
         self.exit_context = None;
     }
 
+    /// Reset rolling spread stats (mean, variance, count).
+    /// Used when switching timeframes (e.g., daily warmup → minute replay)
+    /// to avoid corrupted z-scores from mixed-timeframe variance.
+    pub fn reset_spread_stats(&mut self) {
+        let window = self.spread_stats.window();
+        self.spread_stats = RollingStats::new(window);
+        self.spread_count = 0;
+    }
+
     /// Number of spread observations processed.
     pub fn spread_count(&self) -> usize {
         self.spread_count

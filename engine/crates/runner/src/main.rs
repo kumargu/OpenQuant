@@ -238,8 +238,19 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
             for (symbol, timestamp, close) in &bars {
                 let _intents = pairs_engine.on_bar(symbol, *timestamp, *close);
             }
-            info!("warmup complete — flattening phantom positions");
-            pairs_engine.flatten_all();
+            // Flatten positions opened during warmup.
+            // For replay: also reset rolling stats because daily-bar variance
+            // would corrupt minute-bar z-scores (different timeframe).
+            match &run_mode {
+                RunMode::Replay { .. } => {
+                    info!("warmup complete — flattening + resetting stats (timeframe switch)");
+                    pairs_engine.flatten_and_reset_stats();
+                }
+                RunMode::Stream(_) => {
+                    info!("warmup complete — flattening phantom positions");
+                    pairs_engine.flatten_all();
+                }
+            }
         }
         Err(e) => {
             error!("warmup fetch failed: {e}");
@@ -314,6 +325,11 @@ async fn run_stream(
 }
 
 // ── Replay: REST minute bars → engine → log only ─────────────────────
+//
+// Fetches one day at a time from Alpaca REST, then feeds bars grouped by
+// timestamp (one minute at a time). Within each minute, bars arrive in
+// whatever order Alpaca returned them — no artificial sort. The engine
+// never sees beyond the current minute.
 
 async fn run_replay_bars(
     alpaca: &alpaca::AlpacaClient,
@@ -322,37 +338,85 @@ async fn run_replay_bars(
     start: &str,
     end: &str,
 ) {
-    info!(start, end, "fetching minute bars for replay");
+    info!(start, end, "starting replay");
 
-    let bars = match alpaca.fetch_minute_bars(symbols, start, end).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!("minute bar fetch failed: {e}");
-            std::process::exit(1);
+    let start_date = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d")
+        .expect("invalid start date (expected YYYY-MM-DD)");
+    let end_date = chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d")
+        .expect("invalid end date (expected YYYY-MM-DD)");
+
+    let mut total_bars: usize = 0;
+    let mut total_intents: usize = 0;
+
+    // Fetch one day at a time — API efficiency without holding the full range
+    let mut day = start_date;
+    while day <= end_date {
+        let day_start = day.format("%Y-%m-%d").to_string();
+        let day_end = (day + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+
+        let bars = match alpaca
+            .fetch_minute_bars(symbols, &day_start, &day_end)
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(
+                    day = day_start.as_str(),
+                    error = e.as_str(),
+                    "fetch failed — skipping day"
+                );
+                day += chrono::Duration::days(1);
+                continue;
+            }
+        };
+
+        if bars.is_empty() {
+            day += chrono::Duration::days(1);
+            continue;
         }
-    };
 
-    if bars.is_empty() {
-        error!("no bars fetched — nothing to replay");
-        std::process::exit(1);
-    }
+        // Group bars by timestamp and feed one minute at a time.
+        // Bars within each minute are in Alpaca's return order (no sort).
+        let mut minute_group: Vec<&(String, i64, f64)> = Vec::new();
+        let mut current_ts: i64 = bars[0].1;
 
-    info!(bars = bars.len(), "starting replay");
-    let mut intent_count: usize = 0;
-
-    for (symbol, timestamp, close) in &bars {
-        let intents = engine.on_bar(symbol, *timestamp, *close);
-        for intent in &intents {
-            let side = format!("{:?}", intent.side).to_lowercase();
-            log_intent(intent, &side);
-            intent_count += 1;
+        for bar in &bars {
+            if bar.1 != current_ts {
+                // New minute — feed the previous group
+                for (symbol, timestamp, close) in &minute_group {
+                    let intents = engine.on_bar(symbol, *timestamp, *close);
+                    for intent in &intents {
+                        let side = format!("{:?}", intent.side).to_lowercase();
+                        log_intent(intent, &side);
+                        total_intents += 1;
+                    }
+                }
+                minute_group.clear();
+                current_ts = bar.1;
+            }
+            minute_group.push(bar);
         }
+        // Feed the last minute group
+        for (symbol, timestamp, close) in &minute_group {
+            let intents = engine.on_bar(symbol, *timestamp, *close);
+            for intent in &intents {
+                let side = format!("{:?}", intent.side).to_lowercase();
+                log_intent(intent, &side);
+                total_intents += 1;
+            }
+        }
+
+        total_bars += bars.len();
+        info!(day = day_start.as_str(), bars = bars.len(), "replayed day");
+
+        day += chrono::Duration::days(1);
     }
 
     info!(
-        bars = bars.len(),
-        intents = intent_count,
-        "========== REPLAY END =========="
+        total_bars,
+        total_intents, "========== REPLAY END =========="
     );
 }
 

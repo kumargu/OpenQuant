@@ -296,6 +296,19 @@ impl PairsEngine {
         );
     }
 
+    /// Flatten all positions AND reset rolling spread stats.
+    /// Used when switching timeframes (e.g., daily warmup → minute replay).
+    /// Daily-bar variance would corrupt minute-bar z-scores if not reset.
+    pub fn flatten_and_reset_stats(&mut self) {
+        for (_config, state) in &mut self.pairs {
+            if state.position() != super::PairPosition::Flat {
+                state.force_flat();
+            }
+            state.reset_spread_stats();
+        }
+        info!("pairs engine: flattened + reset spread stats (timeframe switch)");
+    }
+
     /// Number of configured pairs.
     pub fn pair_count(&self) -> usize {
         self.pairs.len()
