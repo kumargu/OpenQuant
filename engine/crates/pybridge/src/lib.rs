@@ -754,7 +754,7 @@ fn scan_pair(
         if let (Some(alpha), Some(beta)) = (result.alpha, result.beta) {
             let window = pair_picker::pipeline::MAX_VALIDATION_WINDOW;
             let n = prices_a.len().min(prices_b.len());
-            let start = if n > window { n - window } else { 0 };
+            let start = n.saturating_sub(window);
             let spreads: Vec<f64> = (start..n)
                 .filter(|&i| prices_a[i] > 0.0 && prices_b[i] > 0.0)
                 .map(|i| prices_a[i].ln() - alpha - beta * prices_b[i].ln())

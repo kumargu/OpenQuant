@@ -19,6 +19,7 @@ pub struct AlpacaClient {
 
 /// A single OHLCV bar from Alpaca.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AlpacaBar {
     pub t: String,
     pub o: f64,
@@ -29,6 +30,7 @@ pub struct AlpacaBar {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AlpacaBarsResponse {
     pub bars: HashMap<String, Vec<AlpacaBar>>,
     #[serde(default)]
@@ -36,6 +38,7 @@ pub struct AlpacaBarsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AlpacaPosition {
     pub symbol: String,
     pub qty: String,
@@ -45,6 +48,7 @@ pub struct AlpacaPosition {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AlpacaOrder {
     pub id: String,
     pub status: String,
@@ -180,6 +184,7 @@ impl AlpacaClient {
     }
 
     /// Get all open positions.
+    #[allow(dead_code)]
     pub async fn get_positions(&self) -> Result<Vec<AlpacaPosition>, String> {
         let response = self
             .http
@@ -203,6 +208,7 @@ impl AlpacaClient {
     }
 
     /// Close a position by symbol.
+    #[allow(dead_code)]
     pub async fn close_position(&self, symbol: &str) -> Result<(), String> {
         info!(symbol, "closing position");
         let response = self

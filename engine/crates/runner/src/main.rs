@@ -636,6 +636,7 @@ async fn run_live(args: RunArgs) {
 }
 
 /// Fetch latest bars, feed to engine, execute any intents on Alpaca.
+#[allow(dead_code)]
 async fn run_once(
     alpaca: &alpaca::AlpacaClient,
     pairs_engine: &mut Option<PairsEngine>,
