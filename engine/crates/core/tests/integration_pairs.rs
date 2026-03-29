@@ -58,6 +58,8 @@ fn fallback_config(leg_a: &str, leg_b: &str, beta: f64) -> PairConfig {
         alpha: 0.0,
         beta,
         kappa: 0.0,
+        max_hold_bars: 0,
+        lookback_bars: 0,
     }
 }
 

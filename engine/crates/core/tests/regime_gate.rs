@@ -18,6 +18,8 @@ fn test_config() -> PairConfig {
         alpha: 0.0,
         beta: 1.0,
         kappa: 0.0,
+        max_hold_bars: 0,
+        lookback_bars: 0,
     }
 }
 
@@ -34,6 +36,7 @@ fn easy_trading() -> PairsTradingConfig {
         last_entry_hour: 24,
         force_close_minute: 1_500,
         tz_offset_hours: 0,
+        cost_bps: 10.0,
     }
 }
 
@@ -283,6 +286,8 @@ fn regime_gate_is_per_pair() {
         alpha: 0.0,
         beta: 1.0,
         kappa: 0.0,
+        max_hold_bars: 0,
+        lookback_bars: 0,
     };
     let trading = easy_trading();
 

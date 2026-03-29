@@ -105,6 +105,15 @@ pub fn load_active_pairs(path: &Path) -> Option<(ActivePairsFile, Vec<PairConfig
                 kappa = format!("{:.4}", kappa).as_str(),
                 "Loaded active pair"
             );
+            // lookback_bars = min(2 × ceil(half_life_days), 60).
+            // Chan (2013): lookback should match the half-life.
+            // Avellaneda & Lee (2010): 60-day cap for daily data.
+            let lookback_bars = if p.half_life_days.is_finite() && p.half_life_days > 0.0 {
+                let hl_bars = p.half_life_days.ceil() as usize;
+                (2 * hl_bars).min(60)
+            } else {
+                0 // use global fallback
+            };
             PairConfig {
                 leg_a: p.leg_a.clone(),
                 leg_b: p.leg_b.clone(),
@@ -112,6 +121,7 @@ pub fn load_active_pairs(path: &Path) -> Option<(ActivePairsFile, Vec<PairConfig
                 beta: p.beta,
                 kappa,
                 max_hold_bars: p.max_hold_days,
+                lookback_bars,
             }
         })
         .collect();

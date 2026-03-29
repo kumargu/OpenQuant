@@ -22,10 +22,10 @@
 //!   ├──► RingBuf<64>       ──► N-bar lookback returns
 //!   ├──► Sma<32>           ──► SMA-32 (trend filter, Bollinger center)
 //!   ├──► Sma<64>           ──► SMA-64 (long-term trend)
-//!   ├──► RollingStats<32>  ──► return std → z-score
-//!   ├──► RollingStats<32>  ──► volume mean → relative volume
-//!   ├──► RollingStats<32>  ──► close std → Bollinger Bands
-//!   ├──► RollingStats<16>  ──► true range mean → ATR
+//!   ├──► RollingStats(32)  ──► return std → z-score
+//!   ├──► RollingStats(32)  ──► volume mean → relative volume
+//!   ├──► RollingStats(32)  ──► close std → Bollinger Bands
+//!   ├──► RollingStats(16)  ──► true range mean → ATR
 //!   ├──► Ema(10), Ema(30)  ──► fast/slow crossover (momentum)
 //!   ├──► Adx(14)           ──► trend strength + directional indicators
 //!   └──► GjrGarch          ──► conditional volatility (asymmetric)
@@ -132,13 +132,13 @@ pub struct FeatureValues {
 #[derive(Clone)]
 pub struct FeatureState {
     // V1 state
-    closes: RingBuf<64>,            // last 64 closes for lookback returns
-    sma: Sma<32>,                   // 32-bar SMA
-    sma_long: Sma<64>,              // 64-bar SMA for trend detection
-    atr_stats: RollingStats<16>,    // 16-bar ATR via rolling mean of true range
-    return_stats: RollingStats<32>, // 32-bar rolling std of 1-bar returns
-    volume_stats: RollingStats<32>, // 32-bar rolling avg of volume
-    prev_close: Option<f64>,        // previous close for true range calculation
+    closes: RingBuf<64>,        // last 64 closes for lookback returns
+    sma: Sma<32>,               // 32-bar SMA
+    sma_long: Sma<64>,          // 64-bar SMA for trend detection
+    atr_stats: RollingStats,    // 16-bar ATR via rolling mean of true range
+    return_stats: RollingStats, // 32-bar rolling std of 1-bar returns
+    volume_stats: RollingStats, // 32-bar rolling avg of volume
+    prev_close: Option<f64>,    // previous close for true range calculation
     bar_count: usize,
     warmup_period: usize,
 
@@ -148,7 +148,7 @@ pub struct FeatureState {
     adx: Adx,      // ADX(14) for trend strength
 
     // V2 state: Bollinger Bands
-    close_stats: RollingStats<32>, // rolling std of close prices
+    close_stats: RollingStats, // rolling std of close prices
 
     // V3 state: VWAP
     vwap: VwapState,
@@ -221,7 +221,7 @@ impl FeatureState {
         warmup: usize,
         timezone_offset_hours: i32,
     ) -> Self {
-        // Minimum warmup: must cover RollingStats<32> at a minimum.
+        // Minimum warmup: must cover the longest rolling window (32 bars).
         // For 1-min bars, 64 covers Sma<64>. For wider bars, caller
         // can reduce but never below 32.
         let warmup_period = warmup.max(32);
@@ -230,9 +230,9 @@ impl FeatureState {
             closes: RingBuf::new(),
             sma: Sma::new(),
             sma_long: Sma::new(),
-            atr_stats: RollingStats::new(),
-            return_stats: RollingStats::new(),
-            volume_stats: RollingStats::new(),
+            atr_stats: RollingStats::new(16),
+            return_stats: RollingStats::new(32),
+            volume_stats: RollingStats::new(32),
             prev_close: None,
             bar_count: 0,
             warmup_period,
@@ -241,7 +241,7 @@ impl FeatureState {
             ema_slow: Ema::new(30),
             adx: Adx::new(14),
 
-            close_stats: RollingStats::new(),
+            close_stats: RollingStats::new(32),
 
             vwap: VwapState::new(timezone_offset_hours),
 

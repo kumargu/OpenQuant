@@ -502,9 +502,9 @@ exit_z = 0.2
 # Z-score threshold for stop loss (spread diverged further). Exit when |z| > stop_z.
 stop_z = 4.0
 
-# Rolling window size for spread z-score computation.
-# Capped at 32 bars by RollingStats<32> compile-time constant.
-# 30 days = ~6 weeks of daily history for rolling mean/std.
+# Default rolling window size for spread z-score computation.
+# Per-pair windows are derived from half-life: min(2 × ceil(HL), 60).
+# This value is the fallback when a pair has no half-life data.
 lookback = 30
 
 # Maximum bars (days) to hold before forced exit.

@@ -220,13 +220,13 @@ mod tests {
         // Bollinger uses SMA(32) + 2*std(close, 32). We need both SMA and RollingStats.
         struct BollingerState {
             sma: Sma<32>,
-            stats: RollingStats<32>,
+            stats: RollingStats,
         }
         verify_all_fixtures(
             "bollinger_upper",
             || BollingerState {
                 sma: Sma::new(),
-                stats: RollingStats::new(),
+                stats: RollingStats::new(32),
             },
             |s, close, _, _, _| {
                 let sma = s.sma.push(close);
@@ -240,13 +240,13 @@ mod tests {
     fn reftest_bollinger_lower() {
         struct BollingerState {
             sma: Sma<32>,
-            stats: RollingStats<32>,
+            stats: RollingStats,
         }
         verify_all_fixtures(
             "bollinger_lower",
             || BollingerState {
                 sma: Sma::new(),
-                stats: RollingStats::new(),
+                stats: RollingStats::new(32),
             },
             |s, close, _, _, _| {
                 let sma = s.sma.push(close);
@@ -260,13 +260,13 @@ mod tests {
     fn reftest_bollinger_pct_b() {
         struct BollingerState {
             sma: Sma<32>,
-            stats: RollingStats<32>,
+            stats: RollingStats,
         }
         verify_all_fixtures(
             "bollinger_pct_b",
             || BollingerState {
                 sma: Sma::new(),
-                stats: RollingStats::new(),
+                stats: RollingStats::new(32),
             },
             |s, close, _, _, _| {
                 let sma = s.sma.push(close);
@@ -288,13 +288,13 @@ mod tests {
     fn reftest_bollinger_bandwidth() {
         struct BollingerState {
             sma: Sma<32>,
-            stats: RollingStats<32>,
+            stats: RollingStats,
         }
         verify_all_fixtures(
             "bollinger_bandwidth",
             || BollingerState {
                 sma: Sma::new(),
-                stats: RollingStats::new(),
+                stats: RollingStats::new(32),
             },
             |s, close, _, _, _| {
                 let sma = s.sma.push(close);
@@ -424,14 +424,14 @@ mod tests {
         // to compute Bollinger first, then feed bandwidth to the percentile tracker.
         struct State {
             sma: Sma<32>,
-            stats: RollingStats<32>,
+            stats: RollingStats,
             bp: donchian::BandwidthPercentile<64>,
         }
         verify_all_fixtures(
             "bandwidth_percentile",
             || State {
                 sma: Sma::new(),
-                stats: RollingStats::new(),
+                stats: RollingStats::new(32),
                 bp: donchian::BandwidthPercentile::new(),
             },
             |s, close, _, _, _| {

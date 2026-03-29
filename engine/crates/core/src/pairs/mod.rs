@@ -55,9 +55,9 @@ pub struct PairsTradingConfig {
     pub exit_z: f64,
     /// Z-score threshold for stop loss (spread diverged further). Exit when |z| > stop_z.
     pub stop_z: f64,
-    /// Warmup period: minimum spread observations before trading.
-    /// Actual rolling window is fixed at 32 bars (RollingStats<32>).
-    /// Values > 32 are clamped to 32. Set to 32 for standard behavior.
+    /// Default rolling window size for spread z-score computation.
+    /// Used when a pair's `lookback_bars` is 0 (no per-pair override).
+    /// Per-pair windows derived from half-life take precedence.
     pub lookback: usize,
     /// Maximum bars to hold before forced exit.
     pub max_hold_bars: usize,
@@ -136,6 +136,10 @@ pub struct PairConfig {
     /// Per-pair max hold in bars (days for daily data). 0 = use global max_hold_bars.
     /// Set by pair-picker: min(ceil(2.5 × half_life), 10).
     pub max_hold_bars: usize,
+    /// Per-pair rolling window size for spread z-score computation.
+    /// Derived from half-life: min(2 × ceil(half_life_bars), 60).
+    /// 0 = use global lookback from PairsTradingConfig.
+    pub lookback_bars: usize,
 }
 
 impl Default for PairConfig {
@@ -147,6 +151,7 @@ impl Default for PairConfig {
             beta: 1.0,
             kappa: 0.0,
             max_hold_bars: 0, // 0 = use global
+            lookback_bars: 0, // 0 = use global
         }
     }
 }
@@ -225,10 +230,9 @@ pub struct PairState {
     /// Most recent close price for leg B (cleared after spread computation).
     last_price_b: Option<f64>,
     /// Rolling statistics of the spread for z-score computation.
-    /// Window of 256 bars supports lookback up to 256 (configurable via TOML).
-    /// Rolling window for spread z-score. Must match lookback config (default 32).
-    /// Was <256> which caused z-scores to diverge from expected behavior — see #115.
-    spread_stats: RollingStats<32>,
+    /// Window size is set per pair: min(2 × half_life_bars, 60), or global lookback.
+    /// Uses Welford's algorithm for numerically stable variance. See #207.
+    spread_stats: RollingStats,
     /// Number of spread observations (for warmup detection).
     spread_count: usize,
     /// Current position state.
@@ -263,16 +267,38 @@ pub struct PairState {
 
 impl Default for PairState {
     fn default() -> Self {
-        Self::new()
+        Self::with_window(32)
     }
 }
 
 impl PairState {
+    /// Create a new PairState with the appropriate rolling window size.
+    ///
+    /// Uses the pair's `lookback_bars` if set (> 0), otherwise falls back
+    /// to the global `lookback` from trading config.
+    /// Create with default window (32). Used in tests.
     pub fn new() -> Self {
+        Self::with_window(32)
+    }
+
+    /// Create a new PairState with the appropriate rolling window size.
+    ///
+    /// Uses the pair's `lookback_bars` if set (> 0), otherwise falls back
+    /// to the global `lookback` from trading config.
+    pub fn for_pair(config: &PairConfig, trading: &PairsTradingConfig) -> Self {
+        let window = if config.lookback_bars > 0 {
+            config.lookback_bars
+        } else {
+            trading.lookback
+        };
+        Self::with_window(window)
+    }
+
+    pub fn with_window(window: usize) -> Self {
         Self {
             last_price_a: None,
             last_price_b: None,
-            spread_stats: RollingStats::new(),
+            spread_stats: RollingStats::new(window),
             spread_count: 0,
             position: PairPosition::Flat,
             entry_bar: 0,
@@ -340,7 +366,7 @@ impl PairState {
         self.spread_count += 1;
 
         // Need enough spread history for z-score
-        let min_lookback = trading.lookback.min(32); // capped by RollingStats<32>
+        let min_lookback = self.spread_stats.window(); // window set per pair at construction
         if self.spread_count < min_lookback {
             debug!(
                 pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
@@ -860,6 +886,7 @@ mod tests {
             beta: 0.37,
             kappa: 0.0, // unknown in unit tests
             max_hold_bars: 0,
+            lookback_bars: 0,
         }
     }
 
@@ -911,6 +938,7 @@ mod tests {
             beta: 1.0,
             kappa: f64::ln(2.0) / 10.0, // 10-day OU half-life for test priority scoring
             max_hold_bars: 0,
+            lookback_bars: 0,
         }
     }
 

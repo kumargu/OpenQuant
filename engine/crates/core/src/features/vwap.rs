@@ -16,10 +16,10 @@ use super::RollingStats;
 /// reuses our existing `RollingStats`.
 #[derive(Clone)]
 pub struct VwapState {
-    cum_tp_vol: f64,             // cumulative (typical_price * volume)
-    cum_vol: f64,                // cumulative volume
-    dev_stats: RollingStats<32>, // rolling std of (close - vwap)
-    last_day: Option<i32>,       // day ordinal for session reset detection
+    cum_tp_vol: f64,         // cumulative (typical_price * volume)
+    cum_vol: f64,            // cumulative volume
+    dev_stats: RollingStats, // rolling std of (close - vwap)
+    last_day: Option<i32>,   // day ordinal for session reset detection
     bar_count: usize,
     /// Timezone offset in milliseconds (from DataConfig::timezone_offset_hours).
     tz_offset_ms: i64,
@@ -50,7 +50,7 @@ impl VwapState {
         Self {
             cum_tp_vol: 0.0,
             cum_vol: 0.0,
-            dev_stats: RollingStats::new(),
+            dev_stats: RollingStats::new(32),
             last_day: None,
             bar_count: 0,
             tz_offset_ms: timezone_offset_hours as i64 * 3600 * 1000,

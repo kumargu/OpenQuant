@@ -51,7 +51,13 @@ impl PairsEngine {
             notional_per_leg = %format_args!("{:.0}", trading_config.notional_per_leg),
             "PairsEngine initialized"
         );
-        let pairs = configs.into_iter().map(|c| (c, PairState::new())).collect();
+        let pairs = configs
+            .into_iter()
+            .map(|c| {
+                let state = PairState::for_pair(&c, &trading_config);
+                (c, state)
+            })
+            .collect();
 
         Self {
             pairs,
@@ -98,7 +104,13 @@ impl PairsEngine {
             notional_per_leg = %format_args!("{:.0}", trading_config.notional_per_leg),
             "PairsEngine initialized"
         );
-        let pairs = configs.into_iter().map(|c| (c, PairState::new())).collect();
+        let pairs = configs
+            .into_iter()
+            .map(|c| {
+                let state = PairState::for_pair(&c, &trading_config);
+                (c, state)
+            })
+            .collect();
 
         Self {
             pairs,
@@ -187,7 +199,10 @@ impl PairsEngine {
                     beta = format!("{:.4}", config.beta).as_str(),
                     "Added new pair from active_pairs.json"
                 );
-                self.pairs.push((config, PairState::new()));
+                self.pairs.push((
+                    config.clone(),
+                    PairState::for_pair(&config, &self.trading_config),
+                ));
             }
         }
 
@@ -232,7 +247,10 @@ impl PairsEngine {
         }
 
         if !matched {
-            debug!(symbol, "pairs: bar for unknown symbol — not a leg in any pair");
+            debug!(
+                symbol,
+                "pairs: bar for unknown symbol — not a leg in any pair"
+            );
         }
 
         all_intents
@@ -253,7 +271,10 @@ impl PairsEngine {
                 flattened += 1;
             }
         }
-        info!(flattened, "pairs engine: flattened all positions (warmup reset)");
+        info!(
+            flattened,
+            "pairs engine: flattened all positions (warmup reset)"
+        );
     }
 
     /// Number of configured pairs.
@@ -296,6 +317,7 @@ mod tests {
             beta: 0.37,
             kappa: 0.0,
             max_hold_bars: 0,
+            lookback_bars: 0,
         }
     }
 
@@ -307,6 +329,7 @@ mod tests {
             beta: 1.39,
             kappa: 0.0,
             max_hold_bars: 0,
+            lookback_bars: 0,
         }
     }
 
