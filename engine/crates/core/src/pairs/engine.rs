@@ -162,6 +162,25 @@ impl PairsEngine {
                     config.alpha = new_cfg.alpha;
                     config.beta = new_cfg.beta;
                 }
+                // Refresh lookback window if half-life changed (only when flat —
+                // changing window mid-trade would invalidate exit context).
+                if new_cfg.lookback_bars != config.lookback_bars
+                    && state.position() == PairPosition::Flat
+                {
+                    let new_window = if new_cfg.lookback_bars > 0 {
+                        new_cfg.lookback_bars
+                    } else {
+                        self.trading_config.lookback
+                    };
+                    info!(
+                        pair = pair_id.as_str(),
+                        old_window = config.lookback_bars,
+                        new_window,
+                        "Refreshed spread window from active_pairs.json"
+                    );
+                    config.lookback_bars = new_cfg.lookback_bars;
+                    *state = PairState::with_window(new_window);
+                }
             } else if state.position() != PairPosition::Flat {
                 info!(
                     pair = pair_id.as_str(),

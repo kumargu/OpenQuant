@@ -289,7 +289,7 @@ impl PairState {
         let window = if config.lookback_bars > 0 {
             config.lookback_bars
         } else {
-            trading.lookback
+            trading.lookback.max(1) // guard against misconfigured lookback=0
         };
         Self::with_window(window)
     }
