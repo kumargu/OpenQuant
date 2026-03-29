@@ -1,6 +1,9 @@
 //! Bar reader — loads experiment_bars JSON files into openquant_core::Bar.
 //!
 //! Format: {"SYMBOL": [{"timestamp", "open", "high", "low", "close", "volume"}, ...], ...}
+//!
+//! Currently unused — live mode gets bars from WebSocket. Kept for future replay mode.
+#![allow(dead_code)]
 
 use openquant_core::config::DataConfig;
 use openquant_core::market_data::Bar;

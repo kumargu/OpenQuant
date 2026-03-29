@@ -1,84 +1,44 @@
-//! openquant-runner — standalone trading engine binary.
+//! openquant-runner — live trading engine binary.
 //!
-//! Processes historical 1-min bar data through the trading engine and produces
-//! deterministic P&L results. Functions as both a backtester and a walk-forward
-//! validator — bars are processed sequentially with rolling state, exactly as
-//! they would be in live trading, just faster.
+//! Connects to Alpaca, feeds bars to the PairsEngine, and executes order intents.
+//! The engine is the single source of truth — all trading decisions happen in Rust.
+//! P&L is derived from structured logs, not a separate tracking system.
 //!
-//! # How it works
+//! # Execution modes
 //!
-//! 1. **Load config** — reads `config/*.toml` for trading mode (pairs/single/both),
-//!    strategy parameters, market hours, timezone.
-//! 2. **Load pairs** — reads `data/active_pairs.json` for pair identity (legs, beta).
-//!    Trading params (entry_z, exit_z, etc.) come from TOML, not the pair JSON.
-//! 3. **Load bars** — reads `data/experiment_bars_*.json`, filters pre-market/after-hours,
-//!    sorts by `(timestamp, symbol)` for deterministic ordering.
-//! 4. **Process bars** — feeds each bar to the engine(s) sequentially. State carries
-//!    across days (spread rolling stats, positions, warmup). This is walk-forward
-//!    by design — no look-ahead bias, no train/test split needed.
-//! 5. **Track P&L** — matches entry/exit pair intents, applies configurable cost
-//!    (3 bps/leg = 12 bps round-trip), writes `data/trade_results.json`.
-//! 6. **Log everything** — appends to `data/journal/engine.log` with run IDs
-//!    (`git_commit-timestamp`) for audit trail. Every ENTRY, EXIT, P&L, stop loss,
-//!    and config change is logged with structured tracing fields.
-//!
-//! # Walk-forward validation
-//!
-//! The runner naturally performs walk-forward testing because:
-//! - Bars are processed in chronological order (no shuffling)
-//! - Spread statistics warm up from scratch on first run, carry across days
-//! - No parameters are optimized during the run (all from TOML)
-//! - Day boundaries trigger daily resets (risk state, VWAP)
-//! - Results can be sliced into time windows post-hoc for stability analysis
-//!
-//! # Determinism
-//!
-//! Identical config + data = identical results every time. Achieved by:
-//! - Sorting bars by `(timestamp, symbol)` (not HashMap iteration order)
-//! - No randomness in the engine (no Monte Carlo, no random seeds)
-//! - P&L tracker uses deterministic entry/exit matching
+//! - `--execution noop`  — log intents only, no orders submitted (for replay/testing)
+//! - `--execution paper` — Alpaca paper trading API (default)
+//! - `--execution live`  — Alpaca live trading API (real money)
 //!
 //! # Usage
 //!
 //! ```bash
-//! ./run.sh pairs              # build + run pairs trading
-//! ./run.sh single             # build + run single-symbol
-//! ./run.sh test               # build + run with test config
-//!
-//! # Or directly:
-//! cargo run -p openquant-runner --release -- \
-//!   --config config/pairs.toml \
-//!   --data-dir data \
-//!   --output-dir data \
-//!   --warmup-bars 0
+//! openquant-runner live --engine pairs                     # paper trading (default)
+//! openquant-runner live --engine pairs --execution noop    # dry run
+//! openquant-runner live --engine pairs --execution live    # real money
 //! ```
 //!
-//! # Input/Output
+//! # Logs
 //!
-//! - Input:  `config/*.toml`, `data/active_pairs.json`, `data/experiment_bars_*.json`
-//! - Output: `data/order_intents.json`, `data/trade_results.json`
-//! - Logs:   `data/journal/engine.log` (append mode, run IDs for correlation)
+//! All output goes to `data/journal/engine.log` (append mode) with structured
+//! tracing fields. Every INTENT, ORDER, EXIT, stop loss, and config change is
+//! logged. P&L can be computed from logs post-hoc.
 
 mod alpaca;
 mod bars;
 mod intents;
-mod pnl;
 mod stream;
 
+use alpaca::ExecutionMode;
 use clap::Parser;
-use intents::{write_intents, write_trade_results, OrderIntentRecord};
 use openquant_core::config::ConfigFile;
-use openquant_core::engine::SingleEngine;
 use openquant_core::pairs::engine::PairsEngine;
 use std::io::Write;
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "openquant-runner",
-    about = "OpenQuant trading engine — live, backtest, or walk-forward"
-)]
+#[command(name = "openquant-runner", about = "OpenQuant live trading engine")]
 struct Cli {
     /// Running mode.
     #[command(subcommand)]
@@ -87,13 +47,7 @@ struct Cli {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
-    /// Walk-forward — replay historical bars sequentially through the engine.
-    /// Bars are processed in order with rolling state — no look-ahead bias.
-    /// This is the only way to evaluate strategy performance.
-    WalkForward(RunArgs),
-
-    /// Live — streaming bars from stdin, order intents to stdout.
-    /// Python feeds Alpaca bars → Rust decides → Python executes orders.
+    /// Live — connect to Alpaca, stream bars, execute intents.
     Live(RunArgs),
 }
 
@@ -110,6 +64,7 @@ enum EngineMode {
 }
 
 impl EngineMode {
+    #[allow(dead_code)]
     fn run_single(self) -> bool {
         matches!(self, EngineMode::Single | EngineMode::Both)
     }
@@ -153,16 +108,18 @@ struct RunArgs {
     /// Number of warmup bars before signal generation begins.
     #[arg(long, default_value = "0")]
     warmup_bars: usize,
+
+    /// Execution mode: noop (log only), paper, or live.
+    #[arg(long, value_enum, default_value = "paper")]
+    execution: ExecutionMode,
 }
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
 
-    // Resolve engine mode and config path from CLI args (before tracing init)
-    let args = match &cli.command {
-        Command::WalkForward(a) | Command::Live(a) => a,
-    };
+    // Resolve args from CLI
+    let Command::Live(args) = &cli.command;
 
     // ── Initialize tracing ONCE — stderr + data/journal/engine.log ──
     // All tracing from Rust (PairsEngine, SingleEngine, pair-picker, runner)
@@ -186,281 +143,12 @@ async fn main() {
         .init();
 
     // ── Dispatch ──
-    match cli.command {
-        Command::WalkForward(args) => run_walkforward(args),
-        Command::Live(args) => run_live(args).await,
-    }
+    let Command::Live(args) = cli.command;
+    run_live(args).await;
 }
 
-fn run_walkforward(args: RunArgs) {
-    let mode = args.engine;
-    let config_path = args
-        .config
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(mode.default_config()));
-    let output_dir = args.output_dir.as_ref().unwrap_or(&args.data_dir);
-    let trading_dir = if args.trading_dir.exists() {
-        args.trading_dir.clone()
-    } else {
-        args.data_dir.clone()
-    };
-    // Tracing already initialized in main()
-
-    // Run ID: git commit short hash + sequence number for log correlation
-    let git_commit = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_else(|| "unknown".into())
-        .trim()
-        .to_string();
-    let run_id = format!(
-        "{}-{}",
-        git_commit,
-        chrono::Utc::now().format("%Y%m%d-%H%M%S")
-    );
-
-    info!("================================================================");
-    info!(
-        run_id = run_id.as_str(),
-        "========== OPENQUANT RUN START =========="
-    );
-    info!(
-        config = %config_path.display(),
-        data_dir = %args.data_dir.display(),
-        output_dir = %output_dir.display(),
-        warmup_bars = args.warmup_bars,
-        git_commit = git_commit.as_str(),
-        "CLI args"
-    );
-
-    // ── Load config ──
-    let cfg_file = match ConfigFile::load(&config_path) {
-        Ok(c) => {
-            info!("config loaded successfully");
-            c
-        }
-        Err(e) => {
-            error!("failed to load config: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    info!(
-        ?mode,
-        single = mode.run_single(),
-        pairs = mode.run_pairs(),
-        "engine mode"
-    );
-
-    let mut pairs_trading_config = cfg_file.pairs_trading.clone();
-    // Sync timezone from [data] config so pairs engine uses the same offset
-    pairs_trading_config.tz_offset_hours = cfg_file.data.timezone_offset_hours;
-    let notional_per_leg = pairs_trading_config.notional_per_leg;
-    let data_config = cfg_file.data.clone();
-
-    info!(
-        buy_z = format!("{:.2}", cfg_file.signal.buy_z_threshold).as_str(),
-        sell_z = format!("{:.2}", cfg_file.signal.sell_z_threshold).as_str(),
-        max_position = format!("{:.0}", cfg_file.risk.max_position_notional).as_str(),
-        max_daily_loss = format!("{:.0}", cfg_file.risk.max_daily_loss).as_str(),
-        combiner_enabled = cfg_file.combiner.enabled,
-        "single-symbol engine config"
-    );
-
-    // ── Initialize engines (only what EngineMode requires) ──
-    let mut single_engine = if mode.run_single() {
-        let engine_config = cfg_file.into_engine_config();
-        let mut e = SingleEngine::new(engine_config);
-        e.set_warmup_mode(true);
-        info!("single-symbol engine initialized (warmup mode)");
-        Some(e)
-    } else {
-        None
-    };
-
-    let active_pairs_path = trading_dir.join("active_pairs.json");
-    let history_path = trading_dir.join("pair_trading_history.json");
-
-    let mut pairs_engine = if mode.run_pairs() {
-        if active_pairs_path.exists() {
-            info!(path = %active_pairs_path.display(), "loading active pairs");
-            Some(PairsEngine::from_active_pairs(
-                &active_pairs_path,
-                &history_path,
-                vec![],
-                pairs_trading_config,
-            ))
-        } else {
-            warn!("no active_pairs.json found — pairs engine disabled");
-            None
-        }
-    } else {
-        None
-    };
-
-    info!(
-        pairs = pairs_engine.as_ref().map_or(0, |e| e.pair_count()),
-        single = single_engine.is_some(),
-        "engines initialized"
-    );
-    info!("========== STARTUP COMPLETE ==========");
-
-    // ── Load bars ──
-    info!(
-        timezone_offset = data_config.timezone_offset_hours,
-        market_open = data_config.market_open.as_str(),
-        market_close = data_config.market_close.as_str(),
-        "market hours config"
-    );
-
-    let all_bars = match bars::load_days(&args.data_dir, &data_config) {
-        Ok(b) => b,
-        Err(e) => {
-            error!("failed to load bars: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    if all_bars.is_empty() {
-        error!("no bars loaded — nothing to process");
-        std::process::exit(1);
-    }
-
-    // ── Process bars ──
-    let mut all_intents: Vec<OrderIntentRecord> = Vec::new();
-    let mut single_intent_count: usize = 0;
-    let mut pair_intent_count: usize = 0;
-    let mut pnl_tracker = pnl::PairPnlTracker::new(3.0); // 3 bps per leg = 12 bps round trip
-    let mut prev_day: Option<i64> = None;
-    // Day boundary: 24h in millis. Detect when timestamp jumps by >6h gap.
-    const DAY_GAP_MS: i64 = 6 * 3600 * 1000;
-
-    for (i, bar) in all_bars.iter().enumerate() {
-        if let Some(ref mut se) = single_engine {
-            if i == args.warmup_bars {
-                se.set_warmup_mode(false);
-                info!("warmup complete — live signal generation enabled");
-            }
-        }
-
-        // Detect day boundary and reset daily state
-        if let Some(prev) = prev_day {
-            if bar.timestamp - prev > DAY_GAP_MS {
-                if let Some(ref mut se) = single_engine {
-                    se.reset_daily();
-                }
-                if let Some(ref mut pe) = pairs_engine {
-                    pe.reset_daily();
-                }
-                info!(
-                    timestamp = bar.timestamp,
-                    "day boundary — reset daily state"
-                );
-            }
-        }
-        prev_day = Some(bar.timestamp);
-
-        // Track prices for P&L computation
-        pnl_tracker.update_price(&bar.symbol, bar.close);
-
-        // Single-symbol engine
-        if let Some(ref mut se) = single_engine {
-            let single_intents = se.on_bar(bar);
-            for intent in &single_intents {
-                all_intents.push(OrderIntentRecord::from_engine_intent(intent, bar.timestamp));
-                se.on_fill(&intent.symbol, intent.side, intent.qty, bar.close);
-            }
-            single_intent_count += single_intents.len();
-        }
-
-        // Pairs engine
-        let pair_intents = if let Some(ref mut pe) = pairs_engine {
-            pe.on_bar(&bar.symbol, bar.timestamp, bar.close)
-        } else {
-            vec![]
-        };
-        if !pair_intents.is_empty() {
-            pnl_tracker.on_intents(&pair_intents, bar.timestamp);
-            for intent in &pair_intents {
-                all_intents.push(OrderIntentRecord::from_pair_intent(intent, bar.timestamp));
-            }
-            pair_intent_count += pair_intents.len();
-        }
-
-        pnl_tracker.tick_bars(bar.timestamp);
-    }
-
-    info!(
-        bars = all_bars.len(),
-        single_intents = single_intent_count,
-        pair_intents = pair_intent_count,
-        total_intents = all_intents.len(),
-        "processing complete"
-    );
-
-    // ── Write outputs ──
-    std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
-        error!("cannot create output dir: {e}");
-        std::process::exit(1);
-    });
-
-    let intents_path = output_dir.join("order_intents.json");
-    if let Err(e) = write_intents(&all_intents, &intents_path) {
-        error!("failed to write order intents: {e}");
-    }
-
-    let results_path = output_dir.join("trade_results.json");
-    let closed = pnl_tracker.closed_trades();
-    if let Err(e) = write_trade_results(closed, &results_path) {
-        error!("failed to write trade results: {e}");
-    }
-
-    let summary = pnl_tracker.summary();
-    let dollar_pnl = summary.total_pnl_bps * 2.0 * notional_per_leg / 10_000.0;
-    let days = all_bars
-        .iter()
-        .map(|b| b.timestamp / 86_400_000)
-        .collect::<std::collections::HashSet<_>>()
-        .len();
-    let dollar_per_day = if days > 0 {
-        dollar_pnl / days as f64
-    } else {
-        0.0
-    };
-    info!(
-        run_id = run_id.as_str(),
-        total_trades = summary.total_trades,
-        total_pnl_bps = format!("{:.1}", summary.total_pnl_bps).as_str(),
-        dollar_pnl = format!("{:.2}", dollar_pnl).as_str(),
-        dollar_per_day = format!("{:.2}", dollar_per_day).as_str(),
-        trading_days = days,
-        win_rate = format!("{:.1}%", summary.win_rate * 100.0).as_str(),
-        avg_win_bps = format!("{:.1}", summary.avg_win_bps).as_str(),
-        avg_loss_bps = format!("{:.1}", summary.avg_loss_bps).as_str(),
-        "P&L summary"
-    );
-
-    info!(
-        run_id = run_id.as_str(),
-        "========== OPENQUANT RUN END =========="
-    );
-    info!("================================================================");
-}
-
-/// Live trading mode — async event loop with tokio::select!
-///
-/// Three concurrent tasks:
-///   1. Bar fetch: periodically fetches daily bars from Alpaca, feeds to engine
-///   2. Order execution: executes OrderIntents from the engine on Alpaca
-///   3. Reload watch: re-reads active_pairs.json when it changes on disk
-///
-/// Pure Rust. No Python. Ctrl+C for graceful shutdown.
-///
-/// Usage:
-///   openquant-runner live --engine pairs                      # one-shot
-///   openquant-runner live --engine pairs --poll-secs 300      # re-poll every 5 min
+/// Live trading mode — async event loop with Alpaca WebSocket.
+/// Execution mode controls whether orders are submitted (noop/paper/live).
 async fn run_live(args: RunArgs) {
     let mode = args.engine;
     let config_path = args
@@ -470,7 +158,14 @@ async fn run_live(args: RunArgs) {
 
     info!(?mode, config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
 
-    // Load Alpaca client from .env
+    // Log execution mode
+    match args.execution {
+        ExecutionMode::Noop => info!("execution mode: NOOP (dry run — no orders)"),
+        ExecutionMode::Paper => info!("execution mode: PAPER"),
+        ExecutionMode::Live => warn!("execution mode: LIVE — real money orders will be placed"),
+    }
+
+    // Load Alpaca client from .env (needed even in noop for bar streaming)
     let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
         Ok(c) => c,
         Err(e) => {
@@ -605,21 +300,30 @@ async fn run_live(args: RunArgs) {
                             "INTENT"
                         );
 
-                        // Execute on Alpaca
-                        match alpaca.place_order(&intent.symbol, intent.qty, &side).await {
-                            Ok(order) => {
-                                info!(
-                                    order_id = order.id.as_str(),
-                                    status = order.status.as_str(),
-                                    "ORDER FILLED"
-                                );
+                        // Execute based on mode
+                        match args.execution {
+                            ExecutionMode::Noop => {
+                                // Intent already logged above — nothing to execute
                             }
-                            Err(e) => {
-                                error!(
-                                    symbol = intent.symbol.as_str(),
-                                    error = e.as_str(),
-                                    "ORDER FAILED"
-                                );
+                            ExecutionMode::Paper | ExecutionMode::Live => {
+                                match alpaca.place_order(
+                                    &intent.symbol, intent.qty, &side, args.execution,
+                                ).await {
+                                    Ok(order) => {
+                                        info!(
+                                            order_id = order.id.as_str(),
+                                            status = order.status.as_str(),
+                                            "ORDER FILLED"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            symbol = intent.symbol.as_str(),
+                                            error = e.as_str(),
+                                            "ORDER FAILED"
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -633,75 +337,6 @@ async fn run_live(args: RunArgs) {
             }
         }
     }
-}
-
-/// Fetch latest bars, feed to engine, execute any intents on Alpaca.
-#[allow(dead_code)]
-async fn run_once(
-    alpaca: &alpaca::AlpacaClient,
-    pairs_engine: &mut Option<PairsEngine>,
-    symbols: &[String],
-) {
-    // Fetch latest daily closes
-    let bars = match alpaca.fetch_daily_bars(symbols, 5).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!("bar fetch failed: {e}");
-            return;
-        }
-    };
-
-    if bars.is_empty() {
-        warn!("no bars returned from Alpaca");
-        return;
-    }
-
-    // Feed to engine — collect intents
-    let mut all_intents = Vec::new();
-    if let Some(ref mut pe) = pairs_engine {
-        for (symbol, timestamp, close) in &bars {
-            let intents = pe.on_bar(symbol, *timestamp, *close);
-            all_intents.extend(intents);
-        }
-    }
-
-    if all_intents.is_empty() {
-        info!(
-            bars = bars.len(),
-            "no signals — engine evaluated, no intents"
-        );
-        return;
-    }
-
-    // Execute intents on Alpaca
-    info!(intents = all_intents.len(), "executing order intents");
-    for intent in &all_intents {
-        let side = format!("{:?}", intent.side).to_lowercase();
-        match alpaca.place_order(&intent.symbol, intent.qty, &side).await {
-            Ok(order) => {
-                info!(
-                    symbol = intent.symbol.as_str(),
-                    side = side.as_str(),
-                    qty = intent.qty,
-                    pair_id = intent.pair_id.as_str(),
-                    z = %format_args!("{:.2}", intent.z_score),
-                    order_id = order.id.as_str(),
-                    order_status = order.status.as_str(),
-                    "order executed"
-                );
-            }
-            Err(e) => {
-                error!(
-                    symbol = intent.symbol.as_str(),
-                    side = side.as_str(),
-                    qty = intent.qty,
-                    error = e.as_str(),
-                    "order execution failed"
-                );
-            }
-        }
-    }
-    info!(executed = all_intents.len(), "poll cycle complete");
 }
 
 /// Writer that tees output to both stderr and a file.

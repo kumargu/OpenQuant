@@ -4,10 +4,30 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 const DATA_URL: &str = "https://data.alpaca.markets/v2/stocks/bars";
-const TRADING_URL: &str = "https://paper-api.alpaca.markets/v2";
+
+/// How order intents are executed. Controls the Alpaca API endpoint.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
+pub enum ExecutionMode {
+    /// Log intents only — no orders submitted. For replay/testing.
+    Noop,
+    /// Alpaca paper trading API.
+    Paper,
+    /// Alpaca live trading API (real money).
+    Live,
+}
+
+impl ExecutionMode {
+    fn trading_url(self) -> &'static str {
+        match self {
+            Self::Paper => "https://paper-api.alpaca.markets/v2",
+            Self::Live => "https://api.alpaca.markets/v2",
+            Self::Noop => unreachable!("noop mode does not call Alpaca trading API"),
+        }
+    }
+}
 
 /// Alpaca API credentials.
 #[derive(Clone)]
@@ -35,16 +55,6 @@ pub struct AlpacaBarsResponse {
     pub bars: HashMap<String, Vec<AlpacaBar>>,
     #[serde(default)]
     pub next_page_token: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct AlpacaPosition {
-    pub symbol: String,
-    pub qty: String,
-    pub current_price: String,
-    pub unrealized_pl: String,
-    pub side: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,13 +144,15 @@ impl AlpacaClient {
         Ok(all_bars)
     }
 
-    /// Place a market order. Returns order ID.
+    /// Place a market order. URL determined by execution mode.
     pub async fn place_order(
         &self,
         symbol: &str,
         qty: f64,
-        side: &str, // "buy" or "sell"
+        side: &str,
+        execution: ExecutionMode,
     ) -> Result<AlpacaOrder, String> {
+        let url = format!("{}/orders", execution.trading_url());
         let body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -149,11 +161,11 @@ impl AlpacaClient {
             "time_in_force": "day",
         });
 
-        info!(symbol, qty, side, "placing order");
+        info!(symbol, qty, side, ?execution, "placing order");
 
         let response = self
             .http
-            .post(format!("{TRADING_URL}/orders"))
+            .post(&url)
             .header("APCA-API-KEY-ID", &self.api_key)
             .header("APCA-API-SECRET-KEY", &self.api_secret)
             .json(&body)
@@ -181,52 +193,6 @@ impl AlpacaClient {
             "order placed"
         );
         Ok(order)
-    }
-
-    /// Get all open positions.
-    #[allow(dead_code)]
-    pub async fn get_positions(&self) -> Result<Vec<AlpacaPosition>, String> {
-        let response = self
-            .http
-            .get(format!("{TRADING_URL}/positions"))
-            .header("APCA-API-KEY-ID", &self.api_key)
-            .header("APCA-API-SECRET-KEY", &self.api_secret)
-            .send()
-            .await
-            .map_err(|e| format!("positions request failed: {e}"))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("positions API error {status}: {body}"));
-        }
-
-        response
-            .json()
-            .await
-            .map_err(|e| format!("positions parse failed: {e}"))
-    }
-
-    /// Close a position by symbol.
-    #[allow(dead_code)]
-    pub async fn close_position(&self, symbol: &str) -> Result<(), String> {
-        info!(symbol, "closing position");
-        let response = self
-            .http
-            .delete(format!("{TRADING_URL}/positions/{symbol}"))
-            .header("APCA-API-KEY-ID", &self.api_key)
-            .header("APCA-API-SECRET-KEY", &self.api_secret)
-            .send()
-            .await
-            .map_err(|e| format!("close request failed: {e}"))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!(symbol, %status, "close position failed");
-            return Err(format!("close failed {status}: {body}"));
-        }
-        Ok(())
     }
 }
 
