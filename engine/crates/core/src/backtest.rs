@@ -7,7 +7,7 @@
 //! A backtest is a filter, not proof. Results include full trade records,
 //! equity curve, and stats (win rate, expectancy, Sharpe, drawdown).
 
-use crate::engine::{SingleEngine as Engine, SingleEngineConfig as EngineConfig, OrderIntent};
+use crate::engine::{OrderIntent, SingleEngine as Engine, SingleEngineConfig as EngineConfig};
 use crate::market_data::Bar;
 use crate::signals::{Side, SignalReason};
 

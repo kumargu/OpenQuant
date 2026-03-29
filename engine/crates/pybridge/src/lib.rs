@@ -4,7 +4,9 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict};
 
-use openquant_core::engine::{SingleEngine as CoreEngine, SingleEngineConfig as EngineConfig, SymbolOverrides};
+use openquant_core::engine::{
+    SingleEngine as CoreEngine, SingleEngineConfig as EngineConfig, SymbolOverrides,
+};
 use openquant_core::market_data::Bar;
 use openquant_core::signals::Side;
 use openquant_core::signals::mean_reversion;
@@ -718,7 +720,7 @@ fn scan_pair(
     prices_a: Vec<f64>,
     prices_b: Vec<f64>,
 ) -> Option<pyo3::Py<pyo3::types::PyDict>> {
-    use pair_picker::pipeline::{validate_pair, InMemoryPrices};
+    use pair_picker::pipeline::{InMemoryPrices, validate_pair};
     use pair_picker::types::PairCandidate;
 
     let candidate = PairCandidate {
@@ -744,7 +746,8 @@ fn scan_pair(
         dict.set_item("half_life", result.half_life).ok()?;
         dict.set_item("score", result.score).ok()?;
         dict.set_item("beta_stable", result.beta_stable).ok()?;
-        dict.set_item("is_cointegrated", result.is_cointegrated).ok()?;
+        dict.set_item("is_cointegrated", result.is_cointegrated)
+            .ok()?;
 
         // Compute spread stats (mean, std) for frozen z-score.
         // Window must match MAX_VALIDATION_WINDOW used by validate_pair.

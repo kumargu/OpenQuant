@@ -105,7 +105,8 @@ async fn run_stream(
         "key": api_key,
         "secret": api_secret,
     });
-    write.send(Message::Text(auth.to_string().into()))
+    write
+        .send(Message::Text(auth.to_string().into()))
         .await
         .map_err(|e| format!("auth send failed: {e}"))?;
 
@@ -124,7 +125,8 @@ async fn run_stream(
         "action": "subscribe",
         "bars": symbols,
     });
-    write.send(Message::Text(subscribe.to_string().into()))
+    write
+        .send(Message::Text(subscribe.to_string().into()))
         .await
         .map_err(|e| format!("subscribe send failed: {e}"))?;
 
