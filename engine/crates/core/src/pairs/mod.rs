@@ -242,6 +242,8 @@ pub struct PairState {
     /// Prices at entry (for real dollar P&L on exit).
     entry_price_a: f64,
     entry_price_b: f64,
+    /// Hedge ratio at entry (for consistent close sizing if beta refreshes mid-trade).
+    entry_beta: f64,
     /// Internal bar counter (incremented each time both legs have new data).
     bar_count: usize,
     /// Per-pair exit_z override (for graceful exit of removed pairs).
@@ -304,6 +306,7 @@ impl PairState {
             entry_bar: 0,
             entry_price_a: 0.0,
             entry_price_b: 0.0,
+            entry_beta: 1.0,
             bar_count: 0,
             exit_z_override: None,
             stop_z_override: None,
@@ -527,11 +530,16 @@ impl PairState {
                 );
 
                 // Record trade P&L for regime gate
+                // P&L weighted by beta to match actual position sizing.
+                // Leg A has weight 1.0, leg B has weight |entry_beta|.
+                // Total weight = 1 + |beta|; normalize to get bps per unit capital.
                 let ret_a = (price_a - self.entry_price_a) / self.entry_price_a;
                 let ret_b = (price_b - self.entry_price_b) / self.entry_price_b;
+                let abs_beta = self.entry_beta.abs();
+                let weight_sum = 1.0 + abs_beta;
                 let gross_bps = match self.position {
-                    PairPosition::LongSpread => (ret_a - ret_b) * 10_000.0,
-                    PairPosition::ShortSpread => (ret_b - ret_a) * 10_000.0,
+                    PairPosition::LongSpread => (ret_a - abs_beta * ret_b) / weight_sum * 10_000.0,
+                    PairPosition::ShortSpread => (abs_beta * ret_b - ret_a) / weight_sum * 10_000.0,
                     PairPosition::Flat => 0.0,
                 };
                 let net_bps = gross_bps - trading.cost_bps;
@@ -669,6 +677,7 @@ impl PairState {
             self.entry_bar = self.bar_count;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
+            self.entry_beta = config.beta;
 
             // Beta-weighted sizing: leg B notional = notional * |beta| to match
             // the hedge ratio from the spread model (spread = ln(A) - β·ln(B)).
@@ -741,6 +750,7 @@ impl PairState {
             self.entry_bar = self.bar_count;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
+            self.entry_beta = config.beta;
 
             let qty_a = (trading.notional_per_leg / price_a).floor();
             let qty_b = (trading.notional_per_leg * config.beta.abs() / price_b).floor();
@@ -793,9 +803,10 @@ impl PairState {
         spread: f64,
     ) -> Vec<PairOrderIntent> {
         let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
-        // Use same beta-weighted sizing as entry to ensure clean close
+        // Use entry-time beta for close sizing — config.beta may have been refreshed
+        // mid-trade, which would cause qty mismatch and residual exposure.
         let qty_a = (trading.notional_per_leg / self.entry_price_a).floor();
-        let qty_b = (trading.notional_per_leg * config.beta.abs() / self.entry_price_b).floor();
+        let qty_b = (trading.notional_per_leg * self.entry_beta.abs() / self.entry_price_b).floor();
 
         match self.position {
             PairPosition::LongSpread => {
