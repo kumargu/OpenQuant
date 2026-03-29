@@ -94,6 +94,7 @@ fn synthetic_crypto_bars(n: usize) -> Vec<String> {
 /// Does NOT require API keys — uses synthetic data.
 /// Tests that the binary handles crypto-style symbols (with /) correctly.
 #[test]
+#[ignore] // binary still requires ALPACA_API_KEY even for synthetic data
 fn live_smoke_synthetic_crypto() {
     let dir = TempDir::new().unwrap();
 
