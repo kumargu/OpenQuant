@@ -218,10 +218,7 @@ fn regime_gate_resumes_after_cooldown() {
 
     // After cooldown + re-centering, entry should be allowed
     let entered = try_entry(&mut state, &config, &trading, &mut ts);
-    assert!(
-        entered,
-        "entries should resume after cooldown"
-    );
+    assert!(entered, "entries should resume after cooldown");
     assert_eq!(state.position(), PairPosition::LongSpread);
 }
 
