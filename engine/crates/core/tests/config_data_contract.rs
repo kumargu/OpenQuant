@@ -23,6 +23,8 @@ fn test_pair() -> PairConfig {
         alpha: 0.0,
         beta: 1.0,
         kappa: 0.0,
+        max_hold_bars: 0,
+        lookback_bars: 0,
     }
 }
 

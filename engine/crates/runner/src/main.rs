@@ -194,7 +194,9 @@ async fn main() {
 
 fn run_walkforward(args: RunArgs) {
     let mode = args.engine;
-    let config_path = args.config.clone()
+    let config_path = args
+        .config
+        .clone()
         .unwrap_or_else(|| PathBuf::from(mode.default_config()));
     let output_dir = args.output_dir.as_ref().unwrap_or(&args.data_dir);
     let trading_dir = if args.trading_dir.exists() {
@@ -245,7 +247,12 @@ fn run_walkforward(args: RunArgs) {
         }
     };
 
-    info!(?mode, single = mode.run_single(), pairs = mode.run_pairs(), "engine mode");
+    info!(
+        ?mode,
+        single = mode.run_single(),
+        pairs = mode.run_pairs(),
+        "engine mode"
+    );
 
     let mut pairs_trading_config = cfg_file.pairs_trading.clone();
     // Sync timezone from [data] config so pairs engine uses the same offset
@@ -341,9 +348,16 @@ fn run_walkforward(args: RunArgs) {
         // Detect day boundary and reset daily state
         if let Some(prev) = prev_day {
             if bar.timestamp - prev > DAY_GAP_MS {
-                if let Some(ref mut se) = single_engine { se.reset_daily(); }
-                if let Some(ref mut pe) = pairs_engine { pe.reset_daily(); }
-                info!(timestamp = bar.timestamp, "day boundary — reset daily state");
+                if let Some(ref mut se) = single_engine {
+                    se.reset_daily();
+                }
+                if let Some(ref mut pe) = pairs_engine {
+                    pe.reset_daily();
+                }
+                info!(
+                    timestamp = bar.timestamp,
+                    "day boundary — reset daily state"
+                );
             }
         }
         prev_day = Some(bar.timestamp);
@@ -449,7 +463,9 @@ fn run_walkforward(args: RunArgs) {
 ///   openquant-runner live --engine pairs --poll-secs 300      # re-poll every 5 min
 async fn run_live(args: RunArgs) {
     let mode = args.engine;
-    let config_path = args.config.clone()
+    let config_path = args
+        .config
+        .clone()
         .unwrap_or_else(|| PathBuf::from(mode.default_config()));
 
     info!(?mode, config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
@@ -489,7 +505,10 @@ async fn run_live(args: RunArgs) {
         if active_pairs_path.exists() {
             info!(path = %active_pairs_path.display(), "loading active pairs");
             Some(PairsEngine::from_active_pairs(
-                &active_pairs_path, &history_path, vec![], ptc,
+                &active_pairs_path,
+                &history_path,
+                vec![],
+                ptc,
             ))
         } else {
             error!("no active_pairs.json found");
@@ -501,10 +520,12 @@ async fn run_live(args: RunArgs) {
 
     // Collect symbols
     let symbols: Vec<String> = if let Some(ref pe) = pairs_engine {
-        pe.positions().iter()
+        pe.positions()
+            .iter()
             .flat_map(|(cfg, _)| vec![cfg.leg_a.clone(), cfg.leg_b.clone()])
             .collect::<std::collections::HashSet<_>>()
-            .into_iter().collect()
+            .into_iter()
+            .collect()
     } else {
         vec![]
     };
@@ -557,9 +578,7 @@ async fn run_live(args: RunArgs) {
     // No polling, no timers. Data in → decisions out.
     info!("starting Alpaca real-time bar stream");
 
-    let mut bar_rx = stream::start_bar_stream(
-        &alpaca.api_key, &alpaca.api_secret, &symbols
-    ).await;
+    let mut bar_rx = stream::start_bar_stream(&alpaca.api_key, &alpaca.api_secret, &symbols).await;
 
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
@@ -617,6 +636,7 @@ async fn run_live(args: RunArgs) {
 }
 
 /// Fetch latest bars, feed to engine, execute any intents on Alpaca.
+#[allow(dead_code)]
 async fn run_once(
     alpaca: &alpaca::AlpacaClient,
     pairs_engine: &mut Option<PairsEngine>,
@@ -646,7 +666,10 @@ async fn run_once(
     }
 
     if all_intents.is_empty() {
-        info!(bars = bars.len(), "no signals — engine evaluated, no intents");
+        info!(
+            bars = bars.len(),
+            "no signals — engine evaluated, no intents"
+        );
         return;
     }
 

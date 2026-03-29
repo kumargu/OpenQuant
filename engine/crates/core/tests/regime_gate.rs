@@ -4,7 +4,7 @@
 //!   - 5 consecutive losing trades, OR
 //!   - 3 consecutive stop-loss exits
 //!
-//! Entries resume after a 500-bar cooldown.
+//! Entries resume after a cooldown period.
 //!
 //! Run with: `cargo test --test regime_gate -p openquant-core`
 
@@ -18,22 +18,26 @@ fn test_config() -> PairConfig {
         alpha: 0.0,
         beta: 1.0,
         kappa: 0.0,
+        max_hold_bars: 0,
+        lookback_bars: 0,
     }
 }
 
 /// Trading config with easy-to-trigger thresholds.
+/// max_hold_bars=3 for quick exits. cooldown = max(3,5)*2 = 10 bars.
 fn easy_trading() -> PairsTradingConfig {
     PairsTradingConfig {
         entry_z: 1.5,
         exit_z: 0.3,
         stop_z: 5.0,
         lookback: 32,
-        max_hold_bars: 3, // force exit quickly
+        max_hold_bars: 3,
         min_hold_bars: 0,
         notional_per_leg: 10_000.0,
         last_entry_hour: 24,
         force_close_minute: 1_500,
         tz_offset_hours: 0,
+        cost_bps: 10.0,
     }
 }
 
@@ -54,7 +58,6 @@ fn feed_neutral(
 ) {
     for i in 0..count {
         // Realistic oscillation: ±5% so spread std_dev ≈ 0.05
-        // With A=90 entry, spread ≈ -0.105, entry_z ≈ -0.105/0.05 ≈ -2.1
         let jitter = 0.05 * ((i as f64 * 0.7).sin());
         state.on_price(&config.leg_a, 100.0 * (1.0 + jitter), config, trading, *ts);
         state.on_price(&config.leg_b, 100.0, config, trading, *ts);
@@ -65,7 +68,7 @@ fn feed_neutral(
 /// Execute one losing trade cycle:
 /// 1. Re-center rolling stats with neutral bars
 /// 2. Force entry with sharp drop
-/// 3. Hold at entry price for max_hold_bars → forced exit at ~0 gross → net = -12 bps (loss)
+/// 3. Hold at entry price for max_hold_bars → forced exit at ~0 gross → net = -cost_bps (loss)
 ///
 /// Returns true if the entry was allowed (not blocked by regime gate).
 fn execute_losing_trade(
@@ -88,8 +91,8 @@ fn execute_losing_trade(
 
     assert_eq!(state.position(), PairPosition::LongSpread);
 
-    // Hold at entry price → max_hold exit. A stays at 90, B at 100.
-    // Gross ≈ 0 (no price change), net = -12 bps (cost only).
+    // Hold at entry price → max_hold exit (3 bars). A stays at 90, B at 100.
+    // Gross ≈ 0 (no price change), net = -cost_bps (loss).
     for _ in 0..5 {
         state.on_price(&config.leg_a, 90.0, config, trading, *ts);
         let exit = state.on_price(&config.leg_b, 100.0, config, trading, *ts);
@@ -142,6 +145,19 @@ fn execute_stop_loss_trade(
     true
 }
 
+/// Attempt an entry (without re-centering) and return whether it was allowed.
+fn try_entry(
+    state: &mut PairState,
+    config: &PairConfig,
+    trading: &PairsTradingConfig,
+    ts: &mut i64,
+) -> bool {
+    state.on_price(&config.leg_a, 90.0, config, trading, *ts);
+    let intents = state.on_price(&config.leg_b, 100.0, config, trading, *ts);
+    *ts += 60_000;
+    !intents.is_empty()
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Test 1: Pause after 5 consecutive losing trades
 // ─────────────────────────────────────────────────────────────────────
@@ -159,19 +175,23 @@ fn regime_gate_pauses_after_five_losers() {
         assert!(entered, "trade {i}: entry should be allowed");
     }
 
-    // 6th entry should be blocked by regime gate
-    feed_neutral(&mut state, &config, &trading, &mut ts, 35);
-    state.on_price(&config.leg_a, 90.0, &config, &trading, ts);
-    let intents = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+    // Immediately try entry — should be blocked by regime gate.
+    // No re-centering: the paused flag was set on the 5th trade exit.
+    // Feed just 1 neutral bar so the gate check runs (needs both legs).
+    state.on_price(&config.leg_a, 100.0, &config, &trading, ts);
+    state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+    ts += 60_000;
+
+    let blocked = !try_entry(&mut state, &config, &trading, &mut ts);
     assert!(
-        intents.is_empty(),
+        blocked,
         "regime gate should block entry after 5 consecutive losers"
     );
     assert_eq!(state.position(), PairPosition::Flat);
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Test 2: Cooldown resume — entries resume after 500 bars
+// Test 2: Cooldown resume — entries resume after enough bars
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -186,24 +206,19 @@ fn regime_gate_resumes_after_cooldown() {
         execute_losing_trade(&mut state, &config, &trading, &mut ts);
     }
 
-    // Verify paused
-    feed_neutral(&mut state, &config, &trading, &mut ts, 35);
-    state.on_price(&config.leg_a, 90.0, &config, &trading, ts);
-    let blocked = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
-    assert!(blocked.is_empty(), "should be paused");
-    ts += 60_000;
-
-    // Feed 500+ bars to exhaust cooldown.
-    // Each call to on_price with both legs increments the pause counter.
-    feed_neutral(&mut state, &config, &trading, &mut ts, 500);
-
-    // After cooldown, entry should be allowed
-    state.on_price(&config.leg_a, 90.0, &config, &trading, ts);
-    let intents = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+    // Verify paused (without re-centering)
     assert!(
-        !intents.is_empty(),
-        "entries should resume after 500-bar cooldown"
+        !try_entry(&mut state, &config, &trading, &mut ts),
+        "should be paused"
     );
+
+    // Feed enough bars to exhaust cooldown (cooldown = max(3,5)*2 = 10).
+    // Then re-center with enough neutral bars to generate valid z-score.
+    feed_neutral(&mut state, &config, &trading, &mut ts, 35);
+
+    // After cooldown + re-centering, entry should be allowed
+    let entered = try_entry(&mut state, &config, &trading, &mut ts);
+    assert!(entered, "entries should resume after cooldown");
     assert_eq!(state.position(), PairPosition::LongSpread);
 }
 
@@ -218,60 +233,62 @@ fn regime_gate_repauses_after_resume() {
     let mut state = PairState::new();
     let mut ts: i64 = 1_000_000;
 
-    // Phase 1: 5 losers → pause
+    // Trigger first pause
     for _ in 0..5 {
         execute_losing_trade(&mut state, &config, &trading, &mut ts);
     }
 
-    // Phase 2: cooldown
-    feed_neutral(&mut state, &config, &trading, &mut ts, 550);
-
-    // Phase 3: After cooldown, first trade is allowed (gate lifted).
-    // But trade history still has old losses. If this trade also loses,
-    // the last 5 trades are all negative → immediate re-pause.
-    let entered = execute_losing_trade(&mut state, &config, &trading, &mut ts);
-    assert!(entered, "first post-cooldown trade should be allowed");
-
-    // Should be re-paused immediately (old losses + new loss = 6 consecutive)
+    // Cooldown: feed enough bars to resume
     feed_neutral(&mut state, &config, &trading, &mut ts, 35);
-    state.on_price(&config.leg_a, 90.0, &config, &trading, ts);
-    let intents = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+
+    // Resume — should be able to trade
+    let entered = try_entry(&mut state, &config, &trading, &mut ts);
+    assert!(entered, "should resume after cooldown");
+
+    // Close this position via max hold
+    for _ in 0..5 {
+        state.on_price(&config.leg_a, 90.0, &config, &trading, ts);
+        let exit = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+        ts += 60_000;
+        if !exit.is_empty() {
+            break;
+        }
+    }
+
+    // That was loss #6 in total, should re-pause (last 5 still all negative)
     assert!(
-        intents.is_empty(),
-        "regime gate should re-pause after losing post-cooldown"
+        !try_entry(&mut state, &config, &trading, &mut ts),
+        "should re-pause after losing trade post-resume"
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Test 4: Stop-loss trigger — 3 consecutive stop-outs → pause
+// Test 4: 3 consecutive stop losses pauses entries
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
 fn regime_gate_pauses_after_three_stop_losses() {
     let config = test_config();
-    let mut trading = easy_trading();
-    trading.stop_z = 3.0; // lower threshold to trigger on A=70 deviation
+    let trading = easy_trading();
     let mut state = PairState::new();
     let mut ts: i64 = 1_000_000;
 
     // Execute 3 stop-loss trades
     for i in 0..3 {
         let entered = execute_stop_loss_trade(&mut state, &config, &trading, &mut ts);
-        assert!(entered, "stop trade {i}: entry should be allowed");
+        assert!(entered, "stop-loss trade {i}: entry should be allowed");
     }
 
-    // 4th entry should be blocked
-    feed_neutral(&mut state, &config, &trading, &mut ts, 35);
-    state.on_price(&config.leg_a, 90.0, &config, &trading, ts);
-    let intents = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+    // Immediately try entry — should be blocked
+    let blocked = !try_entry(&mut state, &config, &trading, &mut ts);
     assert!(
-        intents.is_empty(),
-        "regime gate should block entry after 3 consecutive stop-losses"
+        blocked,
+        "regime gate should block entry after 3 consecutive stop losses"
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Test 5: Regime gate is per-pair (not global)
+// Test 5: Regime gate is per-pair (one pair paused, other unaffected)
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -283,6 +300,8 @@ fn regime_gate_is_per_pair() {
         alpha: 0.0,
         beta: 1.0,
         kappa: 0.0,
+        max_hold_bars: 0,
+        lookback_bars: 0,
     };
     let trading = easy_trading();
 
@@ -295,20 +314,20 @@ fn regime_gate_is_per_pair() {
         execute_losing_trade(&mut state_ab, &config_ab, &trading, &mut ts);
     }
 
-    // Warm up C/D (needs its own symbols)
+    // Warm up C/D independently
     feed_neutral(&mut state_cd, &config_cd, &trading, &mut ts, 35);
 
-    // A/B should be paused
-    feed_neutral(&mut state_ab, &config_ab, &trading, &mut ts, 35);
-    state_ab.on_price(&config_ab.leg_a, 90.0, &config_ab, &trading, ts);
-    let intents_ab = state_ab.on_price(&config_ab.leg_b, 100.0, &config_ab, &trading, ts);
-    assert!(intents_ab.is_empty(), "A/B should be paused");
-
-    // C/D should NOT be paused
-    state_cd.on_price(&config_cd.leg_a, 90.0, &config_cd, &trading, ts);
-    let intents_cd = state_cd.on_price(&config_cd.leg_b, 100.0, &config_cd, &trading, ts);
+    // A/B should be blocked
     assert!(
-        !intents_cd.is_empty(),
-        "C/D should NOT be affected by A/B's regime gate"
+        !try_entry(&mut state_ab, &config_ab, &trading, &mut ts),
+        "A/B should be paused"
+    );
+
+    // C/D should be allowed (separate state)
+    state_cd.on_price(&config_cd.leg_a, 90.0, &config_cd, &trading, ts);
+    let cd_entry = state_cd.on_price(&config_cd.leg_b, 100.0, &config_cd, &trading, ts);
+    assert!(
+        !cd_entry.is_empty(),
+        "C/D should not be affected by A/B regime gate"
     );
 }

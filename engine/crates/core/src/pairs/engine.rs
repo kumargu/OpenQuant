@@ -51,7 +51,13 @@ impl PairsEngine {
             notional_per_leg = %format_args!("{:.0}", trading_config.notional_per_leg),
             "PairsEngine initialized"
         );
-        let pairs = configs.into_iter().map(|c| (c, PairState::new())).collect();
+        let pairs = configs
+            .into_iter()
+            .map(|c| {
+                let state = PairState::for_pair(&c, &trading_config);
+                (c, state)
+            })
+            .collect();
 
         Self {
             pairs,
@@ -98,7 +104,13 @@ impl PairsEngine {
             notional_per_leg = %format_args!("{:.0}", trading_config.notional_per_leg),
             "PairsEngine initialized"
         );
-        let pairs = configs.into_iter().map(|c| (c, PairState::new())).collect();
+        let pairs = configs
+            .into_iter()
+            .map(|c| {
+                let state = PairState::for_pair(&c, &trading_config);
+                (c, state)
+            })
+            .collect();
 
         Self {
             pairs,
@@ -150,6 +162,25 @@ impl PairsEngine {
                     config.alpha = new_cfg.alpha;
                     config.beta = new_cfg.beta;
                 }
+                // Refresh lookback window if half-life changed (only when flat —
+                // changing window mid-trade would invalidate exit context).
+                if new_cfg.lookback_bars != config.lookback_bars
+                    && state.position() == PairPosition::Flat
+                {
+                    let new_window = if new_cfg.lookback_bars > 0 {
+                        new_cfg.lookback_bars
+                    } else {
+                        self.trading_config.lookback
+                    };
+                    info!(
+                        pair = pair_id.as_str(),
+                        old_window = config.lookback_bars,
+                        new_window,
+                        "Refreshed spread window from active_pairs.json"
+                    );
+                    config.lookback_bars = new_cfg.lookback_bars;
+                    *state = PairState::with_window(new_window);
+                }
             } else if state.position() != PairPosition::Flat {
                 info!(
                     pair = pair_id.as_str(),
@@ -187,7 +218,10 @@ impl PairsEngine {
                     beta = format!("{:.4}", config.beta).as_str(),
                     "Added new pair from active_pairs.json"
                 );
-                self.pairs.push((config, PairState::new()));
+                self.pairs.push((
+                    config.clone(),
+                    PairState::for_pair(&config, &self.trading_config),
+                ));
             }
         }
 
@@ -232,7 +266,10 @@ impl PairsEngine {
         }
 
         if !matched {
-            debug!(symbol, "pairs: bar for unknown symbol — not a leg in any pair");
+            debug!(
+                symbol,
+                "pairs: bar for unknown symbol — not a leg in any pair"
+            );
         }
 
         all_intents
@@ -253,7 +290,10 @@ impl PairsEngine {
                 flattened += 1;
             }
         }
-        info!(flattened, "pairs engine: flattened all positions (warmup reset)");
+        info!(
+            flattened,
+            "pairs engine: flattened all positions (warmup reset)"
+        );
     }
 
     /// Number of configured pairs.
@@ -296,6 +336,7 @@ mod tests {
             beta: 0.37,
             kappa: 0.0,
             max_hold_bars: 0,
+            lookback_bars: 0,
         }
     }
 
@@ -307,6 +348,7 @@ mod tests {
             beta: 1.39,
             kappa: 0.0,
             max_hold_bars: 0,
+            lookback_bars: 0,
         }
     }
 

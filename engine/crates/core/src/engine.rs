@@ -103,7 +103,7 @@ pub struct SingleEngineConfig {
     pub metrics_enabled: bool,
     /// Warmup period in bars. Default: 64 (for 1-min bars).
     /// For wider bars: 5-min → 32, 15-min → 32.
-    /// Minimum 32 (covers RollingStats<32>).
+    /// Minimum 32 (covers the longest default rolling window).
     pub warmup_bars: usize,
     /// Timezone offset in hours (e.g., -5 for US Eastern). Used for VWAP session reset.
     pub timezone_offset_hours: i32,

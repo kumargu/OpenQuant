@@ -15,6 +15,7 @@ const ALPACA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
 
 /// A bar received from the Alpaca stream.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct StreamBar {
     pub symbol: String,
     pub timestamp: i64, // millis since epoch
@@ -105,7 +106,8 @@ async fn run_stream(
         "key": api_key,
         "secret": api_secret,
     });
-    write.send(Message::Text(auth.to_string().into()))
+    write
+        .send(Message::Text(auth.to_string()))
         .await
         .map_err(|e| format!("auth send failed: {e}"))?;
 
@@ -124,7 +126,8 @@ async fn run_stream(
         "action": "subscribe",
         "bars": symbols,
     });
-    write.send(Message::Text(subscribe.to_string().into()))
+    write
+        .send(Message::Text(subscribe.to_string()))
         .await
         .map_err(|e| format!("subscribe send failed: {e}"))?;
 

@@ -19,6 +19,7 @@ pub struct AlpacaClient {
 
 /// A single OHLCV bar from Alpaca.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AlpacaBar {
     pub t: String,
     pub o: f64,
@@ -29,6 +30,7 @@ pub struct AlpacaBar {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AlpacaBarsResponse {
     pub bars: HashMap<String, Vec<AlpacaBar>>,
     #[serde(default)]
@@ -36,6 +38,7 @@ pub struct AlpacaBarsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AlpacaPosition {
     pub symbol: String,
     pub qty: String,
@@ -45,6 +48,7 @@ pub struct AlpacaPosition {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AlpacaOrder {
     pub id: String,
     pub status: String,
@@ -84,7 +88,8 @@ impl AlpacaClient {
 
         for chunk in symbols.chunks(50) {
             let symbols_param = chunk.join(",");
-            let response = self.http
+            let response = self
+                .http
                 .get(DATA_URL)
                 .header("APCA-API-KEY-ID", &self.api_key)
                 .header("APCA-API-SECRET-KEY", &self.api_secret)
@@ -121,7 +126,11 @@ impl AlpacaClient {
         }
 
         all_bars.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
-        info!(symbols = symbols.len(), bars = all_bars.len(), "fetched daily bars");
+        info!(
+            symbols = symbols.len(),
+            bars = all_bars.len(),
+            "fetched daily bars"
+        );
         Ok(all_bars)
     }
 
@@ -142,7 +151,8 @@ impl AlpacaClient {
 
         info!(symbol, qty, side, "placing order");
 
-        let response = self.http
+        let response = self
+            .http
             .post(format!("{TRADING_URL}/orders"))
             .header("APCA-API-KEY-ID", &self.api_key)
             .header("APCA-API-SECRET-KEY", &self.api_secret)
@@ -163,13 +173,21 @@ impl AlpacaClient {
             .await
             .map_err(|e| format!("order response parse failed: {e}"))?;
 
-        info!(symbol, side, id = order.id.as_str(), status = order.status.as_str(), "order placed");
+        info!(
+            symbol,
+            side,
+            id = order.id.as_str(),
+            status = order.status.as_str(),
+            "order placed"
+        );
         Ok(order)
     }
 
     /// Get all open positions.
+    #[allow(dead_code)]
     pub async fn get_positions(&self) -> Result<Vec<AlpacaPosition>, String> {
-        let response = self.http
+        let response = self
+            .http
             .get(format!("{TRADING_URL}/positions"))
             .header("APCA-API-KEY-ID", &self.api_key)
             .header("APCA-API-SECRET-KEY", &self.api_secret)
@@ -183,13 +201,18 @@ impl AlpacaClient {
             return Err(format!("positions API error {status}: {body}"));
         }
 
-        response.json().await.map_err(|e| format!("positions parse failed: {e}"))
+        response
+            .json()
+            .await
+            .map_err(|e| format!("positions parse failed: {e}"))
     }
 
     /// Close a position by symbol.
+    #[allow(dead_code)]
     pub async fn close_position(&self, symbol: &str) -> Result<(), String> {
         info!(symbol, "closing position");
-        let response = self.http
+        let response = self
+            .http
             .delete(format!("{TRADING_URL}/positions/{symbol}"))
             .header("APCA-API-KEY-ID", &self.api_key)
             .header("APCA-API-SECRET-KEY", &self.api_secret)
