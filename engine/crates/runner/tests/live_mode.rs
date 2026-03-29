@@ -123,6 +123,7 @@ fn spawn_live(config_path: &std::path::Path, dir: &std::path::Path) -> std::proc
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // requires ALPACA_API_KEY in .env — cannot run in CI
 fn live_basic_lifecycle() {
     let (dir, config_path) = setup_live_env();
     let mut child = spawn_live(&config_path, dir.path());
@@ -177,6 +178,7 @@ fn live_basic_lifecycle() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // requires ALPACA_API_KEY in .env — cannot run in CI
 fn live_warmup_no_intents() {
     let (dir, config_path) = setup_live_env();
     let mut child = spawn_live(&config_path, dir.path());
@@ -215,6 +217,7 @@ fn live_warmup_no_intents() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // requires ALPACA_API_KEY in .env — cannot run in CI
 fn live_entry_signal() {
     let (dir, config_path) = setup_live_env();
     let mut child = spawn_live(&config_path, dir.path());
@@ -268,6 +271,7 @@ fn live_entry_signal() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // requires ALPACA_API_KEY in .env — cannot run in CI
 fn live_entry_then_exit() {
     let (dir, config_path) = setup_live_env();
     let mut child = spawn_live(&config_path, dir.path());
@@ -332,6 +336,7 @@ fn live_entry_then_exit() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // requires ALPACA_API_KEY in .env — cannot run in CI
 fn live_invalid_json_skipped() {
     let (dir, config_path) = setup_live_env();
     let mut child = spawn_live(&config_path, dir.path());
@@ -385,6 +390,7 @@ fn live_invalid_json_skipped() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // requires ALPACA_API_KEY in .env — cannot run in CI
 fn live_empty_stdin_clean_shutdown() {
     let (dir, config_path) = setup_live_env();
     let mut child = spawn_live(&config_path, dir.path());
@@ -412,6 +418,7 @@ fn live_empty_stdin_clean_shutdown() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore] // requires ALPACA_API_KEY in .env — cannot run in CI
 fn live_intent_json_schema() {
     let (dir, config_path) = setup_live_env();
     let mut child = spawn_live(&config_path, dir.path());
