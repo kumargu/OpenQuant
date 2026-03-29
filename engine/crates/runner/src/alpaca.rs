@@ -8,14 +8,13 @@ use tracing::{error, info};
 
 const DATA_URL: &str = "https://data.alpaca.markets/v2/stocks/bars";
 
-/// How order intents are executed. Controls the Alpaca API endpoint.
-#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
+/// Alpaca execution mode — controls the trading API endpoint.
+/// Replay mode never calls place_order, so it doesn't need a variant here.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExecutionMode {
-    /// Log intents only — no orders submitted. For replay/testing.
-    Noop,
-    /// Alpaca paper trading API.
+    /// paper-api.alpaca.markets
     Paper,
-    /// Alpaca live trading API (real money).
+    /// api.alpaca.markets (real money)
     Live,
 }
 
@@ -24,7 +23,6 @@ impl ExecutionMode {
         match self {
             Self::Paper => "https://paper-api.alpaca.markets/v2",
             Self::Live => "https://api.alpaca.markets/v2",
-            Self::Noop => unreachable!("noop mode does not call Alpaca trading API"),
         }
     }
 }
@@ -153,8 +151,8 @@ impl AlpacaClient {
         start: &str, // "2026-03-01"
         end: &str,   // "2026-03-28"
     ) -> Result<Vec<(String, i64, f64)>, String> {
+        const MINUTE_BAR_DURATION_MS: i64 = 60_000;
         let mut all_bars = Vec::new();
-        let timeframe_offset_ms: i64 = 60_000; // 1 minute bar → close = open + 60s
 
         for chunk in symbols.chunks(50) {
             let symbols_param = chunk.join(",");
@@ -200,7 +198,7 @@ impl AlpacaClient {
                             // Add timeframe duration: REST returns bar OPEN time,
                             // but live WebSocket emits after bar CLOSE. The engine
                             // expects close-time semantics.
-                            let close_ts = dt.timestamp_millis() + timeframe_offset_ms;
+                            let close_ts = dt.timestamp_millis() + MINUTE_BAR_DURATION_MS;
                             all_bars.push((symbol.clone(), close_ts, bar.c));
                         }
                     }
