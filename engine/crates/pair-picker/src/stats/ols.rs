@@ -94,6 +94,95 @@ pub fn ols_simple(x: &[f64], y: &[f64]) -> Option<OlsResult> {
     })
 }
 
+/// Total Least Squares (TLS) beta for symmetric hedge ratio estimation.
+///
+/// Unlike OLS which minimizes vertical distance (asymmetric — depends on which
+/// variable is y), TLS minimizes perpendicular distance and satisfies:
+///   `tls_beta(x, y) == 1.0 / tls_beta(y, x)`
+///
+/// Formula (Teetor 2011, "Better Hedge Ratios for Spread Trading"):
+/// ```text
+///   beta_TLS = (var_y - var_x + sqrt((var_y - var_x)² + 4·cov_xy²)) / (2·cov_xy)
+/// ```
+///
+/// Returns the full `OlsResult` with TLS beta, OLS alpha recomputed from the
+/// TLS beta, and OLS-style R²/residuals (for compatibility with downstream checks).
+///
+/// Returns `None` if fewer than 3 observations or zero covariance.
+pub fn tls_simple(x: &[f64], y: &[f64]) -> Option<OlsResult> {
+    let n = x.len().min(y.len());
+    if n < 3 {
+        return None;
+    }
+
+    let n_f = n as f64;
+    let mean_x: f64 = x[..n].iter().sum::<f64>() / n_f;
+    let mean_y: f64 = y[..n].iter().sum::<f64>() / n_f;
+
+    let mut var_x = 0.0;
+    let mut var_y = 0.0;
+    let mut cov_xy = 0.0;
+    for i in 0..n {
+        let dx = x[i] - mean_x;
+        let dy = y[i] - mean_y;
+        var_x += dx * dx;
+        var_y += dy * dy;
+        cov_xy += dx * dy;
+    }
+    var_x /= n_f;
+    var_y /= n_f;
+    cov_xy /= n_f;
+
+    if cov_xy.abs() < 1e-15 {
+        return None; // zero covariance — no linear relationship
+    }
+
+    // TLS beta: (var_y - var_x + sqrt((var_y - var_x)² + 4·cov²)) / (2·cov)
+    let diff = var_y - var_x;
+    let discriminant = diff * diff + 4.0 * cov_xy * cov_xy;
+    let beta = (diff + discriminant.sqrt()) / (2.0 * cov_xy);
+
+    // Recompute alpha from TLS beta: alpha = mean_y - beta * mean_x
+    let alpha = mean_y - beta * mean_x;
+
+    // Compute residuals and R² using OLS-style formulas for downstream compat
+    let mut residuals = Vec::with_capacity(n);
+    let mut ss_res = 0.0;
+    let mut ss_tot = 0.0;
+    for i in 0..n {
+        let y_hat = alpha + beta * x[i];
+        let e = y[i] - y_hat;
+        residuals.push(e);
+        ss_res += e * e;
+        let dy = y[i] - mean_y;
+        ss_tot += dy * dy;
+    }
+
+    let r_squared = if ss_tot > 1e-15 {
+        1.0 - ss_res / ss_tot
+    } else {
+        0.0
+    };
+
+    // Standard error approximation (same formula as OLS for simplicity)
+    let ss_xx: f64 = x[..n].iter().map(|xi| (xi - mean_x).powi(2)).sum();
+    let s_squared = if n > 2 { ss_res / (n - 2) as f64 } else { 0.0 };
+    let beta_std_err = if ss_xx > 1e-15 {
+        (s_squared / ss_xx).sqrt()
+    } else {
+        0.0
+    };
+
+    Some(OlsResult {
+        beta,
+        alpha,
+        r_squared,
+        residuals,
+        beta_std_err,
+        n,
+    })
+}
+
 /// Run multiple OLS regression with a design matrix X (including intercept column)
 /// and dependent variable y. Used by ADF test which needs lagged differences.
 ///
@@ -358,5 +447,67 @@ mod tests {
         let result = ols_simple(&x, &y).unwrap();
         // Standard error should be small for a tight fit
         assert!(result.beta_std_err < 0.1, "se={}", result.beta_std_err);
+    }
+
+    // ── TLS tests ──
+
+    #[test]
+    fn test_tls_perfect_fit() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y: Vec<f64> = x.iter().map(|xi| 2.0 * xi + 1.0).collect();
+        let result = tls_simple(&x, &y).unwrap();
+        assert!((result.beta - 2.0).abs() < 0.01, "beta={}", result.beta);
+        assert!((result.alpha - 1.0).abs() < 0.01, "alpha={}", result.alpha);
+    }
+
+    /// Core property: TLS beta is symmetric — swapping x and y gives the inverse.
+    /// OLS does NOT have this property (ols_beta(x,y) != 1/ols_beta(y,x)).
+    #[test]
+    fn test_tls_symmetry_property() {
+        // Realistic log-prices for two correlated assets
+        let log_a = vec![
+            4.60, 4.62, 4.58, 4.65, 4.63, 4.67, 4.64, 4.70, 4.68, 4.72, 4.69, 4.75, 4.73, 4.76,
+            4.74, 4.78, 4.77, 4.80, 4.79, 4.82,
+        ];
+        let log_b = vec![
+            3.20, 3.22, 3.19, 3.24, 3.22, 3.25, 3.23, 3.28, 3.27, 3.30, 3.28, 3.32, 3.31, 3.34,
+            3.33, 3.36, 3.35, 3.38, 3.37, 3.39,
+        ];
+
+        let forward = tls_simple(&log_b, &log_a).unwrap();
+        let reverse = tls_simple(&log_a, &log_b).unwrap();
+
+        // TLS symmetry: beta(b→a) * beta(a→b) == 1
+        let product = forward.beta * reverse.beta;
+        assert!(
+            (product - 1.0).abs() < 1e-10,
+            "TLS symmetry violated: beta_fwd={} * beta_rev={} = {} (should be 1.0)",
+            forward.beta,
+            reverse.beta,
+            product
+        );
+
+        // Verify OLS does NOT have this property (motivation for TLS)
+        let ols_fwd = ols_simple(&log_b, &log_a).unwrap();
+        let ols_rev = ols_simple(&log_a, &log_b).unwrap();
+        let ols_product = ols_fwd.beta * ols_rev.beta;
+        assert!(
+            (ols_product - 1.0).abs() > 0.001,
+            "OLS should NOT be symmetric but got product={ols_product}"
+        );
+    }
+
+    #[test]
+    fn test_tls_insufficient_data() {
+        assert!(tls_simple(&[1.0], &[2.0]).is_none());
+        assert!(tls_simple(&[1.0, 2.0], &[2.0, 3.0]).is_none());
+    }
+
+    #[test]
+    fn test_tls_zero_covariance() {
+        // x constant → zero covariance
+        let x = vec![5.0, 5.0, 5.0, 5.0, 5.0];
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        assert!(tls_simple(&x, &y).is_none());
     }
 }

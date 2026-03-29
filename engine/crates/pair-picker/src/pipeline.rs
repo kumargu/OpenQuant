@@ -17,7 +17,7 @@ use crate::scorer::compute_score;
 use crate::stats::adf::adf_test;
 use crate::stats::beta_stability::check_beta_stability;
 use crate::stats::halflife::{estimate_half_life, is_half_life_valid};
-use crate::stats::ols::ols_simple;
+use crate::stats::ols::tls_simple;
 use crate::types::{ActivePairsFile, PairCandidate, PairCandidatesFile, ValidationResult};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -146,13 +146,17 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     let log_a: Vec<f64> = prices_a.iter().map(|p| p.ln()).collect();
     let log_b: Vec<f64> = prices_b.iter().map(|p| p.ln()).collect();
 
-    // Step 3: OLS regression → beta
-    let ols = match ols_simple(&log_b, &log_a) {
+    // Step 3: TLS regression → beta (symmetric hedge ratio)
+    // TLS minimizes perpendicular distance, so beta is the same regardless of
+    // which leg is treated as x or y. OLS would give a different beta depending
+    // on leg ordering — a bug for pairs where ordering is arbitrary (alphabetical).
+    // Ref: Teetor (2011), "Better Hedge Ratios for Spread Trading".
+    let ols = match tls_simple(&log_b, &log_a) {
         Some(r) => r,
         None => {
             result
                 .rejection_reasons
-                .push("OLS regression failed".into());
+                .push("TLS regression failed".into());
             return result;
         }
     };
@@ -436,7 +440,7 @@ pub fn refresh_beta(
         let log_a: Vec<f64> = pa.iter().map(|p| p.ln()).collect();
         let log_b: Vec<f64> = pb.iter().map(|p| p.ln()).collect();
 
-        if let Some(ols) = ols_simple(&log_b, &log_a) {
+        if let Some(ols) = tls_simple(&log_b, &log_a) {
             let old_beta = pair.beta;
             let old_alpha = pair.alpha;
             pair.alpha = ols.alpha;
