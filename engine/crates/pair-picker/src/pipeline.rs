@@ -328,6 +328,11 @@ pub fn validate_candidates(
                     r.score,
                     r.half_life.unwrap_or(0.0),
                 );
+            } else {
+                warn!(
+                    "REJECT: {}/{} — {:?}",
+                    r.leg_a, r.leg_b, r.rejection_reasons
+                );
             }
             r
         })

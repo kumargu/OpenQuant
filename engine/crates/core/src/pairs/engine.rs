@@ -445,8 +445,13 @@ mod tests {
         );
         std::fs::write(&active_path, json).unwrap();
 
-        let engine =
-            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
+        let engine = PairsEngine::from_active_pairs(
+            &active_path,
+            &history_path,
+            vec![],
+            default_trading(),
+            true,
+        );
         assert_eq!(engine.pair_count(), 1);
         assert_eq!(engine.positions()[0].0.leg_a, "GS");
         assert!((engine.positions()[0].0.beta - 1.23).abs() < 0.01);
@@ -463,6 +468,7 @@ mod tests {
             &history_path,
             vec![gld_slv_config()],
             default_trading(),
+            true,
         );
         assert_eq!(engine.pair_count(), 1);
         assert_eq!(engine.positions()[0].0.leg_a, "GLD");
@@ -555,8 +561,13 @@ mod tests {
         );
         std::fs::write(&active_path, json).unwrap();
 
-        let engine =
-            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
+        let engine = PairsEngine::from_active_pairs(
+            &active_path,
+            &history_path,
+            vec![],
+            default_trading(),
+            true,
+        );
         // Verify alpha was loaded
         assert!(
             (engine.positions()[0].0.alpha - 0.5).abs() < 0.01,
@@ -628,8 +639,13 @@ mod tests {
         );
         std::fs::write(&active_path, &json_v1).unwrap();
 
-        let mut engine =
-            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
+        let mut engine = PairsEngine::from_active_pairs(
+            &active_path,
+            &history_path,
+            vec![],
+            default_trading(),
+            true,
+        );
         assert!((engine.positions()[0].0.beta - 1.0).abs() < 0.01);
 
         // Reload with updated beta=1.5

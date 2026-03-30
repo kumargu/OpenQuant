@@ -507,8 +507,11 @@ async fn run_replay_bars(
                         )
                         .await
                     {
-                        // Feed daily bars as warmup — use adjusted timestamps
-                        // Build (symbol, ts, close) tuples for on_bar
+                        // Feed daily bars as warmup — build approximate timestamps.
+                        // Timestamps are day - N indexed, not calendar-accurate,
+                        // but this is safe: rolling stats only use the close price
+                        // and the is_daily_close gate (et_minutes >= 950). Positions
+                        // are flattened after, so approximate dates don't affect trading.
                         let midnight_to_close_ms: i64 = 16 * 3600 * 1000;
                         let mut warmup_tuples: Vec<(String, i64, f64)> = Vec::new();
                         for (sym, prices) in &warmup_bars {
@@ -530,6 +533,10 @@ async fn run_replay_bars(
                         for (sym, ts, close) in &warmup_tuples {
                             let _ = engine.on_bar(sym, *ts, *close);
                         }
+                        // flatten_all (not flatten_and_reset_stats) is correct:
+                        // daily bars fed rolling stats at daily-close frequency,
+                        // and the two-clock architecture prevents minute bars from
+                        // pushing into rolling stats. No timeframe mismatch.
                         engine.flatten_all();
                         info!(warmup_bars = warmup_tuples.len(), "re-warmup complete");
                     }
