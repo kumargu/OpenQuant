@@ -1222,6 +1222,7 @@ dependencies = [
  "clap",
  "futures-util",
  "openquant-core",
+ "pair-picker",
  "reqwest",
  "serde",
  "serde_json",
