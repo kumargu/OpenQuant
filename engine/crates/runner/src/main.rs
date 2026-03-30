@@ -276,27 +276,36 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
     // has ts at ~March 23 20:00 UTC. Cutoff at start_date 12:00 UTC ensures:
     //   March 22 bar (ts ~22 20:00 UTC) < March 23 12:00 UTC → included ✓
     //   March 23 bar (ts ~23 20:00 UTC) > March 23 12:00 UTC → excluded ✓
-    let warmup_cutoff_ms: Option<i64> = match &run_mode {
+    // Exclude today's daily bar from warmup so the first live bar triggers is_new_day.
+    // For replay: exclude bars on or after the replay start date.
+    // For live/paper: exclude today's bar (use today at noon UTC as cutoff).
+    let warmup_cutoff_ms: i64 = match &run_mode {
         RunMode::Replay { start, .. } => {
             let d =
                 chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").expect("invalid start date");
-            Some(
-                d.and_hms_opt(12, 0, 0)
-                    .unwrap()
-                    .and_utc()
-                    .timestamp_millis(),
-            )
+            d.and_hms_opt(12, 0, 0)
+                .unwrap()
+                .and_utc()
+                .timestamp_millis()
         }
-        _ => None,
+        RunMode::Stream(_) => {
+            // Today at noon UTC — excludes today's adjusted daily bar (~20:00 UTC)
+            // but includes yesterday's (~yesterday 20:00 UTC).
+            chrono::Utc::now()
+                .date_naive()
+                .and_hms_opt(12, 0, 0)
+                .unwrap()
+                .and_utc()
+                .timestamp_millis()
+        }
     };
 
     match alpaca.fetch_daily_bars(&symbols, lookback + 5).await {
         Ok(bars) => {
-            let bars: Vec<_> = if let Some(cutoff) = warmup_cutoff_ms {
-                bars.into_iter().filter(|(_, ts, _)| *ts < cutoff).collect()
-            } else {
-                bars
-            };
+            let bars: Vec<_> = bars
+                .into_iter()
+                .filter(|(_, ts, _)| *ts < warmup_cutoff_ms)
+                .collect();
             info!(bars = bars.len(), "warmup: feeding historical bars");
             for (symbol, timestamp, close) in &bars {
                 let _intents = pairs_engine.on_bar(symbol, *timestamp, *close);

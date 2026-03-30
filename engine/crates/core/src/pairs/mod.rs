@@ -950,9 +950,12 @@ impl PairState {
 
     /// Force flat — reset position without emitting orders.
     /// Used after warmup to clear phantom positions while keeping rolling stats warm.
+    /// Resets last_bar_day so the first live bar triggers is_new_day,
+    /// allowing entry evaluation immediately (not waiting until next calendar day).
     pub fn force_flat(&mut self) {
         self.position = PairPosition::Flat;
         self.exit_context = None;
+        self.last_bar_day = 0;
     }
 
     /// Reset rolling spread stats (mean, variance, count).
