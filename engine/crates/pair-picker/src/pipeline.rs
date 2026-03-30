@@ -240,12 +240,8 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
             result.beta_stable = bs.is_stable;
             if !bs.is_stable {
                 let mut reasons = Vec::new();
-                if bs.cv >= crate::stats::beta_stability::MAX_BETA_CV {
-                    reasons.push(format!(
-                        "Beta CV={:.3} >= {:.2}",
-                        bs.cv,
-                        crate::stats::beta_stability::MAX_BETA_CV
-                    ));
+                if bs.cv >= 0.20 {
+                    reasons.push(format!("Beta CV={:.3} >= 0.20", bs.cv));
                 }
                 if bs.structural_break {
                     reasons.push(format!(
@@ -299,16 +295,16 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         result.structural_break,
     );
 
-    // Pass criteria: cointegrated + valid half-life + adequate R²
-    // Structural break is now a SCORE penalty, not a hard gate (issue #225):
-    //   - Clegg (2014): cointegration is non-persistent; breaks are the norm
-    //   - Clegg & Krauss (2018): partial cointegration outperforms classical
-    //   - A break in the formation window may have already healed
-    //   - compute_score() already penalizes structural_break via beta_stability_score()
-    // Beta CV is also a score penalty (handled by compute_score).
+    // Pass criteria: cointegrated + valid half-life + no structural break + adequate R²
+    // Beta CV is a SCORE penalty (handled by compute_score), not a hard gate.
+    // Structural break remains a hard gate — it indicates a genuinely broken relationship.
+    // See research issue #202 and Principal Engineer review for justification.
     let r_squared_ok = result.beta_r_squared.unwrap_or(0.0) >= MIN_R_SQUARED;
-    result.passed =
-        result.is_cointegrated && result.half_life_valid && r_squared_ok && !result.etf_excluded;
+    result.passed = result.is_cointegrated
+        && result.half_life_valid
+        && !result.structural_break
+        && r_squared_ok
+        && !result.etf_excluded;
 
     result
 }
