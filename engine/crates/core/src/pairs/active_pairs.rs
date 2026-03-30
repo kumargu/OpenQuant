@@ -244,7 +244,7 @@ mod tests {
         let path = tmp.path().join("active_pairs.json");
         fs::write(&path, sample_active_pairs_json()).unwrap();
 
-        let (file, configs) = load_active_pairs(&path).unwrap();
+        let (file, configs) = load_active_pairs(&path, true).unwrap();
         assert_eq!(file.pairs.len(), 2);
         assert_eq!(configs.len(), 2);
         assert_eq!(configs[0].leg_a, "GS");
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_load_missing_file() {
-        let result = load_active_pairs(Path::new("/nonexistent/active_pairs.json"));
+        let result = load_active_pairs(Path::new("/nonexistent/active_pairs.json"), false);
         assert!(result.is_none());
     }
 
@@ -270,7 +270,7 @@ mod tests {
 }"#;
         fs::write(&path, json).unwrap();
 
-        let result = load_active_pairs(&path);
+        let result = load_active_pairs(&path, false);
         assert!(result.is_none(), "Stale file should be rejected");
     }
 
@@ -280,7 +280,7 @@ mod tests {
         let path = tmp.path().join("active_pairs.json");
         fs::write(&path, "not json").unwrap();
 
-        let result = load_active_pairs(&path);
+        let result = load_active_pairs(&path, false);
         assert!(result.is_none());
     }
 

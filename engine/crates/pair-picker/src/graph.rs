@@ -130,6 +130,19 @@ impl RelationshipGraph {
         self.edge_info.keys().cloned().collect()
     }
 
+    /// Generate PairCandidate for every edge in the graph.
+    /// Used when the runner calls pair-picker as a library (no candidates JSON needed).
+    pub fn to_candidates(&self) -> Vec<crate::types::PairCandidate> {
+        self.edge_info
+            .values()
+            .map(|e| crate::types::PairCandidate {
+                leg_a: e.a.clone(),
+                leg_b: e.b.clone(),
+                economic_rationale: format!("{} {} {}", e.sector, e.edge_type, e.note),
+            })
+            .collect()
+    }
+
     /// Filter a list of candidate pairs to only graph-connected ones.
     pub fn filter_connected(&self, pairs: &[(String, String)]) -> Vec<(String, String)> {
         pairs

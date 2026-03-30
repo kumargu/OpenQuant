@@ -85,6 +85,79 @@ impl AlpacaClient {
     }
 
     /// Fetch daily bars for a list of symbols, last N days.
+    /// Fetch daily bars for explicit date range.
+    /// Used by pair-picker in replay mode to avoid look-ahead bias.
+    /// Returns (symbol, close_price) per bar — no timestamp adjustment (raw prices for stats).
+    pub async fn fetch_daily_bars_range(
+        &self,
+        symbols: &[String],
+        start: &str, // "2025-09-01"
+        end: &str,   // "2026-01-02"
+    ) -> Result<HashMap<String, Vec<f64>>, String> {
+        let mut by_symbol: HashMap<String, Vec<(i64, f64)>> = HashMap::new();
+
+        for chunk in symbols.chunks(50) {
+            let symbols_param = chunk.join(",");
+            let response = self
+                .http
+                .get(DATA_URL)
+                .header("APCA-API-KEY-ID", &self.api_key)
+                .header("APCA-API-SECRET-KEY", &self.api_secret)
+                .query(&[
+                    ("symbols", symbols_param.as_str()),
+                    ("timeframe", "1Day"),
+                    ("start", start),
+                    ("end", end),
+                    ("limit", "10000"),
+                    ("feed", "iex"),
+                ])
+                .send()
+                .await
+                .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(format!("Alpaca data API error {status}: {body}"));
+            }
+
+            let data: AlpacaBarsResponse = response
+                .json()
+                .await
+                .map_err(|e| format!("JSON parse failed: {e}"))?;
+
+            for (symbol, bars) in &data.bars {
+                for bar in bars {
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
+                        by_symbol
+                            .entry(symbol.clone())
+                            .or_default()
+                            .push((dt.timestamp_millis(), bar.c));
+                    }
+                }
+            }
+        }
+
+        // Sort each symbol's bars by timestamp, return just close prices
+        let result: HashMap<String, Vec<f64>> = by_symbol
+            .into_iter()
+            .map(|(sym, mut bars)| {
+                bars.sort_by_key(|(ts, _)| *ts);
+                let prices: Vec<f64> = bars.into_iter().map(|(_, c)| c).collect();
+                (sym, prices)
+            })
+            .collect();
+
+        info!(
+            symbols = result.len(),
+            bars = result.values().map(|v| v.len()).sum::<usize>(),
+            start,
+            end,
+            "fetched daily bars range for pair-picker"
+        );
+        Ok(result)
+    }
+
     pub async fn fetch_daily_bars(
         &self,
         symbols: &[String],

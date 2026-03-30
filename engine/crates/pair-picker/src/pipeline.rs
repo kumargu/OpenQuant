@@ -18,7 +18,9 @@ use crate::stats::adf::adf_test;
 use crate::stats::beta_stability::check_beta_stability;
 use crate::stats::halflife::{estimate_half_life, is_half_life_valid};
 use crate::stats::ols::tls_simple;
-use crate::types::{ActivePairsFile, PairCandidate, PairCandidatesFile, ValidationResult};
+use crate::types::{
+    ActivePair, ActivePairsFile, PairCandidate, PairCandidatesFile, ValidationResult,
+};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::fs;
@@ -305,6 +307,44 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         && !result.etf_excluded;
 
     result
+}
+
+/// Validate candidates in memory — no file I/O.
+/// Returns passing pairs as ActivePair vec, sorted by score descending.
+/// Used when the runner calls pair-picker as a library.
+pub fn validate_candidates(
+    candidates: &[PairCandidate],
+    provider: &dyn PriceProvider,
+) -> Vec<ActivePair> {
+    let mut results: Vec<ValidationResult> = candidates
+        .iter()
+        .map(|c| {
+            let r = validate_pair(c, provider);
+            if r.passed {
+                info!(
+                    "PASS: {}/{} — score={:.3}, hl={:.1}d",
+                    r.leg_a,
+                    r.leg_b,
+                    r.score,
+                    r.half_life.unwrap_or(0.0),
+                );
+            } else {
+                warn!(
+                    "REJECT: {}/{} — {:?}",
+                    r.leg_a, r.leg_b, r.rejection_reasons
+                );
+            }
+            r
+        })
+        .collect();
+
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    results.iter().filter_map(|r| r.to_active_pair()).collect()
 }
 
 /// Run the full pipeline: read candidates, validate, write results.

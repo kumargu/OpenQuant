@@ -38,6 +38,20 @@ pub struct PairsEngine {
 }
 
 impl PairsEngine {
+    /// Create from pre-built PairConfig list with trade history.
+    /// Used when the runner generates pairs via pair-picker library (no JSON file).
+    pub fn from_configs(
+        configs: Vec<PairConfig>,
+        history_path: &std::path::Path,
+        trading_config: PairsTradingConfig,
+    ) -> Self {
+        let trade_history = PairTradingHistory::load(history_path);
+        let mut engine = Self::new(configs, trading_config);
+        engine.trade_history = trade_history;
+        engine.history_path = Some(history_path.to_path_buf());
+        engine
+    }
+
     /// Create a new pairs engine from a list of pair configurations.
     pub fn new(configs: Vec<PairConfig>, trading_config: PairsTradingConfig) -> Self {
         info!(
@@ -431,8 +445,13 @@ mod tests {
         );
         std::fs::write(&active_path, json).unwrap();
 
-        let engine =
-            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
+        let engine = PairsEngine::from_active_pairs(
+            &active_path,
+            &history_path,
+            vec![],
+            default_trading(),
+            true,
+        );
         assert_eq!(engine.pair_count(), 1);
         assert_eq!(engine.positions()[0].0.leg_a, "GS");
         assert!((engine.positions()[0].0.beta - 1.23).abs() < 0.01);
@@ -449,6 +468,7 @@ mod tests {
             &history_path,
             vec![gld_slv_config()],
             default_trading(),
+            true,
         );
         assert_eq!(engine.pair_count(), 1);
         assert_eq!(engine.positions()[0].0.leg_a, "GLD");
@@ -541,8 +561,13 @@ mod tests {
         );
         std::fs::write(&active_path, json).unwrap();
 
-        let engine =
-            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
+        let engine = PairsEngine::from_active_pairs(
+            &active_path,
+            &history_path,
+            vec![],
+            default_trading(),
+            true,
+        );
         // Verify alpha was loaded
         assert!(
             (engine.positions()[0].0.alpha - 0.5).abs() < 0.01,
@@ -614,8 +639,13 @@ mod tests {
         );
         std::fs::write(&active_path, &json_v1).unwrap();
 
-        let mut engine =
-            PairsEngine::from_active_pairs(&active_path, &history_path, vec![], default_trading());
+        let mut engine = PairsEngine::from_active_pairs(
+            &active_path,
+            &history_path,
+            vec![],
+            default_trading(),
+            true,
+        );
         assert!((engine.positions()[0].0.beta - 1.0).abs() < 0.01);
 
         // Reload with updated beta=1.5
