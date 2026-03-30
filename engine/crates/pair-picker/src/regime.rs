@@ -190,12 +190,17 @@ impl RegimeAdjustedThresholds {
     pub fn from_regime(regime: PairRegime) -> Self {
         match regime {
             PairRegime::Calm | PairRegime::Normal => Self {
-                adf_pvalue_threshold: 0.05,
+                // Match the base ADF threshold (0.10). Regime tightening only
+                // applies in volatile conditions — calm/normal uses the standard gate.
+                adf_pvalue_threshold: 0.10,
                 position_size_mult: 1.0,
                 entry_z_mult: 1.0,
             },
             PairRegime::Volatile => Self {
-                adf_pvalue_threshold: 0.01,
+                // Softened from 0.01 to 0.03 (issue #225): p<0.01 demands 99% confidence
+                // during the noisiest data when ADF has lowest power. p<0.03 is still
+                // conservative while not being statistically backwards.
+                adf_pvalue_threshold: 0.03,
                 position_size_mult: 0.5,
                 entry_z_mult: 1.25,
             },
@@ -403,7 +408,7 @@ mod tests {
     #[test]
     fn test_regime_adjusted_thresholds_calm() {
         let t = RegimeAdjustedThresholds::from_regime(PairRegime::Calm);
-        assert_eq!(t.adf_pvalue_threshold, 0.05);
+        assert_eq!(t.adf_pvalue_threshold, 0.10);
         assert_eq!(t.position_size_mult, 1.0);
         assert_eq!(t.entry_z_mult, 1.0);
     }
@@ -411,7 +416,7 @@ mod tests {
     #[test]
     fn test_regime_adjusted_thresholds_volatile() {
         let t = RegimeAdjustedThresholds::from_regime(PairRegime::Volatile);
-        assert_eq!(t.adf_pvalue_threshold, 0.01);
+        assert_eq!(t.adf_pvalue_threshold, 0.03);
         assert_eq!(t.position_size_mult, 0.5);
         assert_eq!(t.entry_z_mult, 1.25);
     }

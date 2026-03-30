@@ -161,7 +161,10 @@ fn adf_regression(series: &[f64], p: usize, engle_granger: bool) -> Option<AdfRe
     };
 
     let p_value = interpolate_p_value(test_stat, table);
-    let is_stationary = p_value < 0.05;
+    // p<0.10 is standard for pairs trading screening (Hudson & Thames, QuantStart).
+    // The scoring function already handles gradation in [0.01, 0.10] — borderline
+    // pairs (p=0.07-0.10) get low scores, not flat rejection. See issue #225.
+    let is_stationary = p_value < 0.10;
 
     Some(AdfResult {
         test_statistic: test_stat,
