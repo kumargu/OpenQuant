@@ -1,0 +1,89 @@
+{
+  "note": "Broad scan (1070 candidates), data ending Jan 18",
+  "pairs": [
+    {
+      "leg_a": "AXP",
+      "leg_b": "BAC",
+      "score": 0.74,
+      "hl": 2.0
+    },
+    {
+      "leg_a": "BK",
+      "leg_b": "CFG",
+      "score": 0.645,
+      "hl": 3.8
+    },
+    {
+      "leg_a": "BK",
+      "leg_b": "GS",
+      "score": 0.694,
+      "hl": 1.8
+    },
+    {
+      "leg_a": "BK",
+      "leg_b": "MS",
+      "score": 0.742,
+      "hl": 2.5
+    },
+    {
+      "leg_a": "FITB",
+      "leg_b": "MTB",
+      "score": 0.633,
+      "hl": 4.7
+    },
+    {
+      "leg_a": "FITB",
+      "leg_b": "PNC",
+      "score": 0.668,
+      "hl": 4.1
+    },
+    {
+      "leg_a": "MTB",
+      "leg_b": "PNC",
+      "score": 0.707,
+      "hl": 1.1
+    },
+    {
+      "leg_a": "AEE",
+      "leg_b": "CNP",
+      "score": 0.733,
+      "hl": 2.1
+    },
+    {
+      "leg_a": "CMS",
+      "leg_b": "CNP",
+      "score": 0.562,
+      "hl": 4.0
+    },
+    {
+      "leg_a": "CNP",
+      "leg_b": "EVRG",
+      "score": 0.613,
+      "hl": 3.2
+    },
+    {
+      "leg_a": "CNP",
+      "leg_b": "LNT",
+      "score": 0.71,
+      "hl": 2.6
+    },
+    {
+      "leg_a": "EVRG",
+      "leg_b": "LNT",
+      "score": 0.669,
+      "hl": 3.3
+    },
+    {
+      "leg_a": "FE",
+      "leg_b": "LNT",
+      "score": 0.617,
+      "hl": 3.8
+    },
+    {
+      "leg_a": "FDX",
+      "leg_b": "WAB",
+      "score": 0.52,
+      "hl": 1.1
+    }
+  ]
+}
