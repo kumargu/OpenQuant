@@ -248,6 +248,10 @@ pub struct PairState {
     bar_count: usize,
     /// Incremented only on daily close bars. Used for max_hold/min_hold counting.
     daily_bar_count: usize,
+    /// Entry blackout: block new entries until this timestamp (millis).
+    /// Used by the runner to prevent entries around earnings announcements.
+    /// 0 = no blackout.
+    entry_blocked_until: i64,
     /// Per-pair exit_z override (for graceful exit of removed pairs).
     pub exit_z_override: Option<f64>,
     /// Per-pair stop_z override (for graceful exit of removed pairs).
@@ -311,6 +315,7 @@ impl PairState {
             entry_beta: 1.0,
             bar_count: 0,
             daily_bar_count: 0,
+            entry_blocked_until: 0,
             exit_z_override: None,
             stop_z_override: None,
             trade_pnl_history: VecDeque::with_capacity(10),
@@ -640,6 +645,16 @@ impl PairState {
             return vec![];
         }
 
+        // Earnings blackout: block entries around announcement dates.
+        // The runner sets entry_blocked_until via block_entry().
+        if self.entry_blocked_until > 0 && timestamp < self.entry_blocked_until {
+            debug!(
+                pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                "pairs: ENTRY BLOCKED — earnings blackout"
+            );
+            return vec![];
+        }
+
         // Regime gate: block entries when paused due to consecutive losses.
         // Cooldown uses bar_count which increments every minute — this means
         // cooldown is in minute bars, but the threshold scales with max_hold_bars
@@ -929,6 +944,12 @@ impl PairState {
         let window = self.spread_stats.window();
         self.spread_stats = RollingStats::new(window);
         self.spread_count = 0;
+    }
+
+    /// Block new entries until the given timestamp (millis).
+    /// Used by the runner to prevent entries around earnings announcements.
+    pub fn block_entry_until(&mut self, until_ts: i64) {
+        self.entry_blocked_until = until_ts;
     }
 
     /// Number of spread observations processed.

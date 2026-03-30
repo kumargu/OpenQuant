@@ -324,6 +324,20 @@ impl PairsEngine {
         info!("pairs engine: flattened + reset spread stats (timeframe switch)");
     }
 
+    /// Block entries for all pairs containing the given symbol until the timestamp.
+    /// Used for earnings blackout: if "BAC" reports earnings, block BAC/C, AXP/BAC, etc.
+    pub fn block_symbol_entries(&mut self, symbol: &str, until_ts: i64) {
+        for (config, state) in &mut self.pairs {
+            if config.leg_a == symbol || config.leg_b == symbol {
+                state.block_entry_until(until_ts);
+                info!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    symbol, "earnings blackout set"
+                );
+            }
+        }
+    }
+
     /// Number of configured pairs.
     pub fn pair_count(&self) -> usize {
         self.pairs.len()

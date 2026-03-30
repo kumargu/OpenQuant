@@ -15,6 +15,7 @@
 //! ```
 
 mod alpaca;
+mod earnings;
 mod pair_picker_service;
 mod stream;
 
@@ -412,9 +413,25 @@ async fn run_replay_bars(
     let mut last_picker_run = start_date;
     let history_path = trading_dir.join("pair_trading_history.json");
 
+    // Load earnings calendar for blackout filtering
+    let earnings_calendar =
+        earnings::load_earnings_calendar(&trading_dir.join("earnings_calendar.json"));
+    info!(
+        symbols = earnings_calendar.len(),
+        "loaded earnings calendar"
+    );
+
     // Fetch one day at a time — API efficiency without holding the full range
     let mut day = start_date;
     while day <= end_date {
+        // Apply earnings blackouts for this day
+        let day_ts = day
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        earnings::apply_blackouts(engine, &earnings_calendar, day_ts);
+
         let day_start = day.format("%Y-%m-%d").to_string();
         let day_end = (day + chrono::Duration::days(1))
             .format("%Y-%m-%d")
