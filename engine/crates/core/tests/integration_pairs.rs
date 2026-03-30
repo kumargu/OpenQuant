@@ -92,12 +92,15 @@ fn t1_full_pipeline_round_trip() {
 
     assert_eq!(engine.pair_count(), 1);
 
-    // Feed bars where prices diverge and converge to trigger entry/exit.
-    // With beta=1.0, spread = ln(A) - ln(B). We keep B constant and
-    // oscillate A so the spread swings past entry_z=2.0 after warmup.
+    // Feed daily bars where prices diverge and converge to trigger entry/exit.
+    // Entries only fire on new-day boundaries (is_new_day gate), so bars must
+    // be spaced at least 1 day apart. With beta=1.0, spread = ln(A) - ln(B).
+    // We keep B constant and oscillate A so the spread swings past entry_z=2.0
+    // after warmup builds up enough rolling history.
+    let day_ms: i64 = 86_400_000;
     let mut intents_total = 0;
     for i in 0..300 {
-        let ts = 1_000_000 + i * 60_000;
+        let ts = day_ms + i * day_ms; // day 1, 2, 3, ...
         // Large oscillation: price_a swings ±30% around 100
         let price_a = 100.0 * (1.0 + 0.3 * (i as f64 * 0.08).sin());
         let price_b = 100.0;
@@ -145,14 +148,16 @@ fn t2_alpha_affects_spread() {
         true,
     );
 
-    // Feed identical bars and collect spread values from intents.
+    // Feed identical daily bars and collect spread values from intents.
+    // Entries only fire on new-day boundaries (is_new_day gate).
     // Alpha shifts the raw spread by a constant. Since z-score subtracts
     // the rolling mean, alpha cancels out in z-score — that's correct.
     // But the raw spread values reported in intents should differ.
+    let day_ms: i64 = 86_400_000;
     let mut spreads_no_alpha = Vec::new();
     let mut spreads_with_alpha = Vec::new();
     for i in 0..300 {
-        let ts = 1_000_000 + i * 60_000;
+        let ts = day_ms + i * day_ms; // day 1, 2, 3, ...
         let price = 100.0 * (1.0 + 0.3 * (i as f64 * 0.08).sin());
 
         for intent in engine_no_alpha.on_bar("AAA", ts, price) {

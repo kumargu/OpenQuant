@@ -235,6 +235,11 @@ pub struct PairState {
     spread_stats: RollingStats,
     /// Number of spread observations (for warmup detection).
     spread_count: usize,
+    /// Pending daily close spread — buffered until the next day confirms it was the last bar.
+    /// When a new day starts, this value is pushed into rolling stats.
+    pending_daily_spread: Option<f64>,
+    /// Calendar day (ms / 86_400_000) of the last bar seen. Used for new-day detection.
+    last_bar_day: i64,
     /// Current position state.
     position: PairPosition,
     /// Daily bar counter at entry (for max-hold tracking in days).
@@ -308,6 +313,8 @@ impl PairState {
             last_price_b: None,
             spread_stats: RollingStats::new(window),
             spread_count: 0,
+            pending_daily_spread: None,
+            last_bar_day: 0,
             position: PairPosition::Flat,
             entry_daily_bar: 0,
             entry_price_a: 0.0,
@@ -371,30 +378,39 @@ impl PairState {
         // Alpha from TLS ensures z-scores are centered correctly.
         let spread = price_a.ln() - config.alpha - config.beta * price_b.ln();
 
-        // Compute time of day in local timezone (minutes since midnight)
+        // ── Two-clock architecture ──
+        // Signal clock (daily): push spread into rolling stats once per day.
+        // Risk clock (every bar): check stop loss via frozen ExitContext.
+        //
+        // New-day detection: when the calendar day changes, the PREVIOUS bar
+        // was the daily close. Push the buffered spread into rolling stats.
+        // No timezone math needed for the gate — just date comparison.
+        // ── New-day detection ──
+        // We update last_bar_day only when BOTH legs have arrived (spread computed).
+        // This prevents the first leg from consuming the new-day flag before
+        // the second leg can use it for entry evaluation.
+        let bar_day = timestamp / 86_400_000; // calendar day from epoch
+        let is_new_day = self.last_bar_day > 0 && bar_day != self.last_bar_day;
+
+        if is_new_day {
+            // Previous bar was the daily close — push its spread into rolling stats
+            if let Some(daily_spread) = self.pending_daily_spread.take() {
+                self.spread_stats.push(daily_spread);
+                self.spread_count += 1;
+                self.daily_bar_count += 1;
+            }
+        }
+        self.last_bar_day = bar_day; // safe: both legs have arrived at this point
+        self.pending_daily_spread = Some(spread); // always buffer latest spread
+        self.bar_count += 1;
+
+        // Compute ET time for force_close and last_entry_hour checks
         let tz_offset_ms: i64 = (trading.tz_offset_hours as i64) * 3600 * 1000;
         let local_ms = timestamp + tz_offset_ms;
         let secs_of_day = ((local_ms / 1000) % 86400 + 86400) % 86400;
         let et_hour = (secs_of_day / 3600) as u32;
         let et_min = ((secs_of_day % 3600) / 60) as u32;
         let et_minutes = et_hour * 60 + et_min;
-
-        // ── Two-clock architecture ──
-        // Signal clock (daily): push spread into rolling stats at daily close only.
-        // Half-life is measured in days — rolling z-score must use daily observations.
-        // Risk clock (every bar): check stop loss via frozen ExitContext.
-        //
-        // Daily close = bar with ET time >= 15:50 (last 10 minutes of session).
-        // Warmup daily bars are adjusted to 16:00 ET by the runner, so they also
-        // satisfy this check.
-        let is_daily_close = et_minutes >= 950; // 15:50 ET
-
-        if is_daily_close {
-            self.spread_stats.push(spread);
-            self.spread_count += 1;
-            self.daily_bar_count += 1;
-        }
-        self.bar_count += 1;
 
         // Rolling z-score — only valid after enough daily observations
         let min_lookback = self.spread_stats.window();
@@ -608,7 +624,7 @@ impl PairState {
             // - Daily close: full HOLDING log with z-scores, days_held
             // - Every 30 bars (~30 min): intraday risk snapshot showing exit_z
             //   approach toward stop threshold (important for debugging)
-            if is_daily_close {
+            if is_new_day {
                 info!(
                     pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
                     rolling_z = %format_args!("{z:.2}"),
@@ -639,9 +655,11 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
-        // Entry signals only fire on daily close bars — the z-score is computed
-        // from daily observations, so entries should align with the signal clock.
-        if !is_daily_close || !rolling_z_ready {
+        // Entry signals only fire when a new day starts (we just pushed a daily
+        // observation into rolling stats). This guarantees exactly one entry
+        // opportunity per pair per day — no churning from multiple bars in the
+        // daily-close window.
+        if !is_new_day || !rolling_z_ready {
             return vec![];
         }
 
@@ -970,6 +988,33 @@ impl PairState {
 mod tests {
     use super::*;
 
+    /// One day in milliseconds — tests step by this amount between bars.
+    const DAY: i64 = 86_400_000;
+
+    /// Feed N warmup bars with oscillating leg_a prices (95/105), returning the next timestamp.
+    ///
+    /// Alternates leg_a between 95 and 105 so the rolling window builds:
+    ///   mean ≈ 0  (spreads are symmetric around 0)
+    ///   std  ≈ 0.05
+    ///
+    /// This gives a realistic z-scale: entry at A=90 (spread ≈ -0.105) yields
+    /// exit_z ≈ -2.1, which is well inside stop_z=5 and triggers entry at entry_z=1.5.
+    fn warmup(
+        state: &mut PairState,
+        config: &PairConfig,
+        trading: &PairsTradingConfig,
+        n: usize,
+    ) -> i64 {
+        let mut ts = DAY; // start at day 1 (not 0, so is_new_day fires on day 2)
+        for i in 0..n {
+            let a = if i % 2 == 0 { 95.0 } else { 105.0 };
+            let _ = state.on_price(&config.leg_a, a, config, trading, ts);
+            let _ = state.on_price(&config.leg_b, 100.0, config, trading, ts);
+            ts += DAY;
+        }
+        ts
+    }
+
     fn test_config() -> PairConfig {
         PairConfig {
             leg_a: "GLD".into(),
@@ -995,7 +1040,7 @@ mod tests {
         let config = test_config();
         let trading = test_trading();
         // Only feed leg A — should not produce any signal
-        let intents = state.on_price("GLD", 420.0, &config, &trading, 0);
+        let intents = state.on_price("GLD", 420.0, &config, &trading, DAY);
         assert!(intents.is_empty(), "should not signal with only one leg");
     }
 
@@ -1005,13 +1050,15 @@ mod tests {
         let config = test_config();
         let trading = test_trading();
         // Feed a few bars — not enough for z-score
+        let mut ts = DAY;
         for i in 0..10 {
-            let _ = state.on_price("GLD", 420.0 + i as f64 * 0.1, &config, &trading, 0);
-            let intents = state.on_price("SLV", 64.0 + i as f64 * 0.01, &config, &trading, 0);
+            let _ = state.on_price("GLD", 420.0 + i as f64 * 0.1, &config, &trading, ts);
+            let intents = state.on_price("SLV", 64.0 + i as f64 * 0.01, &config, &trading, ts);
             assert!(
                 intents.is_empty(),
                 "should not signal during warmup (bar {i})"
             );
+            ts += DAY;
         }
     }
 
@@ -1059,15 +1106,12 @@ mod tests {
         let trading = easy_trigger_trading();
 
         // Warmup with stable prices (A=100, B=100, beta=1, spread=0)
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let ts = warmup(&mut state, &config, &trading, 35);
 
         // Drop A sharply: spread = ln(90) - ln(100) = -0.105. After 35 bars of 0,
         // this is a huge z-score deviation (negative).
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
 
         assert!(!intents.is_empty(), "should trigger long spread entry");
         assert_eq!(intents.len(), 2);
@@ -1084,14 +1128,11 @@ mod tests {
         let config = easy_trigger_config();
         let trading = easy_trigger_trading();
 
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let ts = warmup(&mut state, &config, &trading, 35);
 
         // Spike A: spread = ln(110) - ln(100) = +0.095 → positive z → short spread
-        let _ = state.on_price("A", 110.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 110.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
 
         assert!(!intents.is_empty(), "should trigger short spread entry");
         assert_eq!(intents.len(), 2);
@@ -1109,19 +1150,17 @@ mod tests {
         let trading = easy_trigger_trading();
 
         // Warmup
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let mut ts = warmup(&mut state, &config, &trading, 35);
 
         // Enter long spread
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::LongSpread);
 
         // Revert: A returns to normal → spread returns to ~0 → z near 0 → exit
-        let _ = state.on_price("A", 100.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        ts += DAY;
+        let _ = state.on_price("A", 100.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
 
         assert!(!intents.is_empty(), "should trigger exit on reversion");
         assert_eq!(intents.len(), 2);
@@ -1139,21 +1178,19 @@ mod tests {
         trading.max_hold_bars = 5;
 
         // Warmup
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let mut ts = warmup(&mut state, &config, &trading, 35);
 
         // Enter
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::LongSpread);
 
         // Hold for max_hold bars without reversion (keep spread extended)
         let mut exited = false;
         for _ in 0..10 {
-            let _ = state.on_price("A", 90.0, &config, &trading, 0);
-            let intents = state.on_price("B", 100.0, &config, &trading, 0);
+            ts += DAY;
+            let _ = state.on_price("A", 90.0, &config, &trading, ts);
+            let intents = state.on_price("B", 100.0, &config, &trading, ts);
             if !intents.is_empty() {
                 exited = true;
                 assert_eq!(state.position(), PairPosition::Flat);
@@ -1170,18 +1207,28 @@ mod tests {
     /// all subsequent spreads appear as huge z-scores. Realistic warmup gives entry_std
     /// proportional to normal spread volatility, so the stop-loss and exit thresholds
     /// behave as intended.
+    /// Feed 35 warmup bars with symmetric oscillating prices so rolling stats have realistic
+    /// variance with mean ≈ 0.
+    ///
+    /// Returns the next timestamp to use for the first signal bar (a new calendar day).
     fn warmup_with_variance(
         state: &mut PairState,
         config: &PairConfig,
         trading: &PairsTradingConfig,
-    ) {
-        // Alternate A between 100 and 101 to produce spread variance ≈ ln(101/100) ≈ 0.01
-        // This gives entry_std ≈ 0.005 after 32+ bars.
+    ) -> i64 {
+        // Alternate A between 95 and 105 to produce:
+        //   mean ≈ 0  (symmetric around 0)
+        //   std  ≈ 0.05
+        // This keeps exit_z at a sane scale (e.g., entry at A=90 → exit_z ≈ -2.1)
+        // so stop_z=20 tests do not trip immediately.
+        let mut ts = DAY;
         for i in 0..35 {
-            let a = if i % 2 == 0 { 100.0 } else { 101.0 };
-            let _ = state.on_price("A", a, config, trading, 0);
-            let _ = state.on_price("B", 100.0, config, trading, 0);
+            let a = if i % 2 == 0 { 95.0 } else { 105.0 };
+            let _ = state.on_price("A", a, config, trading, ts);
+            let _ = state.on_price("B", 100.0, config, trading, ts);
+            ts += DAY;
         }
+        ts
     }
 
     #[test]
@@ -1196,11 +1243,11 @@ mod tests {
         trading.stop_z = 20.0;
 
         // Warmup with variance so entry_std is realistic
-        warmup_with_variance(&mut state, &config, &trading);
+        let mut ts = warmup_with_variance(&mut state, &config, &trading);
 
         // Enter long spread (A drops sharply, spread becomes very negative)
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::LongSpread);
 
         let ctx = state.exit_context().expect("exit_context set at entry");
@@ -1223,8 +1270,9 @@ mod tests {
         // Hold with spread extended (A stays at 90) for min_hold bars.
         // The fixed exit_z stays at the entry level → no exit or stop fires.
         for bar in 0..9 {
-            let _ = state.on_price("A", 90.0, &config, &trading, 0);
-            let intents = state.on_price("B", 100.0, &config, &trading, 0);
+            ts += DAY;
+            let _ = state.on_price("A", 90.0, &config, &trading, ts);
+            let intents = state.on_price("B", 100.0, &config, &trading, ts);
             assert!(
                 intents.is_empty(),
                 "should hold position during min_hold (bar {bar}), spread at entry level"
@@ -1237,8 +1285,9 @@ mod tests {
         );
 
         // Revert: A returns to 100 → spread → 0 ≈ entry_mean → exit_z ≈ 0 → exit fires
-        let _ = state.on_price("A", 100.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        ts += DAY;
+        let _ = state.on_price("A", 100.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
         assert!(
             !intents.is_empty(),
             "should exit after min_hold_bars when spread reverts"
@@ -1255,19 +1304,20 @@ mod tests {
         trading.stop_z = 3.0; // stop at 3σ below entry_mean
 
         // Warmup with variance so entry_std is realistic (≈ 0.005)
-        warmup_with_variance(&mut state, &config, &trading);
+        let mut ts = warmup_with_variance(&mut state, &config, &trading);
 
         // Enter long spread (z negative, around entry_z threshold)
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::LongSpread);
 
         // Spread diverges FURTHER (A drops more) relative to the entry-time baseline.
         // With entry_std ≈ 0.005, entry_mean ≈ 0, and stop_z = 3.0:
         // Stop fires when exit_z < -3.0, i.e., spread < entry_mean - 3 * entry_std ≈ -0.015.
         // A=70 gives spread ≈ ln(70/100) ≈ -0.357, which is far below the stop threshold.
-        let _ = state.on_price("A", 70.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        ts += DAY;
+        let _ = state.on_price("A", 70.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
         assert!(
             !intents.is_empty(),
             "stop loss must fire regardless of min_hold_bars when spread diverges further"
@@ -1281,8 +1331,8 @@ mod tests {
         let config = easy_trigger_config();
         let trading = easy_trigger_trading();
 
-        let _ = state.on_price("A", 0.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 0.0, &config, &trading, DAY);
+        let intents = state.on_price("B", 100.0, &config, &trading, DAY);
         assert!(intents.is_empty(), "zero price should be rejected");
     }
 
@@ -1293,10 +1343,12 @@ mod tests {
         let trading = test_trading();
 
         // Feed bars while flat — should never produce exit signals
+        let mut ts = DAY;
         for _ in 0..40 {
-            let _ = state.on_price("GLD", 420.0, &config, &trading, 0);
-            let intents = state.on_price("SLV", 64.0, &config, &trading, 0);
+            let _ = state.on_price("GLD", 420.0, &config, &trading, ts);
+            let intents = state.on_price("SLV", 64.0, &config, &trading, ts);
             assert!(intents.is_empty(), "flat position should not produce exits");
+            ts += DAY;
         }
         assert_eq!(state.position(), PairPosition::Flat);
     }
@@ -1306,7 +1358,7 @@ mod tests {
         let mut state = PairState::new();
         let config = test_config();
         let trading = test_trading();
-        let intents = state.on_price("AAPL", 150.0, &config, &trading, 0);
+        let intents = state.on_price("AAPL", 150.0, &config, &trading, DAY);
         assert!(intents.is_empty(), "unrelated symbol should be ignored");
     }
 
@@ -1359,14 +1411,11 @@ mod tests {
         assert!(state.exit_context().is_none(), "no context before entry");
 
         // Warmup with stable prices (spread = 0)
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let ts = warmup(&mut state, &config, &trading, 35);
 
         // Enter long spread (A drops, making spread very negative)
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::LongSpread);
 
         // ExitContext should now be set
@@ -1394,18 +1443,16 @@ mod tests {
         let trading = easy_trigger_trading();
 
         // Warmup and enter
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let mut ts = warmup(&mut state, &config, &trading, 35);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::LongSpread);
         assert!(state.exit_context().is_some());
 
         // Revert to trigger exit
-        let _ = state.on_price("A", 100.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        ts += DAY;
+        let _ = state.on_price("A", 100.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::Flat);
         assert!(
             state.exit_context().is_none(),
@@ -1439,14 +1486,11 @@ mod tests {
         };
 
         // Warmup: stable spread = ln(100) - ln(100) = 0
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let mut ts = warmup(&mut state, &config, &trading, 35);
 
         // Enter long spread: A drops to 90, spread becomes very negative, z << -1.5
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(
             state.position(),
             PairPosition::LongSpread,
@@ -1467,8 +1511,9 @@ mod tests {
         // Fixed exit z = (spread - entry_mean) / entry_std should stay at entry level.
         let mut false_exits = 0usize;
         for _ in 0..40 {
-            let _ = state.on_price("A", 90.0, &config, &trading, 0);
-            let intents = state.on_price("B", 100.0, &config, &trading, 0);
+            ts += DAY;
+            let _ = state.on_price("A", 90.0, &config, &trading, ts);
+            let intents = state.on_price("B", 100.0, &config, &trading, ts);
             if !intents.is_empty() && state.position() == PairPosition::Flat {
                 false_exits += 1;
             }
@@ -1517,20 +1562,18 @@ mod tests {
         let trading = easy_trigger_trading();
 
         // Warmup: stable spread = 0
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let mut ts = warmup(&mut state, &config, &trading, 35);
 
         // Enter long spread: A drops to 90
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::LongSpread);
 
         // True reversion: A returns to 100. Spread = 0 ≈ entry_mean.
         // fixed exit_z ≈ (0 - entry_mean) / entry_std ≈ 0 → well above -exit_z (= -0.3)
-        let _ = state.on_price("A", 100.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        ts += DAY;
+        let _ = state.on_price("A", 100.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
 
         assert!(
             !intents.is_empty(),
@@ -1572,15 +1615,12 @@ mod tests {
         };
 
         // Warmup: stable spread = 0
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let mut ts = warmup(&mut state, &config, &trading, 35);
 
         // Enter short spread: A spikes to 115, spread = ln(115) - ln(100) = +0.139 > 0
         // After 35 bars of 0, this is a large positive z → should trigger short spread entry
-        let _ = state.on_price("A", 115.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 115.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(
             state.position(),
             PairPosition::ShortSpread,
@@ -1591,8 +1631,9 @@ mod tests {
         // Rolling z decays mechanically. Fixed exit z stays at entry level.
         let mut false_exits = 0usize;
         for _ in 0..40 {
-            let _ = state.on_price("A", 115.0, &config, &trading, 0);
-            let intents = state.on_price("B", 100.0, &config, &trading, 0);
+            ts += DAY;
+            let _ = state.on_price("A", 115.0, &config, &trading, ts);
+            let intents = state.on_price("B", 100.0, &config, &trading, ts);
             if !intents.is_empty() && state.position() == PairPosition::Flat {
                 false_exits += 1;
             }
@@ -1616,19 +1657,17 @@ mod tests {
         let trading = easy_trigger_trading();
 
         // Warmup
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let mut ts = warmup(&mut state, &config, &trading, 35);
 
         // Enter short spread: A spikes to 110
-        let _ = state.on_price("A", 110.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 110.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::ShortSpread);
 
         // True reversion: A returns to 100 → spread returns to ~0 ≈ entry_mean
-        let _ = state.on_price("A", 100.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        ts += DAY;
+        let _ = state.on_price("A", 100.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
 
         assert!(
             !intents.is_empty(),
@@ -1648,14 +1687,11 @@ mod tests {
         let trading = easy_trigger_trading();
 
         // Warmup
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
+        let ts = warmup(&mut state, &config, &trading, 35);
 
         // Trigger long spread entry
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
 
         assert!(!intents.is_empty(), "must trigger entry");
         // Both legs carry the same priority_score
@@ -1686,12 +1722,9 @@ mod tests {
         };
         let trading = easy_trigger_trading();
 
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        let ts = warmup(&mut state, &config, &trading, 35);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
 
         assert!(!intents.is_empty(), "must trigger entry");
         assert_eq!(
@@ -1708,17 +1741,15 @@ mod tests {
         let trading = easy_trigger_trading();
 
         // Enter
-        for _ in 0..35 {
-            let _ = state.on_price("A", 100.0, &config, &trading, 0);
-            let _ = state.on_price("B", 100.0, &config, &trading, 0);
-        }
-        let _ = state.on_price("A", 90.0, &config, &trading, 0);
-        let _ = state.on_price("B", 100.0, &config, &trading, 0);
+        let mut ts = warmup(&mut state, &config, &trading, 35);
+        let _ = state.on_price("A", 90.0, &config, &trading, ts);
+        let _ = state.on_price("B", 100.0, &config, &trading, ts);
         assert_eq!(state.position(), PairPosition::LongSpread);
 
         // Revert to trigger close
-        let _ = state.on_price("A", 100.0, &config, &trading, 0);
-        let intents = state.on_price("B", 100.0, &config, &trading, 0);
+        ts += DAY;
+        let _ = state.on_price("A", 100.0, &config, &trading, ts);
+        let intents = state.on_price("B", 100.0, &config, &trading, ts);
 
         assert!(!intents.is_empty(), "should close");
         for intent in &intents {

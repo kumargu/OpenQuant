@@ -41,9 +41,14 @@ fn warmup(
     ts: &mut i64,
     count: usize,
 ) {
+    // Oscillate leg_a between 95 and 105 to produce:
+    //   mean ≈ 0  (symmetric spreads)
+    //   std  ≈ 0.05
+    // This keeps z-scores at a sane scale so entry_z=1.5 fires on A=90 drop (z≈-2)
+    // but entry_z=100 does not (z≈-2 << 100).
     for i in 0..count {
-        let jitter = 0.001 * ((i as f64 * 0.7).sin());
-        state.on_price(&config.leg_a, 100.0 * (1.0 + jitter), config, trading, *ts);
+        let a = if i % 2 == 0 { 95.0 } else { 105.0 };
+        state.on_price(&config.leg_a, a, config, trading, *ts);
         state.on_price(&config.leg_b, 100.0, config, trading, *ts);
         *ts += DAY_MS;
     }
