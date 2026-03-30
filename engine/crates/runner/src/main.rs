@@ -307,7 +307,7 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
             run_replay_bars(
                 &alpaca,
                 &mut pairs_engine,
-                &symbols,
+                symbols,
                 &start,
                 &end,
                 &trading_dir,
@@ -383,7 +383,7 @@ async fn run_stream(
 async fn run_replay_bars(
     alpaca: &alpaca::AlpacaClient,
     engine: &mut PairsEngine,
-    symbols: &[String],
+    mut symbols: Vec<String>,
     start: &str,
     end: &str,
     trading_dir: &std::path::Path,
@@ -410,7 +410,7 @@ async fn run_replay_bars(
             .to_string();
 
         let bars = match alpaca
-            .fetch_minute_bars(symbols, &day_start, &day_end)
+            .fetch_minute_bars(&symbols, &day_start, &day_end)
             .await
         {
             Ok(b) => b,
@@ -477,68 +477,54 @@ async fn run_replay_bars(
 
         // Biweekly pair regeneration: re-run pair-picker every 14 days
         // using only data available at that point (no look-ahead).
+        //
+        // REPLAY ONLY: this replaces the engine entirely, discarding any open
+        // positions without close orders. Acceptable for replay analysis.
+        // For live/paper mode, use PairsEngine::reload() which preserves positions.
         if (day - last_picker_run).num_days() >= 14 {
             info!(day = day_start.as_str(), "regenerating pairs (biweekly)");
             match pair_picker_service::generate_pairs(alpaca, trading_dir, day, 40).await {
                 Ok(active_pairs) => {
                     let configs = pair_picker_service::to_pair_configs(&active_pairs);
-                    let new_engine =
+                    *engine =
                         PairsEngine::from_configs(configs, &history_path, trading_config.clone());
-                    *engine = new_engine;
                     info!(pairs = engine.pair_count(), "pair universe refreshed");
 
-                    // Re-warmup the new engine with daily bars
+                    // Update symbols list — new pairs may have different symbols.
+                    // Without this, new pairs never get minute bars fetched.
+                    symbols = engine
+                        .positions()
+                        .iter()
+                        .flat_map(|(c, _)| vec![c.leg_a.clone(), c.leg_b.clone()])
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+                    info!(symbols = symbols.len(), "symbol list updated");
+
+                    // Re-warmup with daily bars using the initial warmup path.
+                    // Use fetch_daily_bars (not fetch_daily_bars_range) — it already
+                    // applies MIDNIGHT_TO_CLOSE_MS (+16h) which lands at 16:00 ET
+                    // (et_minutes=960 >= 950), passing the is_daily_close gate.
                     let lookback = trading_config.lookback + 10;
-                    let warmup_end = day.format("%Y-%m-%d").to_string();
-                    let warmup_start = (day - chrono::Duration::days(lookback as i64 + 5))
-                        .format("%Y-%m-%d")
-                        .to_string();
-                    if let Ok(warmup_bars) = alpaca
-                        .fetch_daily_bars_range(
-                            &engine
-                                .positions()
-                                .iter()
-                                .flat_map(|(c, _)| vec![c.leg_a.clone(), c.leg_b.clone()])
-                                .collect::<std::collections::HashSet<_>>()
-                                .into_iter()
-                                .collect::<Vec<_>>(),
-                            &warmup_start,
-                            &warmup_end,
-                        )
-                        .await
-                    {
-                        // Feed daily bars as warmup — build approximate timestamps.
-                        // Timestamps are day - N indexed, not calendar-accurate,
-                        // but this is safe: rolling stats only use the close price
-                        // and the is_daily_close gate (et_minutes >= 950). Positions
-                        // are flattened after, so approximate dates don't affect trading.
-                        let midnight_to_close_ms: i64 = 16 * 3600 * 1000;
-                        let mut warmup_tuples: Vec<(String, i64, f64)> = Vec::new();
-                        for (sym, prices) in &warmup_bars {
-                            // Each price needs a daily-close timestamp
-                            // Use price_end_date minus N days as approximate timestamps
-                            for (i, &price) in prices.iter().enumerate() {
-                                let ts_day =
-                                    day - chrono::Duration::days((prices.len() - i) as i64);
-                                let ts = ts_day
-                                    .and_hms_opt(0, 0, 0)
-                                    .unwrap()
-                                    .and_utc()
-                                    .timestamp_millis()
-                                    + midnight_to_close_ms;
-                                warmup_tuples.push((sym.clone(), ts, price));
+                    match alpaca.fetch_daily_bars(&symbols, lookback + 5).await {
+                        Ok(bars) => {
+                            // Filter bars before current replay day (no look-ahead)
+                            let cutoff = day
+                                .and_hms_opt(12, 0, 0)
+                                .unwrap()
+                                .and_utc()
+                                .timestamp_millis();
+                            let bars: Vec<_> =
+                                bars.into_iter().filter(|(_, ts, _)| *ts < cutoff).collect();
+                            for (sym, ts, close) in &bars {
+                                let _ = engine.on_bar(sym, *ts, *close);
                             }
+                            engine.flatten_all();
+                            info!(warmup_bars = bars.len(), "re-warmup complete");
                         }
-                        warmup_tuples.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
-                        for (sym, ts, close) in &warmup_tuples {
-                            let _ = engine.on_bar(sym, *ts, *close);
+                        Err(e) => {
+                            warn!(error = e.as_str(), "re-warmup fetch failed");
                         }
-                        // flatten_all (not flatten_and_reset_stats) is correct:
-                        // daily bars fed rolling stats at daily-close frequency,
-                        // and the two-clock architecture prevents minute bars from
-                        // pushing into rolling stats. No timeframe mismatch.
-                        engine.flatten_all();
-                        info!(warmup_bars = warmup_tuples.len(), "re-warmup complete");
                     }
                 }
                 Err(e) => {
