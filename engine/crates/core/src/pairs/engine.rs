@@ -38,6 +38,20 @@ pub struct PairsEngine {
 }
 
 impl PairsEngine {
+    /// Create from pre-built PairConfig list with trade history.
+    /// Used when the runner generates pairs via pair-picker library (no JSON file).
+    pub fn from_configs(
+        configs: Vec<PairConfig>,
+        history_path: &std::path::Path,
+        trading_config: PairsTradingConfig,
+    ) -> Self {
+        let trade_history = PairTradingHistory::load(history_path);
+        let mut engine = Self::new(configs, trading_config);
+        engine.trade_history = trade_history;
+        engine.history_path = Some(history_path.to_path_buf());
+        engine
+    }
+
     /// Create a new pairs engine from a list of pair configurations.
     pub fn new(configs: Vec<PairConfig>, trading_config: PairsTradingConfig) -> Self {
         info!(
