@@ -958,6 +958,36 @@ impl PairState {
         self.last_bar_day = 0;
     }
 
+    /// Restore position from external state (e.g., Alpaca positions on restart).
+    /// Sets position direction and entry prices so stop loss monitoring works.
+    /// Rolling stats and exit context are NOT set — they require spread history
+    /// which will build up from live bars. Exits will use rolling z until
+    /// exit_context is populated on the next entry.
+    pub fn restore_position(
+        &mut self,
+        position: PairPosition,
+        entry_price_a: f64,
+        entry_price_b: f64,
+        entry_beta: f64,
+    ) {
+        self.position = position;
+        self.entry_price_a = entry_price_a;
+        self.entry_price_b = entry_price_b;
+        self.entry_beta = entry_beta;
+        self.entry_daily_bar = self.daily_bar_count;
+        // Compute exit context from current spread stats if available
+        if self.spread_count > 0 {
+            let mean = self.spread_stats.mean();
+            let sd = self.spread_stats.std_dev();
+            if sd > 1e-10 {
+                self.exit_context = Some(ExitContext {
+                    entry_mean: mean,
+                    entry_std: sd,
+                });
+            }
+        }
+    }
+
     /// Reset rolling spread stats (mean, variance, count).
     /// Used when switching timeframes (e.g., daily warmup → minute replay)
     /// to avoid corrupted z-scores from mixed-timeframe variance.

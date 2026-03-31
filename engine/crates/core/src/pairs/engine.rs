@@ -338,6 +338,46 @@ impl PairsEngine {
         }
     }
 
+    /// Reconcile engine state with external positions (e.g., Alpaca on restart).
+    /// For each pair, if both legs have positions in the provided map, restore
+    /// the pair's position state. This prevents duplicate entries on restart.
+    ///
+    /// `positions`: map of symbol → (qty, avg_entry_price). Positive qty = long, negative = short.
+    pub fn reconcile_positions(
+        &mut self,
+        positions: &std::collections::HashMap<String, (f64, f64)>,
+    ) {
+        let mut restored = 0;
+        for (config, state) in &mut self.pairs {
+            let leg_a = positions.get(&config.leg_a);
+            let leg_b = positions.get(&config.leg_b);
+
+            if let (Some(&(qty_a, price_a)), Some(&(qty_b, price_b))) = (leg_a, leg_b) {
+                // Determine spread direction from position signs
+                let direction = if qty_a > 0.0 && qty_b < 0.0 {
+                    Some(super::PairPosition::LongSpread) // long A, short B
+                } else if qty_a < 0.0 && qty_b > 0.0 {
+                    Some(super::PairPosition::ShortSpread) // short A, long B
+                } else {
+                    None // legs don't form a clean pair trade
+                };
+
+                if let Some(pos) = direction {
+                    state.restore_position(pos, price_a, price_b, config.beta);
+                    restored += 1;
+                    info!(
+                        pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                        pos = ?pos,
+                        price_a = format!("{price_a:.2}").as_str(),
+                        price_b = format!("{price_b:.2}").as_str(),
+                        "reconciled position from Alpaca"
+                    );
+                }
+            }
+        }
+        info!(restored, "position reconciliation complete");
+    }
+
     /// Number of configured pairs.
     pub fn pair_count(&self) -> usize {
         self.pairs.len()

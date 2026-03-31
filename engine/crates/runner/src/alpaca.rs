@@ -355,6 +355,53 @@ impl AlpacaClient {
         );
         Ok(order)
     }
+
+    /// Get all open positions from Alpaca.
+    /// Returns map of symbol → (qty, avg_entry_price). Positive qty = long.
+    pub async fn get_positions(
+        &self,
+        execution: ExecutionMode,
+    ) -> Result<HashMap<String, (f64, f64)>, String> {
+        let url = format!("{}/positions", execution.trading_url());
+        let response = self
+            .http
+            .get(&url)
+            .header("APCA-API-KEY-ID", &self.api_key)
+            .header("APCA-API-SECRET-KEY", &self.api_secret)
+            .send()
+            .await
+            .map_err(|e| format!("positions request failed: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("positions API error {status}: {body}"));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct AlpacaPosition {
+            symbol: String,
+            qty: String,
+            avg_entry_price: String,
+        }
+
+        let positions: Vec<AlpacaPosition> = response
+            .json()
+            .await
+            .map_err(|e| format!("positions parse failed: {e}"))?;
+
+        let map: HashMap<String, (f64, f64)> = positions
+            .into_iter()
+            .filter_map(|p| {
+                let qty: f64 = p.qty.parse().ok()?;
+                let price: f64 = p.avg_entry_price.parse().ok()?;
+                Some((p.symbol, (qty, price)))
+            })
+            .collect();
+
+        info!(positions = map.len(), "fetched Alpaca positions");
+        Ok(map)
+    }
 }
 
 /// Load key=value pairs from a .env file.

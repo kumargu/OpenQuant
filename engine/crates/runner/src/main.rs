@@ -319,6 +319,19 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
         }
     }
 
+    // ── Reconcile with Alpaca positions (live/paper only) ──
+    // On restart, the engine is flat but Alpaca may have open positions from
+    // a previous session. Restore them so stop losses and exits work correctly.
+    if let RunMode::Stream(execution) = &run_mode {
+        match alpaca.get_positions(*execution).await {
+            Ok(positions) if !positions.is_empty() => {
+                pairs_engine.reconcile_positions(&positions);
+            }
+            Ok(_) => info!("no Alpaca positions to reconcile"),
+            Err(e) => warn!("position reconciliation failed: {e}"),
+        }
+    }
+
     // ── Bar loop — diverges only here ──
     match run_mode {
         RunMode::Stream(execution) => {
