@@ -966,6 +966,12 @@ impl PairState {
         self.position = PairPosition::Flat;
         self.exit_context = None;
         self.last_bar_day = 0;
+        // Reset entry context so blocked entries don't leave stale values
+        // that corrupt days_held on the next legitimate entry.
+        self.entry_daily_bar = 0;
+        self.entry_price_a = 0.0;
+        self.entry_price_b = 0.0;
+        self.entry_beta = 1.0;
     }
 
     /// Restore position from external state (e.g., Alpaca positions on restart).

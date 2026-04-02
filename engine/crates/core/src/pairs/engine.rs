@@ -281,20 +281,16 @@ impl PairsEngine {
             let intents = state.on_price(symbol, close, config, &self.trading_config, timestamp);
             if !intents.is_empty() {
                 // Block new entries when at capacity. Exits always pass through.
-                let is_entry = intents.iter().any(|i| {
-                    matches!(
-                        i.reason,
-                        crate::signals::SignalReason::PairsEntry
-                    )
-                });
+                let is_entry = intents
+                    .iter()
+                    .any(|i| matches!(i.reason, crate::signals::SignalReason::PairsEntry));
                 if at_capacity && is_entry {
                     // Revert: on_price already set position + exit context.
                     // force_flat() clears position, exit_context, and last_bar_day.
                     state.force_flat();
                     info!(
                         pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
-                        max_concurrent,
-                        "entry blocked — position cap reached"
+                        max_concurrent, "entry blocked — position cap reached"
                     );
                 } else {
                     all_intents.extend(intents);
@@ -398,6 +394,13 @@ impl PairsEngine {
             }
         }
         info!(restored, "position reconciliation complete");
+    }
+
+    /// Set the path to active_pairs.json for reload().
+    /// Needed when engine is created via from_configs() (replay) but
+    /// later needs reload() after pair-picker writes a new file.
+    pub fn set_active_pairs_path(&mut self, path: PathBuf) {
+        self.active_pairs_path = Some(path);
     }
 
     /// Number of configured pairs.

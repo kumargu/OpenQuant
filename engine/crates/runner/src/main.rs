@@ -210,8 +210,8 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
         RunMode::Replay { start, .. } => {
             // Always generate pairs from pair-picker (no stale active_pairs.json).
             // Uses only data available before the replay start date (no look-ahead).
-            let price_end = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d")
-                .expect("invalid start date");
+            let price_end =
+                chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").expect("invalid start date");
             info!(
                 price_end = %price_end,
                 "replay: generating fresh pairs from pair-picker"
@@ -338,7 +338,6 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
                 &start,
                 &end,
                 &trading_dir,
-                &cfg_file.pairs_trading,
             )
             .await;
         }
@@ -414,7 +413,6 @@ async fn run_replay_bars(
     start: &str,
     end: &str,
     trading_dir: &std::path::Path,
-    _trading_config: &openquant_core::pairs::PairsTradingConfig,
 ) {
     info!(start, end, "starting replay");
 
@@ -533,6 +531,8 @@ async fn run_replay_bars(
                     {
                         warn!(error = e.as_str(), "failed to write active_pairs.json");
                     } else {
+                        // Ensure engine knows the path (from_configs leaves it None)
+                        engine.set_active_pairs_path(ap_path);
                         let old_count = engine.pair_count();
                         let old_open = engine.open_position_count();
                         engine.reload();
