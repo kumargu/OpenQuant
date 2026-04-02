@@ -88,6 +88,18 @@ pub async fn generate_pairs(
     Ok(active_pairs)
 }
 
+/// Write active pairs to JSON file (for engine reload).
+pub fn write_active_pairs(pairs: &[ActivePair], path: &Path) -> Result<(), String> {
+    let file = pair_picker::types::ActivePairsFile {
+        generated_at: chrono::Utc::now(),
+        pairs: pairs.to_vec(),
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| format!("serialize error: {e}"))?;
+    std::fs::write(path, json).map_err(|e| format!("write error: {e}"))?;
+    info!(pairs = pairs.len(), path = %path.display(), "wrote active_pairs.json");
+    Ok(())
+}
+
 /// Convert ActivePair (pair-picker type) to PairConfig (core type).
 /// This keeps the dependency direction clean: runner depends on both, core doesn't know pair-picker.
 pub fn to_pair_configs(pairs: &[ActivePair]) -> Vec<PairConfig> {

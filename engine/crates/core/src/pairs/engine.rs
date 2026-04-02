@@ -266,9 +266,13 @@ impl PairsEngine {
     ///
     /// Iterates over all configured pairs and checks if this symbol is a leg.
     /// Returns order intents for any pairs that fire entry/exit signals.
+    /// Entry signals are suppressed when `max_concurrent_pairs` is reached.
     pub fn on_bar(&mut self, symbol: &str, timestamp: i64, close: f64) -> Vec<PairOrderIntent> {
         let mut matched = false;
         let mut all_intents = Vec::new();
+
+        let max_concurrent = self.trading_config.max_concurrent_pairs;
+        let at_capacity = max_concurrent > 0 && self.open_position_count() >= max_concurrent;
 
         for (config, state) in &mut self.pairs {
             if config.leg_a == symbol || config.leg_b == symbol {
@@ -276,7 +280,25 @@ impl PairsEngine {
             }
             let intents = state.on_price(symbol, close, config, &self.trading_config, timestamp);
             if !intents.is_empty() {
-                all_intents.extend(intents);
+                // Block new entries when at capacity. Exits always pass through.
+                let is_entry = intents.iter().any(|i| {
+                    matches!(
+                        i.reason,
+                        crate::signals::SignalReason::PairsEntry
+                    )
+                });
+                if at_capacity && is_entry {
+                    // Revert: on_price already set position + exit context.
+                    // force_flat() clears position, exit_context, and last_bar_day.
+                    state.force_flat();
+                    info!(
+                        pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                        max_concurrent,
+                        "entry blocked — position cap reached"
+                    );
+                } else {
+                    all_intents.extend(intents);
+                }
             }
         }
 
@@ -381,6 +403,14 @@ impl PairsEngine {
     /// Number of configured pairs.
     pub fn pair_count(&self) -> usize {
         self.pairs.len()
+    }
+
+    /// Number of pairs with open positions (not flat).
+    pub fn open_position_count(&self) -> usize {
+        self.pairs
+            .iter()
+            .filter(|(_, state)| state.position() != PairPosition::Flat)
+            .count()
     }
 
     /// Get current positions for all pairs (for status reporting).

@@ -208,33 +208,26 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
     let active_pairs_path = trading_dir.join("active_pairs.json");
     let mut pairs_engine = match &run_mode {
         RunMode::Replay { start, .. } => {
-            if active_pairs_path.exists() {
-                // Use existing active_pairs.json if available (for testing with known pairs)
-                info!(path = %active_pairs_path.display(), "replay: using existing active_pairs.json");
-                PairsEngine::from_active_pairs(
-                    &active_pairs_path,
-                    &history_path,
-                    vec![],
-                    ptc,
-                    true, // skip staleness for replay
-                )
-            } else {
-                // Generate pairs from historical data (no look-ahead bias)
-                let price_end = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d")
-                    .expect("invalid start date");
-                let active_pairs =
-                    match pair_picker_service::generate_pairs(&alpaca, &trading_dir, price_end, 40)
-                        .await
-                    {
-                        Ok(p) => p,
-                        Err(e) => {
-                            error!("pair-picker failed: {e}");
-                            std::process::exit(1);
-                        }
-                    };
-                let configs = pair_picker_service::to_pair_configs(&active_pairs);
-                PairsEngine::from_configs(configs, &history_path, ptc)
-            }
+            // Always generate pairs from pair-picker (no stale active_pairs.json).
+            // Uses only data available before the replay start date (no look-ahead).
+            let price_end = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d")
+                .expect("invalid start date");
+            info!(
+                price_end = %price_end,
+                "replay: generating fresh pairs from pair-picker"
+            );
+            let active_pairs =
+                match pair_picker_service::generate_pairs(&alpaca, &trading_dir, price_end, 40)
+                    .await
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!("pair-picker failed: {e}");
+                        std::process::exit(1);
+                    }
+                };
+            let configs = pair_picker_service::to_pair_configs(&active_pairs);
+            PairsEngine::from_configs(configs, &history_path, ptc)
         }
         RunMode::Stream(_) => {
             if !active_pairs_path.exists() {
@@ -421,7 +414,7 @@ async fn run_replay_bars(
     start: &str,
     end: &str,
     trading_dir: &std::path::Path,
-    trading_config: &openquant_core::pairs::PairsTradingConfig,
+    _trading_config: &openquant_core::pairs::PairsTradingConfig,
 ) {
     info!(start, end, "starting replay");
 
@@ -433,7 +426,6 @@ async fn run_replay_bars(
     let mut total_bars: usize = 0;
     let mut total_intents: usize = 0;
     let mut last_picker_run = start_date;
-    let history_path = trading_dir.join("pair_trading_history.json");
 
     // Load earnings calendar for blackout filtering
     let earnings_calendar =
@@ -525,56 +517,42 @@ async fn run_replay_bars(
         total_bars += bars.len();
         info!(day = day_start.as_str(), bars = bars.len(), "replayed day");
 
-        // Biweekly pair regeneration: re-run pair-picker every 14 days
+        // Weekly pair regeneration: re-run pair-picker every 7 days
         // using only data available at that point (no look-ahead).
         //
-        // REPLAY ONLY: this replaces the engine entirely, discarding any open
-        // positions without close orders. Acceptable for replay analysis.
-        // For live/paper mode, use PairsEngine::reload() which preserves positions.
-        if (day - last_picker_run).num_days() >= 14 {
-            info!(day = day_start.as_str(), "regenerating pairs (biweekly)");
+        // Uses write-then-reload: pair-picker writes active_pairs.json,
+        // then engine.reload() merges new pairs in while preserving open positions.
+        // Open positions in removed pairs get tightened stops for graceful exit.
+        if (day - last_picker_run).num_days() >= 7 {
+            info!(day = day_start.as_str(), "regenerating pairs (weekly)");
             match pair_picker_service::generate_pairs(alpaca, trading_dir, day, 40).await {
                 Ok(active_pairs) => {
-                    let configs = pair_picker_service::to_pair_configs(&active_pairs);
-                    *engine =
-                        PairsEngine::from_configs(configs, &history_path, trading_config.clone());
-                    info!(pairs = engine.pair_count(), "pair universe refreshed");
+                    // Write active_pairs.json so reload() can pick it up
+                    let ap_path = trading_dir.join("active_pairs.json");
+                    if let Err(e) = pair_picker_service::write_active_pairs(&active_pairs, &ap_path)
+                    {
+                        warn!(error = e.as_str(), "failed to write active_pairs.json");
+                    } else {
+                        let old_count = engine.pair_count();
+                        let old_open = engine.open_position_count();
+                        engine.reload();
 
-                    // Update symbols list — new pairs may have different symbols.
-                    // Without this, new pairs never get minute bars fetched.
-                    symbols = engine
-                        .positions()
-                        .iter()
-                        .flat_map(|(c, _)| vec![c.leg_a.clone(), c.leg_b.clone()])
-                        .collect::<std::collections::HashSet<_>>()
-                        .into_iter()
-                        .collect();
-                    info!(symbols = symbols.len(), "symbol list updated");
+                        // Update symbols list — new pairs may have different symbols.
+                        symbols = engine
+                            .positions()
+                            .iter()
+                            .flat_map(|(c, _)| vec![c.leg_a.clone(), c.leg_b.clone()])
+                            .collect::<std::collections::HashSet<_>>()
+                            .into_iter()
+                            .collect();
 
-                    // Re-warmup with daily bars using the initial warmup path.
-                    // Use fetch_daily_bars (not fetch_daily_bars_range) — it already
-                    // applies MIDNIGHT_TO_CLOSE_MS (+16h) which lands at 16:00 ET
-                    // (et_minutes=960 >= 950), passing the is_daily_close gate.
-                    let lookback = trading_config.lookback + 10;
-                    match alpaca.fetch_daily_bars(&symbols, lookback + 5).await {
-                        Ok(bars) => {
-                            // Filter bars before current replay day (no look-ahead)
-                            let cutoff = day
-                                .and_hms_opt(12, 0, 0)
-                                .unwrap()
-                                .and_utc()
-                                .timestamp_millis();
-                            let bars: Vec<_> =
-                                bars.into_iter().filter(|(_, ts, _)| *ts < cutoff).collect();
-                            for (sym, ts, close) in &bars {
-                                let _ = engine.on_bar(sym, *ts, *close);
-                            }
-                            engine.flatten_all();
-                            info!(warmup_bars = bars.len(), "re-warmup complete");
-                        }
-                        Err(e) => {
-                            warn!(error = e.as_str(), "re-warmup fetch failed");
-                        }
+                        info!(
+                            old_pairs = old_count,
+                            new_pairs = engine.pair_count(),
+                            preserved_open = old_open,
+                            symbols = symbols.len(),
+                            "pair universe refreshed (positions preserved)"
+                        );
                     }
                 }
                 Err(e) => {
