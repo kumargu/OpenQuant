@@ -226,8 +226,17 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
                         std::process::exit(1);
                     }
                 };
+            // Write fresh pairs to active_pairs.json so paper/live can use them,
+            // and so reload() works during weekly regen.
+            if let Err(e) =
+                pair_picker_service::write_active_pairs(&active_pairs, &active_pairs_path)
+            {
+                warn!(error = e.as_str(), "failed to write active_pairs.json");
+            }
             let configs = pair_picker_service::to_pair_configs(&active_pairs);
-            PairsEngine::from_configs(configs, &history_path, ptc)
+            let mut engine = PairsEngine::from_configs(configs, &history_path, ptc);
+            engine.set_active_pairs_path(active_pairs_path.clone());
+            engine
         }
         RunMode::Stream(_) => {
             if !active_pairs_path.exists() {
