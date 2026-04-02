@@ -495,7 +495,8 @@ lookback = 30
 
 max_hold_bars = 10      # Max days to hold. Per-pair override from active_pairs.json.
 min_hold_bars = 1       # Min days before reversion exit. Stop loss always fires.
-notional_per_leg = 1000.0  # $1000/leg × ~5 pairs ≤ $10K capital
+notional_per_leg = 1000.0  # $1000/leg × ~25 pairs ≤ $50K notional
+max_concurrent_pairs = 25  # Cap open positions. 0 = no limit.
 
 last_entry_hour = 23    # Effectively disabled for daily bars
 force_close_minute = 1440  # Disabled — exits are z-score or max_hold driven

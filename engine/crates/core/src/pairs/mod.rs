@@ -80,6 +80,15 @@ pub struct PairsTradingConfig {
     /// -5 = EST, -4 = EDT. Should match `[data].timezone_offset_hours`.
     #[serde(default = "default_tz_offset")]
     pub tz_offset_hours: i32,
+    /// Maximum number of concurrent open pair positions.
+    /// New entries are blocked when this limit is reached.
+    /// 0 = no limit. Default 25 (fits ~$50K notional at $1K/leg).
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent_pairs: usize,
+}
+
+fn default_max_concurrent() -> usize {
+    25
 }
 
 fn default_cost_bps() -> f64 {
@@ -104,6 +113,7 @@ impl Default for PairsTradingConfig {
             force_close_minute: 930, // 15:30 ET = 15*60+30 = 930
             cost_bps: 10.0,
             tz_offset_hours: -5,
+            max_concurrent_pairs: 25,
         }
     }
 }
@@ -956,6 +966,12 @@ impl PairState {
         self.position = PairPosition::Flat;
         self.exit_context = None;
         self.last_bar_day = 0;
+        // Reset entry context so blocked entries don't leave stale values
+        // that corrupt days_held on the next legitimate entry.
+        self.entry_daily_bar = 0;
+        self.entry_price_a = 0.0;
+        self.entry_price_b = 0.0;
+        self.entry_beta = 1.0;
     }
 
     /// Restore position from external state (e.g., Alpaca positions on restart).
@@ -1129,6 +1145,7 @@ mod tests {
             force_close_minute: 1_500, // never force close
             tz_offset_hours: -5,
             cost_bps: 10.0,
+            max_concurrent_pairs: 0, // no limit in tests
         }
     }
 
@@ -1516,6 +1533,7 @@ mod tests {
             force_close_minute: 1_500,
             tz_offset_hours: -5,
             cost_bps: 10.0,
+            max_concurrent_pairs: 0,
         };
 
         // Warmup: stable spread = ln(100) - ln(100) = 0
@@ -1645,6 +1663,7 @@ mod tests {
             force_close_minute: 1_500,
             tz_offset_hours: -5,
             cost_bps: 10.0,
+            max_concurrent_pairs: 0,
         };
 
         // Warmup: stable spread = 0

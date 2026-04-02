@@ -266,9 +266,16 @@ impl PairsEngine {
     ///
     /// Iterates over all configured pairs and checks if this symbol is a leg.
     /// Returns order intents for any pairs that fire entry/exit signals.
+    /// Entry signals are suppressed when `max_concurrent_pairs` is reached.
     pub fn on_bar(&mut self, symbol: &str, timestamp: i64, close: f64) -> Vec<PairOrderIntent> {
         let mut matched = false;
         let mut all_intents = Vec::new();
+
+        let max_concurrent = self.trading_config.max_concurrent_pairs;
+        // Mutable counter: tracks open positions as entries pass through the loop.
+        // Avoids the snapshot race where two pairs enter on the same bar when
+        // only one slot is open.
+        let mut current_open = self.open_position_count();
 
         for (config, state) in &mut self.pairs {
             if config.leg_a == symbol || config.leg_b == symbol {
@@ -276,7 +283,25 @@ impl PairsEngine {
             }
             let intents = state.on_price(symbol, close, config, &self.trading_config, timestamp);
             if !intents.is_empty() {
-                all_intents.extend(intents);
+                // Block new entries when at capacity. Exits always pass through.
+                let is_entry = intents
+                    .iter()
+                    .any(|i| matches!(i.reason, crate::signals::SignalReason::PairsEntry));
+                let at_capacity = max_concurrent > 0 && current_open >= max_concurrent;
+                if at_capacity && is_entry {
+                    // Revert: on_price already set position + exit context.
+                    // force_flat() clears all entry state to prevent stale values.
+                    state.force_flat();
+                    info!(
+                        pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                        max_concurrent, "entry blocked — position cap reached"
+                    );
+                } else {
+                    if is_entry {
+                        current_open += 1;
+                    }
+                    all_intents.extend(intents);
+                }
             }
         }
 
@@ -378,9 +403,24 @@ impl PairsEngine {
         info!(restored, "position reconciliation complete");
     }
 
+    /// Set the path to active_pairs.json for reload().
+    /// Needed when engine is created via from_configs() (replay) but
+    /// later needs reload() after pair-picker writes a new file.
+    pub fn set_active_pairs_path(&mut self, path: PathBuf) {
+        self.active_pairs_path = Some(path);
+    }
+
     /// Number of configured pairs.
     pub fn pair_count(&self) -> usize {
         self.pairs.len()
+    }
+
+    /// Number of pairs with open positions (not flat).
+    pub fn open_position_count(&self) -> usize {
+        self.pairs
+            .iter()
+            .filter(|(_, state)| state.position() != PairPosition::Flat)
+            .count()
     }
 
     /// Get current positions for all pairs (for status reporting).
@@ -729,5 +769,45 @@ mod tests {
             "alpha should be refreshed to 0.1, got {}",
             engine.positions()[0].0.alpha
         );
+    }
+
+    #[test]
+    fn test_position_cap_blocks_entries() {
+        // 2 pairs, cap at 1 — second entry should be blocked.
+        let trading = PairsTradingConfig {
+            max_concurrent_pairs: 1,
+            min_hold_bars: 0,
+            ..PairsTradingConfig::default()
+        };
+        let mut engine = PairsEngine::new(vec![gld_slv_config(), c_jpm_config()], trading);
+        assert_eq!(engine.pair_count(), 2);
+        assert_eq!(engine.open_position_count(), 0);
+
+        // Warmup both pairs with alternating high/low prices to build spread stats.
+        // GLD/SLV: prices 95/64 and 105/64 alternating.
+        // C/JPM: prices 95/200 and 105/200 alternating.
+        const DAY: i64 = 86_400_000;
+        for i in 0..35 {
+            let ts = DAY * (i + 1);
+            let price_a = if i % 2 == 0 { 95.0 } else { 105.0 };
+            engine.on_bar("GLD", ts, price_a);
+            engine.on_bar("SLV", ts, 64.0);
+            engine.on_bar("C", ts, price_a);
+            engine.on_bar("JPM", ts, 200.0);
+        }
+        engine.flatten_all();
+        assert_eq!(engine.open_position_count(), 0);
+
+        // Trigger entry on day 36 with a big shock on both pairs.
+        let ts = DAY * 36;
+        engine.on_bar("GLD", ts, 80.0); // big drop → should trigger
+        engine.on_bar("SLV", ts, 64.0);
+        engine.on_bar("C", ts, 80.0);
+        engine.on_bar("JPM", ts, 200.0);
+
+        // At most 1 pair should be open (cap = 1).
+        // The first pair to fire gets in; the second is blocked.
+        let open = engine.open_position_count();
+        assert!(open <= 1, "cap should limit to 1 open position, got {open}");
     }
 }
