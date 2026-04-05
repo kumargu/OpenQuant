@@ -7,8 +7,8 @@ engine/target/
 *.dylib
 *.whl
 
-# Benchmark data cache
-data/bar_cache/*.json
+# Bar cache (Alpaca minute bars cached for replay experiments)
+data/bar_cache/
 
 # Generated tearsheet reports
 reports/

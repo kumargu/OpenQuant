@@ -15,6 +15,7 @@
 //! ```
 
 mod alpaca;
+mod bar_cache;
 mod earnings;
 mod pair_picker_service;
 mod stream;
@@ -81,6 +82,11 @@ struct ReplayArgs {
     /// Replay end date (YYYY-MM-DD).
     #[arg(long)]
     end: String,
+
+    /// Bar cache directory. When set, bars are read from cache and fetched
+    /// bars are written to cache for future runs.
+    #[arg(long)]
+    bar_cache: Option<PathBuf>,
 }
 
 const DEFAULT_CONFIG: &str = "config/pairs.toml";
@@ -90,7 +96,11 @@ enum RunMode {
     /// WebSocket bars + place orders on Alpaca.
     Stream(ExecutionMode),
     /// Historical REST bars + log only.
-    Replay { start: String, end: String },
+    Replay {
+        start: String,
+        end: String,
+        bar_cache: Option<PathBuf>,
+    },
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -144,6 +154,7 @@ async fn main() {
             RunMode::Replay {
                 start: a.start,
                 end: a.end,
+                bar_cache: a.bar_cache,
             },
         ),
     };
@@ -165,7 +176,7 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
             info!(config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
             warn!("LIVE MODE — real money orders will be placed");
         }
-        RunMode::Replay { start, end } => {
+        RunMode::Replay { start, end, .. } => {
             info!(
                 config = %config_path.display(),
                 start = start.as_str(),
@@ -339,7 +350,12 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
         RunMode::Stream(execution) => {
             run_stream(&alpaca, &mut pairs_engine, &symbols, execution).await;
         }
-        RunMode::Replay { start, end } => {
+        RunMode::Replay {
+            start,
+            end,
+            bar_cache: cache_dir,
+        } => {
+            let cache = cache_dir.map(|p| bar_cache::BarCache::new(p));
             run_replay_bars(
                 &alpaca,
                 &mut pairs_engine,
@@ -347,6 +363,7 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
                 &start,
                 &end,
                 &trading_dir,
+                cache.as_ref(),
             )
             .await;
         }
@@ -422,6 +439,7 @@ async fn run_replay_bars(
     start: &str,
     end: &str,
     trading_dir: &std::path::Path,
+    cache: Option<&bar_cache::BarCache>,
 ) {
     info!(start, end, "starting replay");
 
@@ -458,19 +476,61 @@ async fn run_replay_bars(
             .format("%Y-%m-%d")
             .to_string();
 
-        let bars = match alpaca
-            .fetch_minute_bars(&symbols, &day_start, &day_end)
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                warn!(
-                    day = day_start.as_str(),
-                    error = e.as_str(),
-                    "fetch failed — skipping day"
-                );
-                day += chrono::Duration::days(1);
-                continue;
+        // Fetch bars — from cache if available, else from Alpaca API
+        let bars = if let Some(c) = cache {
+            let (mut cached_bars, uncached_syms) = c.read_day(&symbols, &day_start);
+            if !uncached_syms.is_empty() {
+                // Fetch only uncached symbols from API
+                match alpaca
+                    .fetch_minute_bars_raw(&uncached_syms, &day_start, &day_end)
+                    .await
+                {
+                    Ok(raw) => {
+                        // Write raw bars to cache
+                        c.write_day(&raw, &day_start);
+                        // Convert to (symbol, ts, close) and merge
+                        const MINUTE_MS: i64 = 60_000;
+                        for (symbol, bars) in &raw {
+                            for bar in bars {
+                                if let Ok(dt) =
+                                    chrono::DateTime::parse_from_rfc3339(&bar.t)
+                                {
+                                    let close_ts =
+                                        dt.timestamp_millis() + MINUTE_MS;
+                                    cached_bars.push((
+                                        symbol.clone(),
+                                        close_ts,
+                                        bar.c,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            day = day_start.as_str(),
+                            error = e.as_str(),
+                            "fetch failed for uncached symbols — using cached only"
+                        );
+                    }
+                }
+            }
+            cached_bars
+        } else {
+            match alpaca
+                .fetch_minute_bars(&symbols, &day_start, &day_end)
+                .await
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!(
+                        day = day_start.as_str(),
+                        error = e.as_str(),
+                        "fetch failed — skipping day"
+                    );
+                    day += chrono::Duration::days(1);
+                    continue;
+                }
             }
         };
 

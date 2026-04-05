@@ -569,18 +569,6 @@ impl PairState {
                         "pairs: STOP LOSS — spread diverged further from entry baseline"
                     );
                 }
-                info!(
-                    pair = pair_id.as_str(),
-                    ts = timestamp,
-                    rolling_z = format!("{:.2}", z).as_str(),
-                    fixed_exit_z = format!("{:.2}", exit_z).as_str(),
-                    days_held,
-                    price_a = format!("{:.2}", price_a).as_str(),
-                    price_b = format!("{:.2}", price_b).as_str(),
-                    exit = exit_reason,
-                    "pairs: EXIT"
-                );
-
                 // Record trade P&L for regime gate
                 // P&L weighted by beta to match actual position sizing.
                 // Leg A has weight 1.0, leg B has weight |entry_beta|.
@@ -595,6 +583,19 @@ impl PairState {
                     PairPosition::Flat => 0.0,
                 };
                 let net_bps = gross_bps - trading.cost_bps;
+
+                info!(
+                    pair = pair_id.as_str(),
+                    ts = timestamp,
+                    rolling_z = format!("{:.2}", z).as_str(),
+                    fixed_exit_z = format!("{:.2}", exit_z).as_str(),
+                    days_held,
+                    price_a = format!("{:.2}", price_a).as_str(),
+                    price_b = format!("{:.2}", price_b).as_str(),
+                    net_bps = format!("{:.1}", net_bps).as_str(),
+                    exit = exit_reason,
+                    "pairs: EXIT"
+                );
                 if self.trade_pnl_history.len() >= 10 {
                     self.trade_pnl_history.pop_front();
                 }

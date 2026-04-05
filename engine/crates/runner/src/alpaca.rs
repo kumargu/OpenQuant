@@ -36,7 +36,7 @@ pub struct AlpacaClient {
 }
 
 /// A single OHLCV bar from Alpaca.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct AlpacaBar {
     pub t: String,
@@ -303,6 +303,78 @@ impl AlpacaClient {
             "fetched minute bars"
         );
         Ok(all_bars)
+    }
+
+    /// Fetch minute bars returning raw AlpacaBar structs grouped by symbol.
+    /// Used by the bar cache to store raw data before timestamp conversion.
+    pub async fn fetch_minute_bars_raw(
+        &self,
+        symbols: &[String],
+        start: &str,
+        end: &str,
+    ) -> Result<HashMap<String, Vec<AlpacaBar>>, String> {
+        let mut all: HashMap<String, Vec<AlpacaBar>> = HashMap::new();
+
+        for chunk in symbols.chunks(50) {
+            let symbols_param = chunk.join(",");
+            let mut page_token: Option<String> = None;
+
+            loop {
+                let mut query = vec![
+                    ("symbols".to_string(), symbols_param.clone()),
+                    ("timeframe".to_string(), "1Min".to_string()),
+                    ("start".to_string(), start.to_string()),
+                    ("end".to_string(), end.to_string()),
+                    ("limit".to_string(), "10000".to_string()),
+                    ("feed".to_string(), "iex".to_string()),
+                ];
+                if let Some(ref token) = page_token {
+                    query.push(("page_token".to_string(), token.clone()));
+                }
+
+                let response = self
+                    .http
+                    .get(DATA_URL)
+                    .header("APCA-API-KEY-ID", &self.api_key)
+                    .header("APCA-API-SECRET-KEY", &self.api_secret)
+                    .query(&query)
+                    .send()
+                    .await
+                    .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    return Err(format!("Alpaca data API error {status}: {body}"));
+                }
+
+                let data: AlpacaBarsResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| format!("JSON parse failed: {e}"))?;
+
+                for (symbol, bars) in data.bars {
+                    all.entry(symbol).or_default().extend(bars);
+                }
+
+                match data.next_page_token {
+                    Some(token) if !token.is_empty() => {
+                        page_token = Some(token);
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        let total: usize = all.values().map(|v| v.len()).sum();
+        info!(
+            symbols = symbols.len(),
+            bars = total,
+            start,
+            end,
+            "fetched minute bars (raw)"
+        );
+        Ok(all)
     }
 
     /// Place a market order. URL determined by execution mode.
