@@ -98,6 +98,9 @@ pub struct ValidationResult {
     // Regime
     pub regime_robustness: Option<f64>,
 
+    // Spread crossing frequency (annualized zero-crossings)
+    pub spread_crossings: Option<f64>,
+
     // ETF filter
     pub etf_excluded: bool,
 
@@ -125,6 +128,7 @@ impl ValidationResult {
             structural_break: false,
             beta_stable: false,
             regime_robustness: None,
+            spread_crossings: None,
             etf_excluded: false,
             passed: false,
             score: 0.0,
