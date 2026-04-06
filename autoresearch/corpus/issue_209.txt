@@ -1,0 +1,31 @@
+P2: Optimize entry_z threshold after RollingStats fix
+
+## Parent
+Tracked in #206 (P2). **Blocked on P0 (#207)** — z-score distribution changes after window fix.
+
+## Problem
+
+`entry_z = 1.0` means ~32% of observations trigger entry. We're trading noise, not signal. But the optimal threshold depends on having correct z-scores (P0 must land first).
+
+## Fix
+
+After P0 merges:
+1. Run walk-forward backtest grid over entry_z ∈ {1.0, 1.2, 1.4, 1.6, 1.8, 2.0}
+2. Measure Sharpe, win rate, profit per trade, trade count
+3. Set entry_z to the value that maximizes risk-adjusted return with sufficient trade count
+
+## Evidence — researchers disagree on exact value
+
+- **Gatev et al. (2006)**: 2.0σ, validated 1962–2002 on daily US equities
+- **arxiv:2412.12555 (2024)**: Bayesian optimization on S&P 500 found optimal entry = 1.42, exit = 0.37
+- **Chan (2013)**: recommends 1.0 entry, 0.0 exit
+- **Resolution**: the right value depends on the window. Fix window first, then optimize.
+
+## Files
+- `config/pairs.toml` — `entry_z` parameter
+- Walk-forward validation output
+
+## Acceptance criteria
+- [ ] Backtest comparison table across entry_z values (on corrected z-scores)
+- [ ] Chosen value justified by walk-forward results, not in-sample optimization
+- [ ] PR description includes the comparison table

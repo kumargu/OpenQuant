@@ -1,0 +1,42 @@
+P3: Wire volume into PairsEngine — RVOL filter + ADV gate
+
+## Parent
+Tracked in #206 (P3)
+
+## Problem
+
+Volume is fetched from Alpaca, parsed into `StreamBar`, then **dropped** at the `on_bar()` signature. PairsEngine has zero volume awareness. Meanwhile, S&P 500 has 100× liquidity variation between most and least liquid constituents.
+
+SingleEngine already has full RVOL architecture — PairsEngine has none.
+
+## Fix (3 parts)
+
+### Part 1: Wire volume through PairsEngine
+- `on_bar(symbol, ts, close, volume)` → propagate to `on_price()`
+- Track 20-bar rolling mean volume per leg
+
+### Part 2: Per-leg RVOL entry filter
+- Compute RVOL = current_volume / rolling_mean_volume
+- Block entry if either leg has RVOL < 0.5 (illiquid conditions)
+- Both researchers agree: volume is a FILTER, not a z-score component
+
+### Part 3: ADV gate at pair-picker
+- Add minimum ADV ($20M daily dollar volume) to `validate_pair()` in pair-picker
+- Reject pairs where either leg is too illiquid to trade at our notional
+
+## Evidence
+
+- **Avellaneda & Lee (2010)**: volume-time OU model achieved Sharpe 1.51 vs ~0.9 without — +0.6 Sharpe from volume awareness
+- **Gatev et al. (2006)**: restricted to liquid stocks, noted "nontrivial portion of profits may be due to bid-ask bounce" for illiquid names
+- **Almgren & Chriss (2000)**: market impact scales as √(participation rate)
+
+## Files
+- `engine/crates/core/src/pairs/engine.rs` — wire volume, add RVOL tracking
+- `engine/crates/core/src/pairs/mod.rs` — `PairState` gets volume fields
+- `engine/crates/pair-picker/src/pipeline.rs` — ADV validation
+
+## Acceptance criteria
+- [ ] Volume flows from bar feed to PairsEngine per-leg tracking
+- [ ] RVOL < 0.5 blocks entry (with structured log)
+- [ ] ADV gate in pair-picker rejects illiquid pairs
+- [ ] Tests for RVOL filter (entry blocked/allowed based on volume)

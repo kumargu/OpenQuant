@@ -1,0 +1,60 @@
+OpenQuant Autoresearch V1 Learnings — April 2026
+
+EXPERIMENT FINDINGS (12 experiments, 1 year of replay data April 2025 - March 2026)
+
+WHAT WORKED:
+- entry_z raised from 1.0 to 2.0: stopped trading noise. At 1.0, 32% of observations trigger entry which is just noise. Gatev et al. (2006) validated 2.0 sigma. This single change flipped P&L from negative to positive.
+- stop_z widened from 4.0 to 6.0: gave spreads more room to mean-revert. At entry_z=2.0, a stop_z=4.0 only allows 2 sigma of room. Widening to 6.0 converted many stop losses into profitable reversions.
+- exit_z raised from 0.2 to 0.5: earlier exits capture bulk of reversion without risking reversal. Win rate crossed 50% for first time.
+- lookback floor of 20 bars: pairs with half-life of 2-3 days were getting lookback windows of only 4-6 bars, producing noisy z-scores. Floor of 20 stabilized signals dramatically (avg_bps doubled from 3.1 to 7.6).
+- ADF p-value threshold relaxed from 0.05 to 0.10 in calm markets, 0.01 to 0.05 in volatile: admitted more valid pairs that were being over-filtered. Largest single improvement after entry_z.
+
+WHAT FAILED:
+- entry_z=1.5: worse than both 1.0 and 2.0. The trades between 1.5-2.0 sigma are mostly losers.
+- entry_z=2.5: slightly worse than 2.0, too few trades (100 vs 186). Sweet spot is 2.0.
+- max_hold_bars change: the config value is a dead knob because per-pair override from active_pairs.json always takes precedence. The per-pair value is min(ceil(2.5*HL), 10).
+- lookback floor=15: worse than 20. The extra fast-pair trades are noise.
+- Removing structural break hard gate: pairs with structural breaks ARE genuinely broken. Removing the gate admitted losers. The Clegg 2014 finding (95% of pairs break) doesn't mean the break is irrelevant — it means most pairs eventually break, but the ones currently broken should not be traded.
+- Scoring weight rebalance (HL 25% to 40%): fast half-life does not equal profitable. The scoring weights should probably stay at default.
+- min_hold_bars=3: forcing trades to hold 3 days increased stop losses. Some trades profitably exit on day 1-2 and forcing them to hold turns winners into losers.
+
+REGIME ANALYSIS:
+The strategy has alternating good and bad months driven by intra-sector correlation:
+- Good months (high intra-sector correlation): May, Jul, Aug, Oct, Jan, Feb, Mar. Spreads mean-revert because sector-wide moves cancel out.
+- Bad months (high intra-sector dispersion): Jun, Sep, Nov. Idiosyncratic shocks (earnings, sector rotation) cause spreads to trend instead of reverting.
+- Bad months have MORE trades: Jun=31, Sep=20, Nov=15 vs good months having fewer but better trades.
+- The strategy over-trades during bad regimes. A dispersion gate that suppresses entries during high-dispersion periods would prevent most losses.
+
+PAIR UTILIZATION:
+- 13,573 candidates → 645 loaded across weekly regens → only 78 actually traded (12% utilization)
+- 567 pairs selected by pair-picker but NEVER generated a single trade. Either entry_z=2.0 is too high for them or they're slow-reverting.
+- GOOG/GOOGL traded 21 times (most active pair) but these are the SAME COMPANY (Alphabet Class A vs Class C). Not a real pairs trade. Should be excluded.
+- Top winners are financials: AXP/BAC (+684 bps), COF/JPM (+530 bps), GS/JPM (+420 bps). High intra-sector correlation in financials.
+- Worst loser MCO/NTRS (-733 bps) kept trading despite losses because the regime gate threshold (5 consecutive losses) wasn't reached.
+
+BEST CONFIGURATION FOUND:
+entry_z=2.0, exit_z=0.5, stop_z=6.0, min_hold=1
+lookback floor=20 bars
+ADF threshold: calm=0.10, volatile=0.05
+Structural break: hard gate (kept)
+Original scoring weights: cointegration 35%, half-life 25%, beta stability 25%, R-squared 15%
+
+RESULT: avg_bps improved from -4.8 to +13.4 per trade (18.2 bps improvement)
+186 trades over 1 year, 54.3% win rate, Sharpe 0.09, net P&L +2488 bps
+
+OPEN QUESTIONS FOR V2:
+1. Intra-sector dispersion gate — detecting when to suppress entries
+2. Per-pair learning — stop trading a specific pair after 2-3 consecutive losses, not 5
+3. Volume/liquidity gating — no RVOL filter exists
+4. Rolling hedge ratio (Kalman filter) — static beta drifts
+5. Same-company pair exclusion (GOOG/GOOGL, BRK.A/BRK.B, etc.)
+6. Better pair utilization — 88% of selected pairs never trade
+
+PAIRS TRADING LITERATURE KEY FINDINGS:
+- Gatev et al. (2006): 2.0 sigma entry threshold, 6-month formation period, top 20 pairs
+- Avellaneda & Lee (2010): 60-day lookback cap for daily data, OU process framework
+- Vidyamurthy (2004): spread = log(A) - beta*log(B), hedge ratio from cointegration
+- Chan (2013): lookback should match half-life, Kelly criterion for sizing
+- de Prado (2018): meta-labeling, purged cross-validation, deflated Sharpe ratio
+- Clegg (2014): only 4.9% of pairs remain cointegrated after 1 year
+- Krauss (2017): survey of stat-arb, regime detection is critical for pairs trading

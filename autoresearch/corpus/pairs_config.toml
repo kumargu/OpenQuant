@@ -1,0 +1,504 @@
+# OpenQuant Configuration
+#
+# The runner reads [pairs_trading] and [data] sections.
+# Other sections (signal, momentum, combiner, etc.) are for the single-symbol
+# engine which is not currently wired into the runner. They must remain because
+# ConfigFile expects them — they'll be cleaned up when single-symbol is removed
+# from openquant-core.
+#
+# Usage:
+#   openquant-runner live                                # paper trading
+#   openquant-runner paper                               # same as live
+#   openquant-runner replay --start 2026-03-01 --end 2026-03-28
+
+mode = "pairs"
+
+
+# ---------------------------------------------------------------------------
+# Metrics — controls the JSONL metrics recorder
+# ---------------------------------------------------------------------------
+[metrics]
+
+# Whether to install the metrics recorder at engine startup.
+# When false, all metric macros become no-op (~1ns atomic load).
+# Set to false for production trading where every nanosecond matters,
+# or true during development/backtesting for observability.
+enabled = true
+
+
+# ---------------------------------------------------------------------------
+# Signal — mean-reversion strategy parameters
+# ---------------------------------------------------------------------------
+[signal]
+
+# Z-score of returns below which a buy signal fires (must be negative).
+# More negative = stricter, fewer trades, higher conviction per trade.
+# Example: -2.0 fires on ~2.3% of bars; -2.5 fires on ~0.6%.
+# Tightened from -2.0 to -2.2 to reduce false entries in low-conviction dips.
+buy_z_threshold = -2.2
+
+# Z-score above which a sell signal fires (must be positive).
+# Higher = hold longer, waiting for a stronger reversion.
+# Lower = exit earlier, locking in smaller gains more often.
+# Lowered from 2.0 to 1.8 — faster mean-reversion exits (exp 22).
+sell_z_threshold = 1.8
+
+# Minimum relative volume (current / 20-bar avg) to confirm a buy.
+# Ensures the price drop has real market participation behind it.
+# 1.0 = average volume; 1.2 = 20% above average.
+# Higher = fewer but more confident entries; lower = more trades.
+min_relative_volume = 1.2
+
+# Minimum signal score to act on (0.0–∞).
+# Score = 0.6×|z - threshold| + 0.4×(relative_volume - 1.0) for buys.
+# Acts as a final quality gate — increase to be more selective.
+min_score = 0.5
+
+# When true, block buy signals when close < SMA-50 (downtrend filter).
+# Prevents catching falling knives in sustained bear moves.
+# Set to false if you want to trade mean-reversion in both directions.
+trend_filter = true
+
+# Adaptive z-threshold: replace fixed buy_z_threshold with a rolling percentile.
+# When true, entry fires when z_score is in the bottom adaptive_z_percentile of
+# recent z-scores. Removes the fragile fixed threshold parameter — adapts to
+# changing volatility automatically.
+adaptive_z = true
+adaptive_z_percentile = 0.05   # bottom 5% of recent z-scores
+
+
+# ---------------------------------------------------------------------------
+# Momentum — trend-following strategy parameters
+# ---------------------------------------------------------------------------
+[momentum]
+
+# Minimum ADX to consider a trend tradeable (0-100 scale).
+# ADX < 20 = no trend (ranging), 20-40 = moderate, > 40 = strong.
+# Lower (15-18) catches more trends but more false signals.
+# Higher (25-30) only trades strong trends, fewer but higher quality signals.
+min_adx = 20.0
+
+# Minimum signal score to act on (0.0-1.0).
+# Score = 0.5×adx_strength + 0.3×ma_separation + 0.2×volume_boost.
+# Higher = more selective; lower = more trades.
+min_score = 0.3
+
+# When true, require +DI > -DI for buy signals (bullish confirmation).
+# Disable for experimental bidirectional momentum (not recommended long-only).
+directional_filter = true
+
+# Minimum volume relative to rolling average. Default: 0.8
+# Lower than mean-reversion (1.2) because trends persist on normal volume.
+# Set to 0.0 to disable volume filtering.
+min_relative_volume = 0.8
+
+
+# ---------------------------------------------------------------------------
+# Combiner — multi-strategy voting parameters
+# ---------------------------------------------------------------------------
+[combiner]
+
+# Enable multi-strategy combiner. Default: true.
+# When false, the engine uses only mean-reversion (single-strategy mode).
+# Useful for A/B testing or isolating individual strategy performance.
+enabled = true
+
+# Minimum |net_vote| to produce a trade signal (0.0-1.0+).
+# Higher = require stronger consensus, fewer trades, higher quality.
+# Lower = allow single-strategy signals through more easily.
+# At 0.0, any signal fires. At 0.5, strategies must agree strongly.
+# Walk-forward validated: trained on Jan 13-Feb 13, tested Feb 17-Mar 20.
+# 0.2 was best on train ($59/day), held up OOS ($56/day, WFE=94%).
+# At 0.5 we were killing 96% of signals (found via Rust tracing).
+min_net_score = 0.2
+
+# Minimum number of strategies that must vote before the combiner acts.
+# Set to 2 to require consensus — prevents a single strategy from
+# dominating when min_net_score is low enough for one signal to pass.
+# Default: 1 (any single strategy can trigger).
+min_strategies = 1
+
+# Minimum number of strategies that must vote SELL to exit an existing
+# position. Higher than min_strategies to prevent churn: one strategy
+# buying and another immediately selling on the next bar.
+# Stop loss / take profit / max hold bypass this (hard exits always fire).
+# Reverted to 2 after live session (2026-03-19): single-strategy exits
+# caused premature churn — VWAP reversion killed mean-reversion trades.
+min_exit_strategies = 2
+
+# Strategy weights for score-weighted voting.
+# Higher weight = more influence on the combined signal.
+# Weights don't need to sum to 1.0, but it's easier to reason about.
+weight_mean_reversion = 0.30
+weight_momentum = 0.35
+weight_vwap_reversion = 0.35
+weight_breakout = 0.0
+
+# CUSUM entry gate: require a structural break (significant price move)
+# before opening new positions. Filters noise entries on quiet bars.
+# Based on AFML Ch. 2. Does NOT block exits.
+# Default: false — needs threshold tuning before enabling.
+# With ATR-dynamic threshold (1.0×), cuts 39% of trades but also cuts profits.
+# Try atr_multiplier < 0.5 or static threshold ~0.003 for lighter filtering.
+cusum_entry_gate = false
+
+# Meta-labeling derived gates (from #89/#103 feature importances).
+# Block BUY entries when BOCPD regime_change_prob exceeds this threshold.
+# Trades during regime transitions are low quality. 0.0 = disabled.
+max_regime_change_prob = 0.3
+
+# Block BUY entries during specific UTC hours (e.g., [14, 15, 20, 21]).
+# Empty = no hour filter. Requires bar_hour in features (follow-up).
+blocked_hours_utc = []
+
+# Regime-conditional weight multipliers per strategy.
+# Applied on top of base weights: effective = base × regime_mult.
+# 0.0 = fully suppressed, 1.0 = base weight, 1.5 = 50% boost.
+[combiner.regime_mean_reversion]
+low_vol = 1.5     # mean-reversion thrives in calm markets
+normal = 1.0
+high_vol = 0.2    # suppress in trending markets (fights the trend)
+crisis = 0.0      # fully suppressed in crisis
+
+[combiner.regime_momentum]
+low_vol = 0.3     # momentum is noise in ranging markets
+normal = 1.0
+high_vol = 1.5    # momentum thrives in trends
+crisis = 0.5      # reduced but not zero (trends persist in crashes)
+
+[combiner.regime_vwap_reversion]
+low_vol = 1.3     # VWAP reversion works well in calm markets
+normal = 1.0
+high_vol = 0.5    # suppressed in trends
+crisis = 0.0      # fully suppressed in crisis
+
+[combiner.regime_breakout]
+low_vol = 0.5
+normal = 1.0
+high_vol = 1.2
+crisis = 0.3
+
+
+# ---------------------------------------------------------------------------
+# VWAP Reversion — volume-weighted average price mean-reversion
+# ---------------------------------------------------------------------------
+[vwap_reversion]
+
+# Enable VWAP reversion strategy. Default: false (enable after backtesting).
+# When enabled and combiner is on, participates in multi-strategy voting.
+enabled = true
+
+# VWAP Z-score below which a buy signal fires. Default: -2.0
+# More negative = stricter, fewer trades, higher conviction.
+buy_z_threshold = -1.8
+
+# VWAP Z-score above which an exit signal fires. Default: 1.5
+# Lowered to 0.5 after live session: exit at partial reversion toward VWAP,
+# not premature cross. Chan recommends exit at z=0 (full reversion).
+sell_z_threshold = 0.5
+
+# Minimum volume relative to rolling average. Default: 1.0
+min_relative_volume = 1.0
+
+# Minimum score to act on. Default: 0.3
+min_score = 0.3
+
+# Bars to skip at session start (VWAP unstable early). Default: 30
+session_start_skip_bars = 30
+
+
+# ---------------------------------------------------------------------------
+# Breakout — volatility expansion from squeeze
+# ---------------------------------------------------------------------------
+[breakout]
+
+# Enable breakout strategy. Default: false (enable after backtesting).
+enabled = false
+
+# Require Bollinger squeeze before breakout. Default: true
+# When true, only trades breakouts from consolidation — higher quality signals.
+squeeze_required = true
+
+# Minimum volume surge for entry. Default: 1.2
+# Breakouts without volume are often false breakouts.
+min_volume_surge = 1.2
+
+# ATR multiplier for Chandelier trailing stop. Default: 3.0
+# Higher = wider stop (more room); lower = tighter stop.
+trailing_stop_atr_mult = 3.0
+
+# Minimum score to act on. Default: 0.3
+min_score = 0.3
+
+
+# ---------------------------------------------------------------------------
+# GJR-GARCH — asymmetric conditional volatility estimator
+# ---------------------------------------------------------------------------
+[garch]
+
+# GJR-GARCH(1,1) parameters. Captures leverage effect: negative shocks
+# inflate volatility more than positive shocks of the same magnitude.
+# σ²_t = ω + (α + γ × I_{r<0}) × r²_{t-1} + β × σ²_{t-1}
+# Stationarity constraint: α + β + γ/2 < 1 (currently 0.98).
+omega = 0.000005
+alpha = 0.06
+beta = 0.87
+gamma = 0.10
+
+
+# ---------------------------------------------------------------------------
+# Regime Detection — BOCPD changepoint + vol percentile
+# ---------------------------------------------------------------------------
+[regime]
+
+# Expected bars between regime changes (BOCPD hazard = 1/lambda).
+# Higher = slower to detect changes, fewer false positives.
+# Lower = faster detection but noisier.
+bocpd_hazard = 250.0
+
+# Max run lengths tracked (truncation for memory/speed).
+# Most probability mass concentrates in the first ~50 run lengths.
+bocpd_max_run = 50
+
+# Vol percentile thresholds for regime classification.
+# Below vol_percentile_low → LowVol (favor mean-reversion).
+# Above vol_percentile_high → HighVol (favor momentum).
+vol_percentile_low = 0.30
+vol_percentile_high = 0.70
+
+# Crisis requires BOTH conditions: drawdown < crisis_drawdown AND
+# vol_percentile > crisis_vol_percentile.
+crisis_drawdown = -0.05
+crisis_vol_percentile = 0.90
+
+# BOCPD MAP run-length below this → recent regime change → HighVol.
+# Interacts with bocpd_hazard — lower hazard = longer expected runs,
+# so this threshold should be proportionally smaller.
+regime_change_run_length = 20
+
+
+# ---------------------------------------------------------------------------
+# Risk — position sizing and loss limits
+# ---------------------------------------------------------------------------
+[risk]
+
+# Maximum notional value (in USD) for any single position.
+# Caps exposure per trade. Increase for larger accounts,
+# decrease to limit single-trade risk.
+max_position_notional = 10_000.0
+
+# Maximum cumulative realized loss allowed per calendar day (USD).
+# Once hit, the engine stops opening new positions for the rest of the day.
+# Acts as a circuit breaker. Set higher for more aggressive strategies.
+max_daily_loss = 500.0
+
+# Minimum expected-reward / estimated-cost ratio to approve a trade.
+# A trade with score 1.5 and cost 0.5 has ratio 3.0.
+# Higher = only take trades where expected profit far exceeds cost.
+# Lower = allow more marginal trades through.
+min_reward_cost_ratio = 3.0
+
+# Estimated round-trip transaction cost in basis points (1 bp = 0.01%).
+# Used in the reward/cost check above. Includes spread + slippage.
+# 0.005 (5 bps) reflects realistic retail execution costs for US equities.
+estimated_cost_bps = 0.005
+
+# Bet sizing method: "linear" (fixed qty) or "kelly" (Bayesian Kelly).
+# Kelly uses posterior win rate + payoff ratio to size positions,
+# automatically conservative with few trades, growing as edge is confirmed.
+# Switched from "kelly" to "linear" for live paper trading: Kelly with
+# limited trade history caps at 5-6% of max notional (1 share of GLD).
+# Use linear to fully utilize the $10k budget while building trade history.
+# Switch back to Kelly once we have 50+ live trades to calibrate from.
+bet_sizing = "linear"
+
+# Kelly fraction ceiling (half-Kelly). 0.5 = bet at most half the optimal.
+# Lower = more conservative but smoother equity curve.
+kelly_fraction = 0.5
+
+# Minimum/maximum Kelly size as fraction of max_position_notional.
+# Prevents zero sizing during cold start and excessive concentration.
+kelly_min_size = 0.05
+kelly_max_size = 0.80
+
+# Beta prior parameters for win rate. Seeded from backtest results (~60%
+# win rate, 20 pseudocounts). Gives non-zero initial Kelly instead of
+# cold-start zero. Higher values = stronger prior, slower adaptation.
+kelly_prior_wins = 12.0
+kelly_prior_losses = 8.0
+
+# Regime-conditional Kelly fractions (override kelly_fraction per regime).
+# LowVol: slightly more aggressive (market is calm, signals cleaner).
+kelly_fraction_low_vol = 0.6
+# HighVol: quarter-Kelly (trending/volatile, wider stops eat into sizing).
+kelly_fraction_high_vol = 0.25
+# Crisis: minimal (extreme vol + drawdown, preserve capital).
+kelly_fraction_crisis = 0.10
+
+# Smooth drawdown-based deleveraging. Instead of binary kill switch,
+# gradually reduce position sizes as daily P&L approaches max_daily_loss.
+# At 50% of max DD → multiplier = 0.25. At max DD → 0.0.
+drawdown_deleverage = true
+# Exponent: 2 = concave (faster deleverage near max). 1 = linear.
+drawdown_deleverage_curve = 2.0
+
+
+# ---------------------------------------------------------------------------
+# Exit — stop-loss, take-profit, and time-based exits
+# ---------------------------------------------------------------------------
+[exit]
+
+# Fixed percentage stop-loss (0.0 = disabled, use ATR-based instead).
+# When > 0, exit if position drops by this percentage from entry price.
+# Example: 0.05 = exit at 5% loss. Overrides ATR stop if set.
+stop_loss_pct = 0.0
+
+# ATR-multiplier for dynamic stop-loss (0.0 = disabled).
+# Stop price = entry - (ATR × this multiplier).
+# Higher = wider stop (more room for volatility); lower = tighter stop.
+# Only active when stop_loss_pct is 0.
+stop_loss_atr_mult = 2.5
+
+# Maximum number of bars to hold a position before forced exit (0 = no limit).
+# Prevents capital from being tied up in stale positions.
+# At 1-minute bars, 150 bars = ~2.5 hours.
+# Raised from 100 to 150 — let trades develop (exp 22).
+max_hold_bars = 150
+
+# Fixed percentage take-profit (0.0 = disabled).
+# When > 0, exit if position gains this percentage from entry price.
+# Example: 0.03 = take profit at 3% gain.
+take_profit_pct = 0.0
+
+# Minimum bars to hold before strategy-driven exits are allowed.
+# Hard exits (stop loss, take profit) always fire regardless.
+# At 1-minute bars, 10 = hold at least 10 minutes — lets trades breathe.
+min_hold_bars = 10
+
+
+# ---------------------------------------------------------------------------
+# Data — market data staleness controls
+# ---------------------------------------------------------------------------
+[data]
+
+# Maximum age of a bar (in seconds) before it's considered stale.
+# Stale bars are rejected — the engine does nothing rather than trade
+# on delayed data. 0 = disabled (appropriate for backtesting).
+# For live trading, set to something like 120 (2 minutes).
+max_bar_age_seconds = 120
+
+# Trading timezone UTC offset in hours. Used for:
+# - VWAP session reset (resets at midnight in this timezone)
+# - Market hours filtering (bars outside open/close are dropped)
+# - Day boundary detection
+# US Eastern: -5 (EST) or -4 (EDT). Use -5 for year-round safety.
+timezone_offset_hours = -4
+
+# Market open/close in local timezone (HH:MM format).
+# Bars outside this window are filtered out (pre-market/after-hours).
+market_open = "09:30"
+market_close = "16:00"
+
+
+# ---------------------------------------------------------------------------
+# Asset class defaults — inherited by symbols via asset_class = "name"
+# ---------------------------------------------------------------------------
+# Resolution: symbol_overrides > asset_class > global defaults
+# Only set fields you want to differ from global; rest falls through.
+
+[asset_class.metals]
+buy_z_threshold = -2.0          # commodities revert well
+sell_z_threshold = 1.5
+stop_loss_atr_mult = 2.0
+weight_mean_reversion = 0.40    # full mean-reversion
+weight_momentum = 0.25
+weight_vwap_reversion = 0.35
+
+[asset_class.oil_gas]
+buy_z_threshold = -2.5
+weight_mean_reversion = 0.20
+weight_momentum = 0.40
+weight_vwap_reversion = 0.40
+
+[asset_class.disabled]
+weight_mean_reversion = 0.0
+weight_momentum = 0.0
+weight_vwap_reversion = 0.0
+weight_breakout = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Per-symbol overrides — reference asset class, then override specific fields
+# ---------------------------------------------------------------------------
+
+# Metals — PBO-validated (GLD 6.7%, SLV 46.7%)
+[symbol_overrides.GLD]
+asset_class = "metals"
+
+[symbol_overrides.SLV]
+asset_class = "metals"
+buy_z_threshold = -2.5          # PBO-optimal override (differs from class)
+sell_z_threshold = 2.5
+
+# Oil/Gas
+[symbol_overrides.CVX]
+asset_class = "oil_gas"
+
+[symbol_overrides.XOM]
+asset_class = "oil_gas"
+weight_mean_reversion = 0.0     # XOM loses on mean-rev, override class
+
+# Disabled — no alpha with current signals
+[symbol_overrides.AAPL]
+asset_class = "disabled"
+
+[symbol_overrides.MSFT]
+asset_class = "disabled"
+
+[symbol_overrides.NVDA]
+asset_class = "disabled"
+
+[symbol_overrides.NEE]
+asset_class = "disabled"
+
+[symbol_overrides.ENPH]
+asset_class = "disabled"
+
+[symbol_overrides.JNJ]
+asset_class = "disabled"
+
+[symbol_overrides.PFE]
+asset_class = "disabled"
+
+[symbol_overrides.ABBV]
+asset_class = "disabled"
+
+
+# ---------------------------------------------------------------------------
+# Pairs Trading — the only section the runner uses
+# ---------------------------------------------------------------------------
+# Pairs sourced from trading/active_pairs.json (produced by pair-picker).
+# Per-pair identity (legs, beta, half-life) comes from that file.
+# These are shared trading parameters.
+#
+# Tuned for DAILY bars.
+
+[pairs_trading]
+
+entry_z = 2.0           # Enter when |z| > entry_z
+exit_z = 0.5            # Exit when |z| < exit_z (spread reverted)
+stop_z = 6.0            # Stop loss when |z| > stop_z
+
+# Default lookback for spread z-score. Per-pair windows from half-life
+# take precedence: min(2 × ceil(HL), 60). This is the fallback.
+lookback = 30
+
+max_hold_bars = 10      # Max days to hold. Per-pair override from active_pairs.json.
+min_hold_bars = 1       # Min days before reversion exit. Stop loss always fires.
+notional_per_leg = 1000.0  # $1000/leg × ~25 pairs ≤ $50K notional
+max_concurrent_pairs = 25  # Cap open positions. 0 = no limit.
+
+last_entry_hour = 23    # Effectively disabled for daily bars
+force_close_minute = 1440  # Disabled — exits are z-score or max_hold driven
+tz_offset_hours = -4    # EDT. Must match [data].timezone_offset_hours.
+cost_bps = 10.0         # Round-trip cost in bps (used by regime gate P&L)

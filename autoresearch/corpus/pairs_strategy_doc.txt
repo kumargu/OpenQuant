@@ -1,0 +1,431 @@
+//! Pairs trading — market-neutral mean-reversion on spread between two correlated assets.
+//!
+//! Instead of trading individual stock mean-reversion (1-2 bps edge, wiped by costs),
+//! pairs trading captures the spread reversion between two related assets (8-10 bps edge).
+//!
+//! # How it works
+//!
+//! ```text
+//!  spread = ln(price_A) - β × ln(price_B)
+//!
+//!  z = (spread - rolling_mean) / rolling_std
+//!
+//!  z < -entry_z  →  LONG spread:  BUY A, SELL B
+//!  z > +entry_z  →  SHORT spread: SELL A, BUY B
+//!  |z| < exit_z  →  CLOSE both legs (spread reverted)
+//!  |z| > stop_z  →  STOP LOSS (spread diverged further)
+//! ```
+//!
+//! # Why it works after costs
+//!
+//! Single-stock mean-reversion: ~1.2 bps edge, breakeven at 1.2 bps.
+//! Pairs spread reversion: ~8-10 bps edge, breakeven at ~3 bps per leg.
+//! The spread reverts faster and more reliably than individual prices because
+//! market-wide moves cancel out — only the idiosyncratic component remains.
+//!
+//! # Validated pairs (walk-forward, real dollar P&L, 12 bps cost deducted)
+//!
+//! | Pair      | OOS $/day | Win Rate | Edge (bps) |
+//! |-----------|-----------|----------|------------|
+//! | GLD/SLV   | $118      | 70%      | ~10        |
+//! | COIN/PLTR | $108      | 71%      | ~9         |
+//! | C/JPM     | $86       | 75%      | ~9         |
+//! | GS/MS     | $77       | 76%      | ~9         |
+
+pub mod active_pairs;
+pub mod engine;
+// shadow.rs deleted — was fully implemented but never wired into PairsEngine.
+// Promotion/demotion logic can be re-added when needed.
+
+use crate::features::rolling_stats::RollingStats;
+use crate::signals::{Side, SignalReason};
+use std::collections::VecDeque;
+use tracing::{debug, error, info, warn};
+
+/// Trading parameters for the pairs strategy. Loaded from `[pairs_trading]` in `openquant.toml`.
+///
+/// Separated from per-pair identity (`PairConfig`) so parameters can be tuned
+/// in TOML without recompilation, and all pairs share the same trading rules.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+//! Pair validation pipeline.
+//!
+//! Orchestrates the full validation flow:
+//! 1. ETF exclusion filter (instant reject)
+//! 2. OLS regression → beta (hedge ratio)
+//! 3. Engle-Granger cointegration (ADF on spread residuals)
+//! 4. OU half-life estimation
+//! 5. Beta stability (rolling CV + structural break detection)
+//! 6. Composite scoring
+//!
+//! Reads `pair_candidates.json`, validates each pair against daily price data,
+//! writes `active_pairs.json` with passing pairs sorted by score.
+
+use crate::etf_filter::is_etf_component_pair;
+--
+/// Minimum number of daily bars required for validation.
+/// Lowered from 200 to 90: captures recent regime while still providing
+/// sufficient observations for ADF (needs ~50+) and rolling beta (30-bar windows).
+/// Trade-off: shorter window = more responsive to regime changes but less
+/// statistical power. 90 days is ~4.5 months of daily data.
+pub const MIN_HISTORY_BARS: usize = 90;
+
+/// Maximum window for validation. Caps data to the most recent N bars
+/// even when more history is available. Keeps validation focused on the
+/// current regime rather than averaging across historical regime changes.
+pub const MAX_VALIDATION_WINDOW: usize = 150;
+
+/// Minimum R² for the hedge ratio regression — loose pre-filter.
+/// R² measures co-movement, not cointegration — ADF is the proper cointegration gate.
+/// Set to 0.30 per #178 spec: excludes pairs with essentially no linear relationship
+/// (e.g., NVDA/AMD at R²=0.21) while remaining below the strict production threshold.
+/// Lowered from 0.40 to 0.30 per issue #180.
+pub const MIN_R_SQUARED: f64 = 0.30;
+
+/// Price data for a single symbol: ordered daily close prices.
+pub type PriceData = Vec<f64>;
+
+/// Price data provider trait — allows testing with synthetic data.
+pub trait PriceProvider {
+    /// Get daily close prices for a symbol.
+    /// Returns at least `MIN_HISTORY_BARS` prices, ordered oldest-to-newest.
+    /// Returns a reference to avoid cloning 500+ f64s per pair.
+    fn get_prices(&self, symbol: &str) -> Option<&[f64]>;
+}
+--
+/// In-memory price provider for testing.
+pub struct InMemoryPrices {
+    pub data: HashMap<String, PriceData>,
+--
+/// Validate a single candidate pair.
+pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) -> ValidationResult {
+    let mut result = ValidationResult::new(candidate);
+--
+/// Validate candidates in memory — no file I/O.
+/// Returns passing pairs as ActivePair vec, sorted by score descending.
+/// Used when the runner calls pair-picker as a library.
+pub fn validate_candidates(
+    candidates: &[PairCandidate],
+--
+/// Run the full pipeline: read candidates, validate, write results.
+pub fn run_pipeline(
+    candidates_path: &Path,
+--
+/// Run pipeline from an in-memory list of candidates (used by tests and external callers).
+pub fn run_pipeline_from_candidates(
+    candidates: &[PairCandidate],
+--
+/// Minimum bars for beta refresh (much less than full validation).
+const MIN_REFRESH_BARS: usize = 30;
+
+/// Lightweight beta/alpha refresh — only runs OLS on existing pairs.
+///
+/// Unlike full validation (which requires 200+ bars, ADF, half-life, etc.),
+/// this only needs ~30 bars to compute a reliable hedge ratio. Useful when
+/// you have insufficient data for full validation but want to keep
+/// alpha/beta current.
+///
+/// Reads existing `active_pairs.json`, re-estimates OLS on available price
+/// data, and writes updated file. Pairs that don't have enough data are
+/// left unchanged.
+pub fn refresh_beta(
+    active_pairs_path: &Path,
+//! Pair scoring — combines statistical test results into a composite score.
+//!
+//! Score components (all normalized to [0, 1]):
+//! - Cointegration strength: lower ADF p-value → higher score
+//! - Half-life quality: closer to ideal range (5-15 days) → higher score
+//! - Beta stability: lower CV → higher score
+//! - R² of hedge ratio: higher → higher score
+
+/// Configuration for HL-adaptive max hold time.
+///
+/// OU theory: after `k` half-lives, the expected reversion is `1 - 2^{-k}`.
+/// Setting `max_hold = multiplier * half_life` targets a fixed fraction of
+/// expected reversion before the timeout.  The cap prevents excessive hold
+/// times for slow pairs.
+///
+/// Default: 2.5× half-life, capped at 10 days → ~82% expected reversion.
+///
+/// Reference: Ornstein-Uhlenbeck process theory; see also Krauss (2017),
+/// "Statistical Arbitrage Pairs Trading Strategies: Review and Outlook".
+#[derive(Debug, Clone)]
+pub struct MaxHoldConfig {
+    /// Multiplier applied to the OU half-life to derive max hold duration.
+    /// Default: 2.5 (targets ~82% reversion: 1 - 2^{-2.5} ≈ 0.82).
+    pub hold_multiplier: f64,
+    /// Hard cap on max hold in days regardless of half-life.
+    /// Default: 10 days.
+    pub max_hold_cap: usize,
+}
+--
+/// Compute per-pair max hold days from OU half-life.
+///
+/// Formula: `min(ceil(hold_multiplier * half_life), max_hold_cap)`
+///
+/// # Panics / edge cases
+/// - `half_life` must be finite and > 0; returns `max_hold_cap` otherwise
+///   (guards against NaN/Inf propagating into the trading engine).
+/// - Fractional results are rounded **up** (`ceil`) so the pair always gets
+///   at least the full expected reversion window.
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::{MaxHoldConfig, compute_max_hold_days};
+/// let cfg = MaxHoldConfig::default(); // multiplier=2.5, cap=10
+/// assert_eq!(compute_max_hold_days(2.0, &cfg), 5);  // 2.5*2.0=5.0 → 5
+/// assert_eq!(compute_max_hold_days(5.0, &cfg), 10); // 2.5*5.0=12.5 → capped at 10
+/// ```
+pub fn compute_max_hold_days(half_life: f64, config: &MaxHoldConfig) -> usize {
+    if !half_life.is_finite() || half_life <= 0.0 {
+--
+/// Configurable scoring weights. Will be superseded by Thompson sampling (#119),
+/// but kept configurable so they can be tuned via CLI or config file in the meantime.
+#[derive(Debug, Clone)]
+pub struct ScoringConfig {
+--
+/// Compute composite score from validation results using default weights.
+///
+/// Returns a score in [0, 1] where higher = better pair.
+pub fn compute_score(
+    adf_pvalue: f64,
+--
+/// Compute composite score with custom weights.
+pub fn compute_score_with_config(
+    adf_pvalue: f64,
+--
+/// ADF p-value → cointegration score.
+/// p < 0.01 → 1.0, p = 0.05 → 0.5, p > 0.10 → 0.0
+fn cointegration_score(p_value: f64) -> f64 {
+    if p_value <= 0.01 {
+--
+/// Half-life → quality score.
+/// Ideal range: 2-15 days (fast enough to trade intraday, slow enough to execute).
+/// Valid range: 1-40 days (lowered from 3 to admit fast mean-reverting pairs).
+fn half_life_score(hl: f64) -> f64 {
+    if !(1.0..=40.0).contains(&hl) {
+--
+/// Beta stability → score.
+/// CV < 0.05 → 1.0, CV = 0.20 → 0.0 (at threshold)
+fn beta_stability_score(cv: f64, structural_break: bool) -> f64 {
+    if structural_break {
+--
+/// Configuration for the signal-queue priority scorer.
+///
+/// All parameters have `Default` impls; they can be overridden from TOML
+/// without recompilation.
+#[derive(Debug, Clone)]
+pub struct PriorityConfig {
+    /// Minimum sigma_spread to guard against division by near-zero.
+    ///
+    /// If the spread has negligibly small volatility the pair is essentially
+    /// always flat — no meaningful P&L potential. Score is clamped to 0 below
+    /// this threshold.
+    ///
+    /// Default: 1e-6 (in log-spread units; corresponds to ~0.0001% price move)
+    pub min_sigma: f64,
+    /// Minimum kappa (mean-reversion rate, per day) to guard against division
+    /// by near-zero / negative kappa.
+    ///
+    /// Negative or zero kappa means the spread is not mean-reverting, so we
+    /// assign a score of 0.
+    ///
+    /// Default: 1e-6
+    pub min_kappa: f64,
+}
+--
+/// Convert OU half-life (days) to mean-reversion rate κ (per day).
+///
+/// OU process: dS_t = -κ(S_t - μ) dt + σ dW_t
+/// Half-life τ relates to κ by: τ = ln(2) / κ, so κ = ln(2) / τ.
+///
+/// Reference: Ornstein-Uhlenbeck process; see also Avellaneda & Lee (2010).
+///
+/// Returns `None` if `half_life_days` is not finite or ≤ 0.
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::half_life_to_kappa;
+/// // HL=10 days → κ = ln(2)/10 ≈ 0.0693
+/// let k = half_life_to_kappa(10.0).unwrap();
+/// assert!((k - f64::ln(2.0) / 10.0).abs() < 1e-12);
+/// ```
+pub fn half_life_to_kappa(half_life_days: f64) -> Option<f64> {
+    if !half_life_days.is_finite() || half_life_days <= 0.0 {
+--
+/// Compute the real-time priority score for signal-queue ranking.
+///
+/// Formula (Avellaneda-Lee signal strength × OU speed × risk normalisation):
+/// ```text
+///   priority = |z| × sqrt(κ) / σ_spread
+/// ```
+///
+/// - |z|: signal strength — the further the spread from equilibrium, the
+///   larger the expected P&L.
+/// - sqrt(κ): reversion speed weight — faster-reverting pairs earn the capital
+///   back quicker.  sqrt instead of κ prevents over-weighting extremely fast
+///   but noisy pairs.
+/// - 1/σ_spread: risk normalisation — tighter-spread pairs require less
+///   capital to achieve the same basis-point return.
+///
+/// Returns 0.0 if any input is not finite, z is NaN/±∞, σ_spread < min_sigma,
+/// or κ < min_kappa (no mean-reversion detected).
+///
+/// Reference: Avellaneda & Lee (2010) §3; Lee, Leung & Ning (2023).
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::{PriorityConfig, compute_priority_score};
+/// let cfg = PriorityConfig::default();
+/// let score = compute_priority_score(2.5, 0.069, 0.02, &cfg); // |z|=2.5, κ≈ln2/10, σ=2%
+/// assert!(score > 0.0);
+/// // NaN input → 0.0 (safe, never NaN-propagates)
+/// assert_eq!(compute_priority_score(f64::NAN, 0.069, 0.02, &cfg), 0.0);
+/// ```
+pub fn compute_priority_score(
+    z: f64,
+--
+/// Compute expected return per dollar deployed per day.
+///
+/// This is the **common-unit metric** that lets us compare active trades with
+/// queued signals on the same scale, enabling capital rotation (evict a slower
+/// trade to free room for a faster/stronger signal).
+///
+/// Formula (Lee-Leung-Ning 2023, adapted for daily-bar scaling):
+/// ```text
+///   E[R / $ / day] = |z| × σ_spread × κ / (1 + κ × E[hold_days])
+/// ```
+///
+/// Units breakdown:
+/// - |z| × σ_spread → expected spread move in log-spread units (≈ P&L potential)
+/// - κ / (1 + κ × T) → effective reversion rate given expected holding period T
+///   (faster reversion = more trades per unit time = more P&L per day)
+///
+/// Returns 0.0 if any input is not finite, κ ≤ 0, σ ≤ 0, or expected_hold ≤ 0.
+///
+/// Reference: Lee, Leung & Ning (2023), "Optimal Mean Reversion Trading with
+/// Transaction Costs", §2.2.
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::expected_return_per_dollar_per_day;
+/// // |z|=2.5, σ=0.02, κ=ln(2)/10≈0.0693, hold=10 days
+/// let r = expected_return_per_dollar_per_day(2.5, 0.02, f64::ln(2.0)/10.0, 10.0);
+/// assert!(r > 0.0);
+/// assert!(r.is_finite());
+/// // Zero sigma → 0.0
+/// assert_eq!(expected_return_per_dollar_per_day(2.5, 0.0, 0.069, 10.0), 0.0);
+/// ```
+pub fn expected_return_per_dollar_per_day(
+    z: f64,
+--
+/// Configuration for the opportunity-cost rotation engine.
+///
+/// All fields have `Default` impls so callers can override only what they need.
+#[derive(Debug, Clone)]
+pub struct RotationConfig {
+    /// Transaction cost per dollar deployed per day in the same units as
+    /// `remaining_per_day` (expected return / $ / day).
+    ///
+    /// Used as buffer: only rotate when the improvement exceeds `2 × cost_per_day`
+    /// to avoid churning on marginal improvements.
+    ///
+    /// Default: 5 basis points (0.0005) one-way, so 0.001/day round-trip.
+    /// Expressed as a daily rate: `COST_BPS / 10_000 * 2 / expected_hold_days`.
+    /// A conservative 0.001 corresponds to a 2-day expected hold and 5 bps/side.
+    pub cost_per_day: f64,
+    /// Maximum number of rotation evictions per day to limit churn.
+    ///
+    /// Even if many trades qualify for rotation, we cap at this many per day.
+    /// Default: 2 (limits daily turnover while still allowing opportunity capture).
+    pub max_rotations_per_day: usize,
+}
+--
+/// Compute the remaining expected return per dollar per day for an active trade.
+///
+/// This is the **forward-looking** counterpart to `expected_return_per_dollar_per_day`:
+/// instead of computing the expected return over the full holding period from entry,
+/// it estimates how much additional return per day is still left to be captured
+/// given that the trade has already been held for `days_held` days and has
+/// accumulated `unrealized_return` (as a fraction of capital deployed).
+///
+/// Formula:
+/// ```text
+///   remaining_edge = expected_total_return - unrealized_return
+///   remaining_days = max(max_hold - days_held, 1)   // guard against exhausted hold
+///   remaining_per_day = remaining_edge / remaining_days
+/// ```
+///
+/// Where `expected_total_return` is approximated from entry-time signal metrics as:
+/// ```text
+///   expected_total_return = |z_entry| × sigma_spread
+/// ```
+/// This is the expected spread reversion magnitude: the spread was `z_entry` standard
+/// deviations displaced and is expected to revert to zero, capturing ≈ one sigma of
+/// spread move per standard deviation.
+///
+/// # Parameters
+/// - `z_entry`: z-score at trade entry (used to estimate total expected return)
+/// - `sigma_spread`: rolling spread standard deviation at entry
+/// - `unrealized_return`: fraction of capital already captured (can be negative)
+/// - `days_held`: number of bars since entry
+/// - `max_hold`: per-pair maximum hold duration in days
+///
+/// # Returns
+/// - `> 0.0` if there is positive remaining edge per day
+/// - `≤ 0.0` if the trade has exhausted its edge or is losing money
+/// - `0.0` on any non-finite input (guards NaN propagation)
+///
+/// Reference: Leung & Li (2015), §3.1 — remaining value of an open position.
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::compute_remaining_per_day;
+/// // z=2.5 at entry, sigma=0.02, no P&L yet, held 2 of 10 days
+/// let r = compute_remaining_per_day(2.5, 0.02, 0.0, 2, 10);
+/// assert!(r > 0.0);
+/// // Fully captured return → remaining ≈ 0 (or negative)
+/// let r2 = compute_remaining_per_day(2.5, 0.02, 0.05, 9, 10);
+/// // remaining_edge = 2.5*0.02 - 0.05 = 0.05 - 0.05 = 0.0 / 1 = 0.0
+/// assert!(r2.abs() < 1e-12);
+/// ```
+pub fn compute_remaining_per_day(
+    z_entry: f64,
+--
+/// Decide whether to rotate an active trade out to make room for a queued signal.
+///
+/// Rotation condition (Leung & Li 2015):
+/// ```text
+///   REPLACE if: unrealized_return > 0
+///           AND remaining_per_day < best_queued_per_day - 2 × cost_per_day
+/// ```
+///
+/// Both sides are in the same unit: **expected incremental return per dollar per day,
+/// net of costs**.  The `2 × cost_per_day` buffer prevents churning on marginal cases.
+///
+/// # Parameters
+/// - `unrealized_return`: fraction of capital already captured by the active trade
+/// - `remaining_per_day`: remaining expected return/$/day for the active trade
+///   (compute with `compute_remaining_per_day`)
+/// - `best_queued_per_day`: expected return/$/day for the best queued signal
+///   (compute with `expected_return_per_dollar_per_day`)
+/// - `config`: rotation parameters (cost buffer, max rotations per day)
+///
+/// # Returns
+/// `true` if the active trade should be evicted and replaced with the queued signal.
+///
+/// Reference: Leung & Li (2015) §3; Avellaneda & Lee (2010) §4.
+///
+/// # Examples
+/// ```
+/// use pair_picker::scorer::{RotationConfig, should_rotate};
+/// let cfg = RotationConfig::default();
+/// // Good case: positive P&L, remaining edge much lower than queued signal
+/// assert!(should_rotate(0.005, 0.001, 0.015, &cfg));
+/// // No rotation if unrealized_return ≤ 0 (don't cut losing trades for rotation)
+/// assert!(!should_rotate(-0.001, 0.001, 0.015, &cfg));
+/// // No rotation if improvement is within cost buffer
+/// assert!(!should_rotate(0.005, 0.012, 0.013, &cfg));
+/// ```
+pub fn should_rotate(
+    unrealized_return: f64,

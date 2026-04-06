@@ -1,0 +1,166 @@
+[Research] Should structural break gate be softened? Evidence from March 2026 rejections
+
+## Question
+
+Our pair-picker rejects pairs with structural breaks in beta, but many rejected pairs turned out profitable in March 2026. Should the structural break gate be softened or restructured?
+
+### Evidence (March 2026)
+
+| Pair | Rejection Reason | Profit |
+|---|---|---|
+| JBL/ON | Beta CV=1.234, structural break 102.7% | +$418 |
+| SNDK/WDC | ADF p=0.08 (borderline) | +$225 |
+| MTB/PNC | ADF p=0.07 (borderline) | +$191 |
+| BK/C | Beta CV=0.399, regime-tightened ADF p=0.015>0.01 | +$130 |
+| BAX/CI | Beta CV=0.382, structural break 56.8% | +$123 |
+
+Total missed profit: **+$1,087** from 5 pairs. The pair-picker rejects 25 of 41 pairs that would have been profitable — a **61% false-reject rate** on the profitable set.
+
+## Prior Art (from #79)
+
+- Krauss (2017) — Statistical Arbitrage Pairs Trading Strategies: Review and Outlook (#12)
+- Clegg (2014) — On the Persistence of Cointegration in Pairs Trading (not in #79, added below)
+- Clegg & Krauss (2018) — Pairs Trading with Partial Cointegration (not in #79, added below)
+- Gregory & Hansen (1996) — Cointegration tests with regime shifts
+
+## Findings
+
+### 1. Structural Breaks Are the Norm, Not the Exception (Clegg 2014)
+
+Clegg (2014) examined 860,000+ pairs from S&P 500 constituents over 2002-2012. **Key finding: only 4.9% of pairs cointegrated in one year remain cointegrated the next year.** Cointegration is non-persistent — spread series are affected by a "steady stream of permanent shocks."
+
+**Implication for OpenQuant**: If cointegration is inherently transient, hard-gating on structural breaks within a 180-day lookback is over-filtering. The break detected during the formation window may have already resolved by the time we trade. The pair's cointegration can reform after a break — our current binary gate doesn't account for this.
+
+### 2. Partial Cointegration Outperforms Classical Cointegration (Clegg & Krauss 2018)
+
+Clegg & Krauss (2018) introduced **partial cointegration**: the spread contains both a mean-reverting AND a random walk component. Key results:
+- Annualized returns >12% after transaction costs (1990-2015)
+- **Superior to classical cointegration-based variants** on a survivorship-bias-free S&P 500 dataset
+- The `partialCI` R package provides estimation and testing
+
+**Implication**: Our binary cointegration gate (ADF pass/fail) is too rigid. Many profitable pairs are "partially cointegrated" — they have a mean-reverting component strong enough to trade, mixed with some drift. A structural break in the formation window might just mean the random-walk component temporarily dominated.
+
+### 3. Gregory-Hansen Test: Cointegration WITH Regime Shifts (1996)
+
+Gregory & Hansen (1996) developed an ADF variant that tests for cointegration **allowing for a single structural break** in the cointegrating relationship. Their recommendation: run both standard ADF and Gregory-Hansen ADF together:
+- Both reject → strong evidence of cointegration
+- Standard ADF fails, GH-ADF rejects → cointegration exists but relationship has shifted
+- Both fail → no cointegration
+
+**Implication**: The GH test would directly address our problem. Pairs like JBL/ON (structural break 102.7%) might pass the GH test, confirming cointegration despite the level shift in the hedge ratio.
+
+### 4. Formation Period Length Matters Enormously (Chan, Krauss)
+
+Ernie Chan recommends setting the lookback period to a small multiple of the half-life. For a pair with half-life = 5 days, a 180-day lookback captures 36 half-lives of data — but also captures structural breaks that happened 6 months ago and are no longer relevant.
+
+**Implication for the specific evidence**: The 180-day lookback ending before the March 2026 trading period is almost certainly capturing OLD breaks. By the time we trade, the pair may have re-established cointegration. A shorter break-detection window (30-60 days) or a recency-weighted approach would prevent stale breaks from blocking current opportunities.
+
+### 5. ADF Threshold: 0.10 Is Used in Practice for Pairs Trading
+
+Multiple practitioners and papers use ADF p-value thresholds of 0.10 for pairs trading:
+- Hudson & Thames documentation uses 0.10 as a common screening threshold
+- QuantStart articles reference 0.10 for initial screening
+- Some practitioners use tiered scoring: p<0.01 (strong), p<0.05 (moderate), p<0.10 (weak)
+
+The current system is double-penalizing borderline pairs: first at the ADF gate (p<0.05), then again via regime-tightening (p<0.01 in volatile regimes). BK/C at p=0.015 is statistically significant at the 2% level — rejecting this is very conservative.
+
+### 6. KPSS as Confirmatory Test
+
+Using ADF alone has known weaknesses (low power against near-unit-root alternatives). The KPSS test has the opposite null hypothesis (H0: stationary). The dual-test approach:
+- ADF rejects + KPSS fails to reject → strong evidence of stationarity
+- ADF fails to reject + KPSS rejects → strong evidence of unit root
+- Both disagree → uncertain, needs investigation
+
+This would help resolve borderline cases like SNDK/WDC (p=0.08) and MTB/PNC (p=0.07).
+
+## Current Code Analysis
+
+### What the code does now
+
+1. **Structural break** is a **hard gate** (`pipeline.rs:305`): `!result.structural_break` required for `passed = true`
+2. **Beta CV** is a **score penalty** via `compute_score()` but `is_stable` requires BOTH `cv < MAX_BETA_CV` AND `!structural_break` (`beta_stability.rs:99`)
+3. **Structural break threshold** scales with rolling window: 45% at 30-bar windows (`beta_stability.rs:126-129`)
+4. **Regime-tightened ADF**: p<0.01 threshold in volatile regimes, p<0.05 in calm (`regime.rs:193-198`)
+5. **ADF** is also a hard gate: `result.is_cointegrated` must be true
+
+### The problem
+
+The pipeline has **multiple conservative gates stacked multiplicatively**:
+- ADF hard gate (p<0.05 nominal, p<0.01 in volatile regimes)
+- Structural break hard gate (max mean-shift > 45%)
+- Beta CV threshold (0.35)
+- R² threshold (0.30)
+- Half-life range (1-40 days)
+- Regime robustness (fragile = rejected)
+
+Each gate individually is reasonable. Combined, they create a system that rejects 61% of profitable pairs. The gates are not independent — a structural break inflates both beta CV AND ADF p-value, so one underlying issue triggers three separate rejections.
+
+## Recommendations
+
+### R1: Convert structural break from hard gate to score penalty (HIGH PRIORITY)
+
+Current: `structural_break → reject`
+Proposed: `structural_break → score *= penalty_factor` where penalty depends on:
+- **Recency of break**: break in last 30 days of lookback → large penalty. Break in first 60 days → small penalty (it's old)
+- **Magnitude**: 50% shift → moderate penalty. 100%+ shift → large penalty
+- **Whether break has healed**: if the POST-break sub-period is still cointegrated (run ADF on last 30 bars), reduce the penalty substantially
+
+Justification: Clegg (2014) shows breaks are the norm. Clegg & Krauss (2018) show partial cointegration is profitable. Hard-gating on breaks throws away the profitable mean-reverting component.
+
+### R2: Raise ADF threshold from 0.05 to 0.10 for initial screen (MEDIUM PRIORITY)
+
+Use tiered scoring instead of hard cutoff:
+- p < 0.01: score = 1.0 (strong cointegration)
+- p = 0.05: score = 0.5 (moderate)
+- p = 0.10: score ~0.1 (weak but tradeable)
+- p > 0.10: score = 0.0 (reject)
+
+This already exists in `cointegration_score()` which maps [0.01, 0.10] to [1.0, 0.0]. The problem is that the hard gate at p<0.05 overrides the scoring — pairs with p=0.07 get a score of ~0.33 but are still rejected by the boolean gate.
+
+**Fix**: Change the hard gate from `is_cointegrated (p<0.05)` to `adf_pvalue < 0.10`. Let the score function handle gradations.
+
+### R3: Soften regime-tightened ADF from p<0.01 to p<0.03 in volatile regimes (MEDIUM)
+
+p<0.01 in volatile regimes is too aggressive — it requires 99% confidence during exactly the period when data is noisiest and test power is lowest. BK/C at p=0.015 is significant at the 2% level; rejecting it is statistically indefensible.
+
+### R4: Add KPSS confirmatory test (LOW PRIORITY, future)
+
+For borderline ADF cases (0.05 < p < 0.10), run KPSS as a tie-breaker:
+- ADF borderline + KPSS confirms stationary → pass with moderate score
+- ADF borderline + KPSS rejects stationary → reject
+- Adds ~50 lines of code; KPSS is simpler than ADF
+
+### R5: Shorter structural break detection window (MEDIUM)
+
+Use the last 60 days of the lookback for structural break detection, not the full 150-day window. A break that happened 5 months ago and resolved 3 months ago should not block the pair today.
+
+### R6: Investigate partial cointegration (LOW PRIORITY, future)
+
+Clegg & Krauss (2018) showed partial cointegration outperforms. This is a larger undertaking — it requires implementing the partialCI model in Rust — but could significantly improve pair selection quality. The `partialCI` R package has reference code.
+
+## Quantified Expected Impact
+
+If R1+R2+R3 were applied to the March 2026 data:
+- JBL/ON: Break becomes score penalty, not rejection → likely passes (strong p-value otherwise)
+- SNDK/WDC: ADF p=0.08 < 0.10 threshold → passes with low score
+- MTB/PNC: ADF p=0.07 < 0.10 threshold → passes with low score  
+- BK/C: p=0.015 < 0.03 volatile threshold → passes
+- BAX/CI: Break becomes score penalty → likely passes
+
+**Estimated recovered profit: ~$1,087 from 5 pairs**
+
+Risk: we would also admit some pairs that lose money. The score-based ranking should mitigate this — borderline pairs get lower scores and smaller positions.
+
+## Sources
+
+- [Clegg (2014) — On the Persistence of Cointegration in Pairs Trading](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2491201)
+- [Clegg & Krauss (2018) — Pairs Trading with Partial Cointegration](https://www.tandfonline.com/doi/abs/10.1080/14697688.2017.1370122)
+- [Gregory & Hansen (1996) — Cointegration Tests with Regime Shifts](https://onlinelibrary.wiley.com/doi/abs/10.1111/j.1468-0084.1996.mp58003008.x)
+- [Krauss (2017) — Statistical Arbitrage Pairs Trading Strategies](https://doi.org/10.1111/joes.12153)
+- [Kim & Heo (2021) — Structural Break-Aware Pairs Trading with Deep RL](https://link.springer.com/article/10.1007/s11227-021-04013-x)
+- [Chan — When Cointegration Breaks Down (blog)](http://epchan.blogspot.com/2011/06/when-cointegration-of-pair-breaks-down.html)
+- [Hudson & Thames — Introduction to Cointegration](https://hudsonthames.org/an-introduction-to-cointegration/)
+- [QuantStart — ADF for Pairs Trading](https://www.quantstart.com/articles/Cointegrated-Augmented-Dickey-Fuller-Test-for-Pairs-Trading-Evaluation-in-R/)
+- [partialCI R package (Clegg)](https://github.com/matthewclegg/egcm)
+
+Ref: #79 (master research list)

@@ -1,0 +1,285 @@
+## Summary
+
+A comprehensive quant-trader review of the OpenQuant engine, synthesizing findings from three parallel research streams: academic literature (books + papers), AI/mathematical methods for quant trading, and open-source GitHub implementations. The goal: diagnose why the system produces only small profits, and provide a concrete roadmap to institutional-grade performance.
+
+---
+
+## Part 1: Strategy Review — What You Have & Why Profits Are Small
+
+### Current Strategies Assessment
+
+| Strategy | Logic | Verdict |
+|----------|-------|---------|
+| **Mean Reversion** | Z-score on returns + volume confirmation + SMA-50 trend filter | Sound idea, but the z-score threshold is static; no regime awareness. The SMA-50 filter is binary (on/off) — real quants use continuous regime probabilities. Catches falling knives in trending markets. |
+| **Momentum** | EMA crossover + ADX + DI filter | Most crowded retail signal that exists. By the time ADX > 20 and EMAs cross, institutional money has already moved. The signal is **lagging** by construction. |
+| **Breakout** | Bollinger squeeze + Donchian + volume surge | Best-constructed strategy. But exit logic has workarounds ("we don't have close directly") and the Chandelier stop uses `%B` as proxy — approximations compound error. |
+| **VWAP Reversion** | Mean-reversion to VWAP with session-time weighting | Most interesting — has institutional logic (VWAP as execution benchmark). But session weighting (early/mid/late buckets) is too coarse. |
+| **Signal Combiner** | Score-weighted voting | **The #1 architectural problem.** Fixed-weight voting means strategies cancel each other out. Mean-reversion says "buy the dip" while momentum says "sell the trend" — they fight. Without regime-aware weighting, you get signal cancellation → small profits. |
+| **Risk** | Kill switch, cost filter, linear/sigmoid sizing, ATR stops, max hold | Good hygiene, but no portfolio-level risk (correlation, sector exposure, drawdown-based deleveraging). ATR is a crude volatility measure. Position sizing has no theoretical grounding (Kelly criterion). |
+
+### Root Cause Diagnosis (Grinold-Kahn Fundamental Law)
+
+The **Fundamental Law of Active Management** states: `IR = IC × √BR × TC`
+- **IC** (Information Coefficient / signal quality): Low. Your signals are textbook indicators that every retail quant uses. Alpha is crowded.
+- **BR** (Breadth / number of independent bets): Low. You trade single assets with 4 correlated strategies. No pairs, no cross-sectional, no factors.
+- **TC** (Transfer Coefficient / implementation efficiency): Unknown but likely mediocre. No execution optimization, basic cost model.
+
+**Your profits are small because IC × √BR is small, and your strategies often cancel each other out (negative TC from signal combiner).**
+
+---
+
+## Part 2: Critical Gaps to Fill (Prioritized)
+
+### 🔴 Gap 1: Regime Blindness (HIGHEST PRIORITY)
+
+**The Problem:** Running mean-reversion and momentum simultaneously without regime detection causes them to cancel each other. Mean-reversion works in range-bound markets; momentum works in trending markets. Without knowing which regime you're in, your combiner fights itself.
+
+**The Fix — Three Options (increasing sophistication):**
+
+1. **Bayesian Online Changepoint Detection (BOCPD)** — Easiest. The Rust crate [`changepoint`](https://crates.io/crates/changepoint) by Redpoll provides production-grade BOCPD. Detects when market dynamics shift without specifying number of regimes a priori. ~2-4 weeks.
+   - Paper: Adams & MacKay (2007) "Bayesian Online Changepoint Detection"
+
+2. **Hidden Markov Model (HMM)** — Standard approach. 2-3 state HMM (bull/bear/sideways) with emissions based on returns + volatility. Online filtering via forward algorithm: O(K²) per step.
+   - Paper: Hamilton (1989) "A New Approach to the Economic Analysis of Nonstationary Time Series"
+   - Reference impl: [Sakeeb91/market-regime-detection](https://github.com/Sakeeb91/market-regime-detection)
+   - Complete system: [0x596173736972/MarketRegimeTrader](https://github.com/0x596173736972/MarketRegimeTrader)
+
+3. **Hidden Semi-Markov Model (HSMM)** — Better regime duration modeling (bull markets last longer than geometric distribution implies).
+   - Paper: Bulla & Bulla (2006) "Stylized Facts and Hidden Semi-Markov Models"
+
+**Integration point:** Regime probabilities feed into the Signal Combiner to weight strategies dynamically, and into Risk module to scale position sizes.
+
+---
+
+### 🔴 Gap 2: Static Signal Combiner → Adaptive Strategy Selection
+
+**The Problem:** Fixed score-weighted voting is the worst architectural weakness. Strategy performance is non-stationary.
+
+**The Fix — Three Options:**
+
+1. **Multi-Armed Bandit (Discounted Thompson Sampling)** — Each strategy is an "arm." DS-TS maintains Beta posteriors with exponential discounting, naturally favoring recently-winning strategies. ~200 lines of Rust. ~2-4 weeks.
+   - Paper: Raj & Kalyani (2017) "Taming Non-stationary Bandits"
+   - Reference: [Bandit Networks for Portfolio Optimization (2024)](https://arxiv.org/abs/2410.04217)
+
+2. **Meta-Labeling (Lopez de Prado)** — Train a secondary classifier that predicts P(primary signal is profitable). Use Triple Barrier Method for training labels. The meta-model's confidence becomes position size. **Single highest-impact improvement.**
+   - Book: Lopez de Prado (2018) "Advances in Financial Machine Learning" Ch. 3, 50
+   - Reference impl: [Hudson & Thames meta-labeling](https://github.com/hudson-and-thames/meta-labeling)
+   - Feature impl: [FGU1/mlfinlab](https://github.com/FGU1/mlfinlab)
+
+3. **Factor Momentum** — Apply momentum to strategy-level returns: increase weight on recently winning strategies, decrease on losing. Theoretically grounded by Ehsani & Linnainmaa (2022).
+
+---
+
+### 🟡 Gap 3: Position Sizing Has No Theoretical Foundation
+
+**The Problem:** Linear sizing ignores signal quality. Sigmoid is heuristic. Neither is mathematically optimal.
+
+**The Fix — Kelly Criterion:**
+
+Replace with **fractional Kelly** (half-Kelly is standard practice due to estimation error):
+```
+f* = (p × b - q) / b
+```
+where p = win probability, b = win/loss ratio, estimated from rolling strategy performance.
+
+- Paper: Kelly (1956), Thorp (2006) "The Kelly Criterion in Blackjack, Sports Betting, and the Stock Market"
+- **Regime-conditional Kelly:** In high-vol regimes (detected via Gap 1), reduce to quarter-Kelly. In low-vol, use half-Kelly.
+- Paper: "Sizing the Risk: Kelly, VIX, and Hybrid Approaches" (2025, [arXiv:2508.16598](https://arxiv.org/abs/2508.16598))
+
+---
+
+### 🟡 Gap 4: Crude Volatility Estimation (ATR → GARCH)
+
+**The Problem:** ATR is a moving average of absolute ranges — it ignores volatility clustering and asymmetry (negative shocks increase vol more than positive).
+
+**The Fix — GARCH(1,1) minimum, GJR-GARCH ideal:**
+
+```
+σ²_t = ω + α × r²_{t-1} + β × σ²_{t-1}           [GARCH]
+σ²_t = ω + (α + γ × I_{r<0}) × r²_{t-1} + β × σ²_{t-1}  [GJR-GARCH, adds leverage effect]
+```
+
+- Only 3-4 parameters, computationally cheap, perfect for Rust
+- Papers: Engle (1982), Bollerslev (1986), Glosten-Jagannathan-Runkle (1993)
+- **Impact:** Better stop-loss distances, better position sizing, regime signal input
+- Reference impl: [Hupperich-Manuel/GARCH_Model_Strategy](https://github.com/Hupperich-Manuel/GARCH_Model_Startegy)
+
+---
+
+### 🟡 Gap 5: No Portfolio-Level Optimization
+
+**The Problem:** Strategies are combined via signal voting, not portfolio optimization. No consideration of correlation between strategies, no risk budgeting, no drawdown-based deleveraging.
+
+**The Fix — Add a Portfolio Construction Layer:**
+
+- **Hierarchical Risk Parity (HRP)** — Doesn't require covariance matrix inversion (robust with few assets/strategies). Allocates risk budget across strategies by diversification benefit.
+- **Risk Parity** — Each strategy contributes equal risk, not equal capital.
+- Libraries:
+  - [skfolio](https://github.com/skfolio/skfolio) — Most complete, scikit-learn API, peer-reviewed (2025)
+  - [Riskfolio-Lib](https://github.com/dcajasn/Riskfolio-Lib) — 24 risk measures, Kelly optimization
+  - [PyPortfolioOpt](https://github.com/PyPortfolio/PyPortfolioOpt) — Simpler, great docs
+- Books: Scherer "Portfolio Construction and Risk Budgeting"; Grinold & Kahn "Active Portfolio Management"
+
+---
+
+### 🟢 Gap 6: No Pairs Trading / Statistical Arbitrage (New Alpha Source)
+
+**The Problem:** All current strategies are directional single-asset. Breadth (BR in fundamental law) is low. Adding market-neutral strategies diversifies alpha.
+
+**The Fix — Cointegration-Based Pairs Trading:**
+
+1. Test pairs for cointegration (Engle-Granger or Johansen)
+2. Model spread as Ornstein-Uhlenbeck process: `dS = θ(μ - S)dt + σdW`
+3. Trade spread when it deviates > N std devs from equilibrium
+4. Dynamic hedge ratio via Kalman Filter
+
+- Paper: Gatev et al. (2006) "Pairs Trading: Performance of a Relative-Value Arbitrage Rule"
+- Survey: Krauss (2017) "Statistical Arbitrage Pairs Trading Strategies: Review and Outlook"
+- Reference impl: [akhil2706/PairsTrading](https://github.com/akhil2706/PairsTrading)
+- Rust OU process: [avhz/RustQuant](https://github.com/avhz/RustQuant) has OU implementation
+
+---
+
+### 🟢 Gap 7: No Cross-Sectional Momentum / Factor Models
+
+**The Problem:** OpenQuant's momentum is time-series only (EMA crossover on a single asset). Cross-sectional momentum (ranking assets by relative performance) is a fundamentally different and more robust signal.
+
+**The Fix:**
+
+- Rank universe of assets by trailing 2-12 month returns (skip most recent month for reversal)
+- Long top decile, short/avoid bottom decile
+- Paper: Jegadeesh & Titman (1993) "Returns to Buying Winners and Selling Losers"
+- Factor attribution: Fama-French 5-factor model to understand what risk you're actually taking
+- Reference impl: [jerryxyx/AlphaTrading](https://github.com/jerryxyx/AlphaTrading)
+
+---
+
+### 🟢 Gap 8: Execution Intelligence
+
+**The Problem:** Likely using immediate market orders. Even for retail size, slippage compounds.
+
+**The Fix:**
+
+- Model your own market impact: `impact ≈ σ × (Q/V)^0.6` (Almgren et al., 2005)
+- Use limit orders with timeout fallback to market
+- Split larger orders across bars
+- Paper: Almgren & Chriss (2000) "Optimal Execution of Portfolio Transactions"
+- Book: Barry Johnson "Algorithmic Trading and DMA"
+- For realistic backtesting: [nkaz001/hftbacktest](https://github.com/nkaz001/hftbacktest) (Rust+Python, models latency and queue position)
+
+---
+
+## Part 3: AI + Mathematical Methods (Rigorous, Not Black-Box)
+
+These are for the next evolution — after the foundational gaps above are addressed:
+
+| Method | What It Does | OpenQuant Module | Effort | References |
+|--------|-------------|-----------------|--------|------------|
+| **BOCPD** (Bayesian Online Changepoint Detection) | Detects regime changes without specifying # regimes | Signal Combiner, Risk | 2-4 wks | Rust crate `changepoint`, Adams & MacKay (2007) |
+| **Discounted Thompson Sampling** | Adaptive strategy weighting as multi-armed bandit | Signal Combiner | 2-4 wks | [arXiv:2410.04217](https://arxiv.org/abs/2410.04217) |
+| **Meta-Labeling + Triple Barrier** | Learns when each strategy's signals are reliable | Signal Combiner + Risk | 4-8 wks | De Prado (2018), [mlfinlab](https://github.com/FGU1/mlfinlab) |
+| **Bayesian Kelly** | Regime-aware position sizing with uncertainty | Risk | 3-6 wks | Thorp (2006), [arXiv:2508.16598](https://arxiv.org/abs/2508.16598) |
+| **Bayesian Optimization** | Dynamic threshold tuning (z-scores, ADX, etc.) | All strategies | 4-6 wks | DTB Labeling (2024, J. Supercomputing) |
+| **Temporal Fusion Transformer** | Interpretable multi-horizon forecasting with attention | Signal generation | 2-4 mo | Lim et al. (2021), [TFT for Crypto (2025)](https://www.mdpi.com/2079-8954/13/6/474) |
+| **Neural SDE** | Learned drift/diffusion for price modeling | Breakout, VWAP | 3-6 mo | [ICLR 2024](https://arxiv.org/abs/2402.14989) |
+| **Graph Neural Network** | Cross-asset lead-lag signals | Multi-asset signals | 3-5 mo | [TGNN (2025)](https://arxiv.org/abs/2504.07923) |
+| **RL Optimal Execution** | Learned order execution minimizing market impact | Execution | 3-6 mo | Almgren-Chriss + RL, [Hafsi & Vittori (2024)](https://arxiv.org/html/2411.06389v1) |
+
+---
+
+## Part 4: Essential Reading List
+
+### Books (Priority Order)
+
+| # | Book | Author | Why Read It |
+|---|------|--------|-------------|
+| 1 | **Advances in Financial Machine Learning** | Lopez de Prado (2018) | Meta-labeling, triple barrier, purged CV — directly fixes combiner |
+| 2 | **Quantitative Trading** (2nd Ed) | Ernest Chan (2021) | End-to-end retail quant, proper backtesting methodology |
+| 3 | **Algorithmic Trading** | Ernest Chan (2013) | Kelly criterion, cointegration, when to mean-revert vs. trend-follow |
+| 4 | **Active Portfolio Management** | Grinold & Kahn (1999) | Fundamental law of active mgmt, diagnose why profits are small |
+| 5 | **Quantitative Portfolio Management** | Isichenko (2021) | Complete stat-arb pipeline, alpha combination with decay |
+| 6 | **Trading and Exchanges** | Larry Harris (2002) | Market microstructure, execution quality |
+| 7 | **Analysis of Financial Time Series** | Ruey Tsay (2010) | GARCH, regime-switching, state-space models |
+| 8 | **Portfolio Construction and Risk Budgeting** | Scherer (5th Ed) | Risk parity, Black-Litterman, robust optimization |
+| 9 | **Algorithmic Trading and DMA** | Barry Johnson (2010) | Execution algorithms, market impact |
+
+### Key Papers
+
+| Paper | Authors (Year) | Key Contribution |
+|-------|---------------|-----------------|
+| Optimal Execution of Portfolio Transactions | Almgren & Chriss (2000) | Foundational execution model |
+| A New Approach to Nonstationary Time Series | Hamilton (1989) | HMM regime switching |
+| Pairs Trading: Performance of Relative-Value Arbitrage | Gatev et al. (2006) | Empirical pairs trading validation |
+| Returns to Buying Winners and Selling Losers | Jegadeesh & Titman (1993) | Cross-sectional momentum |
+| The Kelly Criterion in Blackjack and the Stock Market | Thorp (2006) | Practical Kelly position sizing |
+| Empirical Asset Pricing via Machine Learning | Gu, Kelly & Xiu (2020) | Rigorous ML for return prediction |
+| The Virtue of Complexity in Return Prediction | Kelly, Malamud & Zhou (2022) | When more model complexity helps |
+| ARCH/GARCH | Engle (1982), Bollerslev (1986) | Volatility modeling foundation |
+| Factor Momentum and the Momentum Factor | Ehsani & Linnainmaa (2022) | Momentum in factors, not just stocks |
+| Statistical Arbitrage Pairs Trading: Review | Krauss (2017) | Complete pairs trading survey |
+
+---
+
+## Part 5: Key GitHub Repositories
+
+### Frameworks to Learn From
+| Repo | Stars | Why |
+|------|-------|-----|
+| [nautilus_trader](https://github.com/nautechsystems/nautilus_trader) | ~21K | Rust+Python arch blueprint, production-grade |
+| [QuantConnect/Lean](https://github.com/QuantConnect/Lean) | ~18K | Portfolio optimization models (MVO, BL, Max Sharpe) |
+| [barter-rs](https://github.com/barter-rs/barter-rs) | ~2K | Pure Rust quant framework, study the design |
+| [freqtrade](https://github.com/freqtrade/freqtrade) | ~48K | FreqAI adaptive ML integration pattern |
+
+### Libraries to Integrate
+| Repo | Purpose | Integration |
+|------|---------|-------------|
+| [skfolio](https://github.com/skfolio/skfolio) | Portfolio optimization (HRP, risk parity, MVO) | Python layer |
+| [RustQuant](https://github.com/avhz/RustQuant) | OU process, stochastic models, risk metrics | Rust crate |
+| [quantstats](https://github.com/ranaroussi/quantstats) | 50+ performance metrics, tear sheets | Python layer |
+| [mlfinlab](https://github.com/FGU1/mlfinlab) | Triple barrier, meta-labeling, purged CV | Python layer |
+| [changepoint (Rust)](https://crates.io/crates/changepoint) | BOCPD regime detection | Rust crate |
+| [hftbacktest](https://github.com/nkaz001/hftbacktest) | Realistic backtest (latency, fills) | Rust+Python |
+
+---
+
+## Part 6: Concrete Implementation Roadmap
+
+### Phase 1: Diagnose & Fix Foundation (Weeks 1-4)
+- [ ] **Add quantstats** to Python layer — generate tear sheets to understand actual performance decomposition
+- [ ] **Implement BOCPD** via `changepoint` Rust crate — detect regime changes in real time
+- [ ] **Wire regime signal to combiner** — suppress mean-reversion in trending regimes, suppress momentum in choppy regimes
+- [ ] **Replace ATR with GARCH(1,1)** in Rust — 3 parameters, better vol estimates for stops and sizing
+
+### Phase 2: Fix the Combiner & Sizing (Weeks 5-8)
+- [ ] **Implement Discounted Thompson Sampling** in combiner — adaptive strategy weighting (~200 LOC Rust)
+- [ ] **Replace linear/sigmoid sizing with fractional Kelly** — estimate win rate and payoff per strategy from rolling window
+- [ ] **Add regime-conditional Kelly** — quarter-Kelly in high-vol, half-Kelly in low-vol
+- [ ] **Integrate skfolio or Riskfolio-Lib** in Python layer for portfolio-level risk allocation
+
+### Phase 3: New Alpha Sources (Weeks 9-16)
+- [ ] **Add pairs trading module** — cointegration screening + OU spread modeling + Kalman filter hedge ratio
+- [ ] **Add cross-sectional momentum** — rank universe by trailing returns, go long relative winners
+- [ ] **Implement meta-labeling** — train secondary model to predict when primary signals are profitable
+- [ ] **Add triple barrier labeling** to backtesting for proper strategy evaluation
+
+### Phase 4: Execution & Advanced (Weeks 17+)
+- [ ] **Add limit order execution** with timeout fallback
+- [ ] **Model market impact** in backtester using Almgren's square-root law
+- [ ] **Explore TFT** for multi-horizon forecasting as signal input
+- [ ] **Factor attribution** — decompose returns into Fama-French factors vs. residual alpha
+
+---
+
+## TL;DR — The Three Things That Will Move the Needle Most
+
+1. **Add regime detection (BOCPD/HMM)** and wire it to the signal combiner. Your strategies fight each other without this. This is likely the single biggest reason profits are small.
+
+2. **Replace the static signal combiner** with adaptive weighting (Thompson Sampling or meta-labeling). Fixed weights in a non-stationary market guarantee mediocrity.
+
+3. **Add pairs trading** for a market-neutral alpha source. All your current strategies are directional — you need uncorrelated return streams to increase Breadth in the fundamental law.
+
+Everything else is optimization. These three are structural.
+
+---
+
+*This analysis was produced by a research team of three specialized agents examining academic literature, AI/mathematical methods, and open-source implementations, coordinated by a manager agent with quant trading perspective.*
