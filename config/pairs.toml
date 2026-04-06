@@ -501,4 +501,4 @@ max_concurrent_pairs = 25  # Cap open positions. 0 = no limit.
 last_entry_hour = 23    # Effectively disabled for daily bars
 force_close_minute = 1440  # Disabled — exits are z-score or max_hold driven
 tz_offset_hours = -4    # EDT. Must match [data].timezone_offset_hours.
-cost_bps = 40.0         # Round-trip cost in bps — validated from Alpaca paper fills (30-50 bps real)
+cost_bps = 30.0         # Round-trip cost in bps — 30 bps for liquid large-cap pairs
