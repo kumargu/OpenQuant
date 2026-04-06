@@ -114,9 +114,10 @@ pub fn load_active_pairs(
             // lookback_bars = min(2 × ceil(half_life_days), 60).
             // Chan (2013): lookback should match the half-life.
             // Avellaneda & Lee (2010): 60-day cap for daily data.
+            // Floor of 20 bars — fewer gives noisy z-scores for fast pairs.
             let lookback_bars = if p.half_life_days.is_finite() && p.half_life_days > 0.0 {
                 let hl_bars = p.half_life_days.ceil() as usize;
-                (2 * hl_bars).min(60)
+                (2 * hl_bars).max(20).min(60)
             } else {
                 0 // use global fallback
             };
