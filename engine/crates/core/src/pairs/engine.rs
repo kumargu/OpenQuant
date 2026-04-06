@@ -376,7 +376,10 @@ impl PairsEngine {
         let mut all_intents = Vec::new();
 
         let max_concurrent = self.trading_config.max_concurrent_pairs;
-        let dispersion_suppressed = self.dispersion.high_dispersion;
+        // Dispersion tracking is active (logs WARN when high) but does NOT block entries.
+        // V2-exp1 showed 75th percentile gate was too blunt — blocked good trades too.
+        // TODO: try sector-specific dispersion or use as position-sizing modifier instead.
+        let _dispersion_high = self.dispersion.high_dispersion;
         // Mutable counter: tracks open positions as entries pass through the loop.
         // Avoids the snapshot race where two pairs enter on the same bar when
         // only one slot is open.
@@ -393,16 +396,14 @@ impl PairsEngine {
                     .iter()
                     .any(|i| matches!(i.reason, crate::signals::SignalReason::PairsEntry));
                 let at_capacity = max_concurrent > 0 && current_open >= max_concurrent;
-                let block_entry = at_capacity || dispersion_suppressed;
+                let block_entry = at_capacity;
                 if block_entry && is_entry {
                     // Revert: on_price already set position + exit context.
                     // force_flat() clears all entry state to prevent stale values.
                     state.force_flat();
-                    let reason = if at_capacity { "position cap reached" } else { "high dispersion" };
                     info!(
                         pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
-                        reason,
-                        "entry blocked"
+                        max_concurrent, "entry blocked — position cap reached"
                     );
                 } else {
                     if is_entry {
