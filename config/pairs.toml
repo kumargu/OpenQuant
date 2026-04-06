@@ -485,7 +485,7 @@ asset_class = "disabled"
 
 [pairs_trading]
 
-entry_z = 1.0           # Enter when |z| > entry_z
+entry_z = 2.0           # Enter when |z| > entry_z
 exit_z = 0.2            # Exit when |z| < exit_z (spread reverted)
 stop_z = 4.0            # Stop loss when |z| > stop_z
 
