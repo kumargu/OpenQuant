@@ -726,6 +726,19 @@ impl PairState {
         }
 
         if z < -trading.entry_z {
+            // Guard: don't enter if z is already beyond stop_z — would immediately stop out.
+            // This is a bug! situation that wastes a trade and costs money.
+            if z.abs() > trading.stop_z {
+                let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
+                error!(
+                    pair = pair_id.as_str(),
+                    z = format!("{:.2}", z).as_str(),
+                    stop_z = format!("{:.2}", trading.stop_z).as_str(),
+                    bug = true,
+                    "pairs: BLOCKED ENTRY — z already beyond stop_z, would immediately stop out"
+                );
+                return vec![];
+            }
             // Spread too low → expect reversion UP → LONG spread (buy A, sell B)
             let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
 
@@ -799,6 +812,18 @@ impl PairState {
                 },
             ];
         } else if z > trading.entry_z {
+            // Guard: don't enter if z is already beyond stop_z
+            if z.abs() > trading.stop_z {
+                let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
+                error!(
+                    pair = pair_id.as_str(),
+                    z = format!("{:.2}", z).as_str(),
+                    stop_z = format!("{:.2}", trading.stop_z).as_str(),
+                    bug = true,
+                    "pairs: BLOCKED ENTRY — z already beyond stop_z, would immediately stop out"
+                );
+                return vec![];
+            }
             // Spread too high → expect reversion DOWN → SHORT spread (sell A, buy B)
             let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
 
