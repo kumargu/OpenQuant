@@ -128,6 +128,7 @@ pub fn known_etfs() -> &'static [&'static str] {
     &[
         "XLF", "XLE", "XLK", "XLV", "XLY", "XLP", "XLU", "XLI", "XLB", "XLRE", "GLD", "SLV",
         "IAU", "SGOL", "GDX", "GDXJ", "SIL", "SILJ", "COPX", "PPLT", "PALL",
+        "URNM", "URNJ", "SLX", "XME", "PICK",
         "SMH", "QQQ", "SPY", "IWM", "DIA", "EEM", "TLT", "HYG", "LQD", "XBI",
     ]
 }

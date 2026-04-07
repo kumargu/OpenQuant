@@ -18,6 +18,13 @@
     {"leg_a": "GLD", "leg_b": "SGOL", "economic_rationale": "Both physically backed gold ETFs"},
     {"leg_a": "AG", "leg_b": "HL", "economic_rationale": "Silver miners with base metals exposure"},
     {"leg_a": "AG", "leg_b": "CDE", "economic_rationale": "Pure-play silver miners"},
-    {"leg_a": "FCX", "leg_b": "TECK", "economic_rationale": "Base metals: copper + zinc vs pure copper"}
+    {"leg_a": "FCX", "leg_b": "TECK", "economic_rationale": "Base metals: copper + zinc vs pure copper"},
+    {"leg_a": "URNM", "leg_b": "URNJ", "economic_rationale": "Senior vs junior uranium miners ETF — direct SIL/SILJ analog, quarterly rebalancing"},
+    {"leg_a": "OR", "leg_b": "SAND", "economic_rationale": "Mid-cap gold royalty/streaming — identical business model to FNV/WPM/RGLD"},
+    {"leg_a": "OR", "leg_b": "TFPM", "economic_rationale": "Newer-gen royalty/streaming pair, similar margins"},
+    {"leg_a": "SAND", "leg_b": "TFPM", "economic_rationale": "Small-cap royalty/streaming pair"},
+    {"leg_a": "SLX", "leg_b": "XME", "economic_rationale": "Steel ETF vs metals mining ETF — weight mismatch rebalancing"},
+    {"leg_a": "CCJ", "leg_b": "NXE", "economic_rationale": "Senior vs junior uranium producers"},
+    {"leg_a": "CLF", "leg_b": "X", "economic_rationale": "US integrated steelmakers — same tariff/policy exposure"}
   ]
 }
