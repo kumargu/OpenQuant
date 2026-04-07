@@ -14,3 +14,7 @@ a295c44	25.7	6	discard	entry_z=1.8 — caught marginal entry that stop-lossed. R
 852f011	11.4	8	discard	drift stop at 1.5 — too aggressive, cut SIL/SILJ winners. Reverted
 4ec1729	51.6	8	keep	drift stop disabled (max_drift_z=0.0). Feature kept for future use
 0c0a305	31.6	8	keep	cost_bps=50 stress test — STILL PROFITABLE (+253 bps). Edge survives. Reverted to 30.
+345419b	51.6	8	keep	lookback = 3x HL (was 2x). No effect but theoretically better.
+b75f313	70.1	6	keep	entry_z=2.5 + max_hold_cap=5. BEST avg_bps! Sharpe 0.42. Fewer trades, better quality.
+06ac83e	70.1	6	keep	expanded universe (uranium/royalty/steel from researcher). No new trades.
+75e50db	70.1	6	keep	ADF p<0.20 — more pairs pass but none reach entry_z=2.5. Converged.
