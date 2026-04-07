@@ -95,10 +95,22 @@ openquant-runner replay \
   --bar-cache data/bar_cache_metals
 ```
 
+## Forward Test Warning (Mar 15 - Apr 7, 2026)
+
+**-352 bps in 3 weeks.** The tariff shock in late March caused a regime break:
+- SIL/SILJ: z-score hit -20.59 (!) — massive dislocation, -382 bps stop loss
+- GDX/SIL: three intraday stop-outs (-30, -63, -41 bps) — bad pair, different commodities
+- RGLD/WPM: one win (+275), one loss (-112)
+
+**Lesson**: Mean-reversion pairs blow up during exogenous shocks. The strategy
+needs a macro regime filter (e.g., VIX > 30 → suppress entries) for production use.
+GDX/SIL should be removed from candidates — cross-commodity pair.
+
 ## What Might Still Improve This
-1. **Gold momentum filter**: Suppress entries when GLD ADX > 25 (trending)
+1. **VIX/macro regime filter**: Suppress entries when VIX > 30 or during known shock events
 2. **Quarterly rebalance calendar**: Enhance SIL/SILJ entries around rebalance dates
 3. **FNV/WPM and FNV/RGLD**: The royalty triangle — not enough trades yet but
    structurally identical to RGLD/WPM
 4. **Dynamic hedge ratio**: Rolling OLS instead of fixed TLS
-5. **Longer OOS**: Need 2024 data to validate (pairs weren't cointegrated then)
+5. **Remove GDX/SIL from candidates**: Cross-commodity pair, consistently loses
+6. **Longer OOS**: Need 2024 data to validate (pairs weren't cointegrated then)

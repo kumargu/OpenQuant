@@ -16,7 +16,6 @@
     {"leg_a": "GLD", "leg_b": "GDX", "economic_rationale": "Gold price ETF vs gold miners ETF"},
     {"leg_a": "SLV", "leg_b": "SIL", "economic_rationale": "Silver price vs silver miners ETF"},
     {"leg_a": "GLD", "leg_b": "SGOL", "economic_rationale": "Both physically backed gold ETFs"},
-    {"leg_a": "GDX", "leg_b": "SIL", "economic_rationale": "Gold miners vs silver miners ETF"},
     {"leg_a": "SLV", "leg_b": "PAAS", "economic_rationale": "Silver ETF vs largest silver miner"},
     {"leg_a": "AG", "leg_b": "HL", "economic_rationale": "Silver miners with base metals exposure"},
     {"leg_a": "AG", "leg_b": "CDE", "economic_rationale": "Pure-play silver miners"},
