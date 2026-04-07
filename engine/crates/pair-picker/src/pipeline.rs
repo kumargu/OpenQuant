@@ -99,7 +99,7 @@ impl PipelineConfig {
             min_history_bars: 90,
             max_validation_window: 150,  // shorter window — excludes supercycle, sees recent cointegration
             min_r_squared: 0.20,         // looser — metals can have weaker linear fit
-            adf_pvalue_threshold: 0.10,  // relaxed — metals show weaker cointegration
+            adf_pvalue_threshold: 0.15,  // very relaxed — royalty pairs borderline at 0.10-0.14
             min_half_life: 1.0,
             max_half_life: 60.0,         // metals revert slower
             structural_break_gate: false, // disabled — metals beta drifts seasonally
