@@ -179,7 +179,7 @@ market_close = "16:00"
 
 [pairs_trading]
 
-entry_z = 2.0           # Standard — more trades, similar total P&L to 2.5
+entry_z = 1.8           # Catch SLX/XME (z=-1.89) and URNM/URNJ (z=1.90)
 exit_z = 0.3            # Tight exit — capture full reversion
 stop_z = 6.0            # Wide stop — tighter (3.5/4.5) causes churn per experiments
 max_drift_z = 0.0       # Disabled — drift stop at 1.5 cut SIL/SILJ winners prematurely
