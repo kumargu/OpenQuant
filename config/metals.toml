@@ -180,7 +180,7 @@ market_close = "16:00"
 [pairs_trading]
 
 entry_z = 2.0           # Standard. Use 2.5 for conservative mode (profitable in all windows but fewer trades)
-exit_z = 0.3            # Tight exit — capture full reversion
+exit_z = 0.5            # Wider exit — take partial profit earlier, don't wait for full reversion
 stop_z = 6.0            # Wide stop — tighter (3.5/4.5) causes churn per experiments
 
 lookback = 20           # Shorter than S&P (30) — metals HL~5d, lookback=20 is ~4x HL
