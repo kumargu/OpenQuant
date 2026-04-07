@@ -85,6 +85,13 @@ pub struct PairsTradingConfig {
     /// 0 = no limit. Default 25 (fits ~$50K notional at $1K/leg).
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_pairs: usize,
+    /// Maximum allowed drift between rolling z and frozen exit z.
+    /// When the gap exceeds this, force exit — the spread dynamics have
+    /// shifted and the frozen context is unreliable.
+    /// 0.0 = disabled. Default 0.0 (off for S&P where drift is rare).
+    /// For metals: set to 2.0 to catch cointegration breakdown.
+    #[serde(default)]
+    pub max_drift_z: f64,
 }
 
 fn default_max_concurrent() -> usize {
@@ -114,6 +121,7 @@ impl Default for PairsTradingConfig {
             cost_bps: 10.0,
             tz_offset_hours: -5,
             max_concurrent_pairs: 25,
+            max_drift_z: 0.0, // disabled by default (S&P doesn't need it)
         }
     }
 }
@@ -661,6 +669,25 @@ impl PairState {
                 PairPosition::Flat => false,
             };
 
+            // Exit condition: cointegration drift — rolling z and frozen z diverge
+            // beyond max_drift_z, indicating the spread relationship has shifted.
+            // This catches cointegration breakdown during a live trade.
+            let drift = (z - exit_z).abs();
+            let drift_stopped = trading.max_drift_z > 0.0 && drift > trading.max_drift_z;
+            if drift_stopped {
+                let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
+                error!(
+                    pair = pair_id.as_str(),
+                    ts = timestamp,
+                    rolling_z = %format_args!("{z:.2}"),
+                    fixed_exit_z = %format_args!("{exit_z:.2}"),
+                    drift = %format_args!("{drift:.2}"),
+                    max_drift_z = trading.max_drift_z,
+                    days_held,
+                    "pairs: STOP LOSS — cointegration drift exceeded threshold"
+                );
+            }
+
             // Exit condition: max hold (per-pair override from pair-picker, or global fallback)
             let effective_max_hold = if config.max_hold_bars > 0 {
                 config.max_hold_bars // per-pair HL-adaptive: ceil(2.5 * HL) capped at 10
@@ -687,8 +714,8 @@ impl PairState {
             let past_min_hold = days_held >= trading.min_hold_bars;
             let can_exit_reversion = reverted && past_min_hold;
 
-            if can_exit_reversion || stopped || max_held || force_close {
-                let reason = if stopped {
+            if can_exit_reversion || stopped || drift_stopped || max_held || force_close {
+                let reason = if stopped || drift_stopped {
                     SignalReason::StopLoss
                 } else if force_close || max_held {
                     SignalReason::MaxHoldTime
@@ -699,6 +726,8 @@ impl PairState {
                 let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
                 let exit_reason = if stopped {
                     "stop_loss"
+                } else if drift_stopped {
+                    "drift_stop"
                 } else if force_close {
                     "eod_close"
                 } else if max_held {

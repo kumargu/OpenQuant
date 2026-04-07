@@ -182,6 +182,7 @@ market_close = "16:00"
 entry_z = 2.0           # Standard. Use 2.5 for conservative mode (profitable in all windows but fewer trades)
 exit_z = 0.3            # Tight exit — capture full reversion
 stop_z = 6.0            # Wide stop — tighter (3.5/4.5) causes churn per experiments
+max_drift_z = 2.0       # Force exit when rolling/frozen z drift > 2.0 — catches cointegration breakdown
 
 lookback = 20           # Shorter than S&P (30) — metals HL~5d, lookback=20 is ~4x HL
 max_hold_bars = 10      # Per-pair override from active_pairs.json takes precedence
