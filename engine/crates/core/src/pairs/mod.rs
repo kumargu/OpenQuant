@@ -94,9 +94,14 @@ pub struct PairsTradingConfig {
     /// Spread trend gate: block entries when z-score has been on the same
     /// side of 0 for this many consecutive daily bars. Indicates the spread
     /// is trending, not mean-reverting. 0 = disabled.
-    /// For metals: set to 5 (block after 5 consecutive same-side days).
     #[serde(default)]
     pub spread_trend_gate: usize,
+    /// Allow entries on any bar (not just daily close).
+    /// When true, entries fire whenever z crosses entry_z on any minute bar,
+    /// using the daily rolling stats for mean/std. Exits remain daily.
+    /// Default: false (daily-close-only entries).
+    #[serde(default)]
+    pub intraday_entries: bool,
 }
 
 fn default_max_concurrent() -> usize {
@@ -127,7 +132,8 @@ impl Default for PairsTradingConfig {
             tz_offset_hours: -5,
             max_concurrent_pairs: 25,
             max_drift_z: 0.0,
-            spread_trend_gate: 0, // disabled by default
+            spread_trend_gate: 0,
+            intraday_entries: false,
         }
     }
 }
@@ -870,11 +876,16 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
-        // Entry signals only fire when a new day starts (we just pushed a daily
-        // observation into rolling stats). This guarantees exactly one entry
-        // opportunity per pair per day — no churning from multiple bars in the
-        // daily-close window.
-        if !is_new_day || !rolling_z_ready {
+        // Default: entries fire only at daily close (when is_new_day triggers).
+        // With intraday_entries=true: entries fire on ANY bar when z crosses
+        // the threshold, using daily rolling stats for mean/std. This captures
+        // intraday dislocations that revert before the daily close.
+        let entry_allowed = if trading.intraday_entries {
+            rolling_z_ready // any bar, as long as stats are warm
+        } else {
+            is_new_day && rolling_z_ready // daily close only
+        };
+        if !entry_allowed {
             return vec![];
         }
 
