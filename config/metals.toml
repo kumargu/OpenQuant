@@ -192,4 +192,4 @@ max_concurrent_pairs = 25
 last_entry_hour = 23
 force_close_minute = 1440
 tz_offset_hours = -4
-cost_bps = 50.0         # Stress test — metals ETFs may have wider spreads than S&P stocks
+cost_bps = 30.0         # Round-trip cost — may differ for metals ETFs
