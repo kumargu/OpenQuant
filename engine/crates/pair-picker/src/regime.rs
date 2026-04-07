@@ -190,12 +190,12 @@ impl RegimeAdjustedThresholds {
     pub fn from_regime(regime: PairRegime) -> Self {
         match regime {
             PairRegime::Calm | PairRegime::Normal => Self {
-                adf_pvalue_threshold: 0.05,
+                adf_pvalue_threshold: 0.10,
                 position_size_mult: 1.0,
                 entry_z_mult: 1.0,
             },
             PairRegime::Volatile => Self {
-                adf_pvalue_threshold: 0.01,
+                adf_pvalue_threshold: 0.05,
                 position_size_mult: 0.5,
                 entry_z_mult: 1.25,
             },
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn test_regime_adjusted_thresholds_calm() {
         let t = RegimeAdjustedThresholds::from_regime(PairRegime::Calm);
-        assert_eq!(t.adf_pvalue_threshold, 0.05);
+        assert_eq!(t.adf_pvalue_threshold, 0.10);
         assert_eq!(t.position_size_mult, 1.0);
         assert_eq!(t.entry_z_mult, 1.0);
     }
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn test_regime_adjusted_thresholds_volatile() {
         let t = RegimeAdjustedThresholds::from_regime(PairRegime::Volatile);
-        assert_eq!(t.adf_pvalue_threshold, 0.01);
+        assert_eq!(t.adf_pvalue_threshold, 0.05);
         assert_eq!(t.position_size_mult, 0.5);
         assert_eq!(t.entry_z_mult, 1.25);
     }

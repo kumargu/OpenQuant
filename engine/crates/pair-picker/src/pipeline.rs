@@ -232,6 +232,30 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         }
     }
 
+    // Step 5b: Spread crossing frequency — reject pairs that don't oscillate enough.
+    // A pair that never crosses zero can't generate mean-reversion trades.
+    // Minimum: 12 zero-crossings per year (roughly 1 per month).
+    {
+        let n = spread.len();
+        if n > 20 {
+            let mean = spread.iter().sum::<f64>() / n as f64;
+            let demeaned: Vec<f64> = spread.iter().map(|s| s - mean).collect();
+            let crossings = demeaned
+                .windows(2)
+                .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
+                .count();
+            // Annualize: crossings per 252 trading days
+            let annual_crossings = crossings as f64 * 252.0 / n as f64;
+            result.spread_crossings = Some(annual_crossings);
+            if annual_crossings < 12.0 {
+                result.rejection_reasons.push(format!(
+                    "Low spread crossing frequency: {:.1}/year (need ≥12)",
+                    annual_crossings
+                ));
+            }
+        }
+    }
+
     // Step 6: Beta stability
     match check_beta_stability(&log_a, &log_b) {
         Some(bs) => {
@@ -300,10 +324,12 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     // Structural break remains a hard gate — it indicates a genuinely broken relationship.
     // See research issue #202 and Principal Engineer review for justification.
     let r_squared_ok = result.beta_r_squared.unwrap_or(0.0) >= MIN_R_SQUARED;
+    let crossings_ok = result.spread_crossings.unwrap_or(0.0) >= 12.0;
     result.passed = result.is_cointegrated
         && result.half_life_valid
         && !result.structural_break
         && r_squared_ok
+        && crossings_ok
         && !result.etf_excluded;
 
     result

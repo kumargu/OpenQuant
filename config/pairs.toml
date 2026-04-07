@@ -485,9 +485,9 @@ asset_class = "disabled"
 
 [pairs_trading]
 
-entry_z = 1.0           # Enter when |z| > entry_z
-exit_z = 0.2            # Exit when |z| < exit_z (spread reverted)
-stop_z = 4.0            # Stop loss when |z| > stop_z
+entry_z = 2.0           # Enter when |z| > entry_z
+exit_z = 0.3            # Exit when |z| < exit_z — tighter exit captures more of the move
+stop_z = 6.0            # Stop loss when |z| > stop_z
 
 # Default lookback for spread z-score. Per-pair windows from half-life
 # take precedence: min(2 × ceil(HL), 60). This is the fallback.
@@ -501,4 +501,4 @@ max_concurrent_pairs = 25  # Cap open positions. 0 = no limit.
 last_entry_hour = 23    # Effectively disabled for daily bars
 force_close_minute = 1440  # Disabled — exits are z-score or max_hold driven
 tz_offset_hours = -4    # EDT. Must match [data].timezone_offset_hours.
-cost_bps = 10.0         # Round-trip cost in bps (used by regime gate P&L)
+cost_bps = 30.0         # Round-trip cost in bps — 30 bps for liquid large-cap pairs

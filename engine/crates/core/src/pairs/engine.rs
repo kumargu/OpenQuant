@@ -24,6 +24,105 @@ fn canonical_pair_id(a: &str, b: &str) -> String {
 }
 
 /// The pairs trading engine. Manages multiple pair states.
+/// Tracks cross-sectional dispersion of daily returns across all symbols.
+/// High dispersion = idiosyncratic moves dominate = pairs decouple = suppress entries.
+struct DispersionTracker {
+    /// Last known close price per symbol.
+    last_close: std::collections::HashMap<String, f64>,
+    /// Daily returns collected for the current day.
+    daily_returns: Vec<f64>,
+    /// Rolling dispersion values (last N days).
+    dispersion_history: std::collections::VecDeque<f64>,
+    /// Current day timestamp (truncated to day boundary).
+    current_day: i64,
+    /// Is the dispersion currently elevated? (entry suppression flag)
+    pub high_dispersion: bool,
+}
+
+impl DispersionTracker {
+    fn new() -> Self {
+        Self {
+            last_close: std::collections::HashMap::new(),
+            daily_returns: Vec::new(),
+            dispersion_history: std::collections::VecDeque::new(),
+            current_day: 0,
+            high_dispersion: false,
+        }
+    }
+
+    /// Update with a new price observation. Computes dispersion on day boundaries.
+    fn update(&mut self, symbol: &str, timestamp: i64, close: f64) {
+        let day = timestamp / 86_400_000; // truncate to day
+
+        if day != self.current_day && self.current_day > 0 {
+            // New day — compute dispersion from yesterday's returns
+            self.compute_dispersion();
+            self.daily_returns.clear();
+        }
+        self.current_day = day;
+
+        // Compute return from previous close
+        if let Some(&prev) = self.last_close.get(symbol)
+            && prev > 0.0
+        {
+            let ret = (close / prev).ln();
+            if ret.is_finite() {
+                self.daily_returns.push(ret);
+            }
+        }
+        self.last_close.insert(symbol.to_string(), close);
+    }
+
+    fn compute_dispersion(&mut self) {
+        if self.daily_returns.len() < 5 {
+            return; // not enough symbols for meaningful dispersion
+        }
+
+        let n = self.daily_returns.len() as f64;
+        let mean = self.daily_returns.iter().sum::<f64>() / n;
+        let variance = self
+            .daily_returns
+            .iter()
+            .map(|r| (r - mean).powi(2))
+            .sum::<f64>()
+            / (n - 1.0);
+        let dispersion = variance.sqrt();
+
+        if dispersion.is_finite() {
+            self.dispersion_history.push_back(dispersion);
+            // Keep 60 days of history
+            while self.dispersion_history.len() > 60 {
+                self.dispersion_history.pop_front();
+            }
+
+            // High dispersion = above 75th percentile of recent history
+            if self.dispersion_history.len() >= 10 {
+                let mut sorted: Vec<f64> = self.dispersion_history.iter().copied().collect();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let p75 = sorted[sorted.len() * 3 / 4];
+                let was_high = self.high_dispersion;
+                self.high_dispersion = dispersion > p75;
+
+                if self.high_dispersion != was_high {
+                    if self.high_dispersion {
+                        warn!(
+                            dispersion = format!("{:.6}", dispersion).as_str(),
+                            threshold = format!("{:.6}", p75).as_str(),
+                            "DISPERSION GATE — high intra-sector dispersion, suppressing new entries"
+                        );
+                    } else {
+                        info!(
+                            dispersion = format!("{:.6}", dispersion).as_str(),
+                            threshold = format!("{:.6}", p75).as_str(),
+                            "DISPERSION GATE — dispersion normalized, entries resumed"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct PairsEngine {
     /// Each pair has its config and mutable state.
     pairs: Vec<(PairConfig, PairState)>,
@@ -35,6 +134,8 @@ pub struct PairsEngine {
     trade_history: PairTradingHistory,
     /// Path to write trading history.
     history_path: Option<PathBuf>,
+    /// Cross-sectional dispersion tracker (suppresses entries in high-dispersion regimes).
+    dispersion: DispersionTracker,
 }
 
 impl PairsEngine {
@@ -63,6 +164,7 @@ impl PairsEngine {
             max_hold_bars = trading_config.max_hold_bars,
             min_hold_bars = trading_config.min_hold_bars,
             notional_per_leg = %format_args!("{:.0}", trading_config.notional_per_leg),
+            cost_bps = %format_args!("{:.1}", trading_config.cost_bps),
             "PairsEngine initialized"
         );
         let pairs = configs
@@ -79,6 +181,7 @@ impl PairsEngine {
             active_pairs_path: None,
             trade_history: PairTradingHistory { trades: Vec::new() },
             history_path: None,
+            dispersion: DispersionTracker::new(),
         }
     }
 
@@ -133,6 +236,7 @@ impl PairsEngine {
             active_pairs_path: Some(active_pairs_path.to_path_buf()),
             trade_history,
             history_path: Some(history_path.to_path_buf()),
+            dispersion: DispersionTracker::new(),
         }
     }
 
@@ -268,10 +372,17 @@ impl PairsEngine {
     /// Returns order intents for any pairs that fire entry/exit signals.
     /// Entry signals are suppressed when `max_concurrent_pairs` is reached.
     pub fn on_bar(&mut self, symbol: &str, timestamp: i64, close: f64) -> Vec<PairOrderIntent> {
+        // Update dispersion tracker with every bar
+        self.dispersion.update(symbol, timestamp, close);
+
         let mut matched = false;
         let mut all_intents = Vec::new();
 
         let max_concurrent = self.trading_config.max_concurrent_pairs;
+        // Dispersion tracking is active (logs WARN when high) but does NOT block entries.
+        // V2-exp1 showed 75th percentile gate was too blunt — blocked good trades too.
+        // TODO: try sector-specific dispersion or use as position-sizing modifier instead.
+        let _dispersion_high = self.dispersion.high_dispersion;
         // Mutable counter: tracks open positions as entries pass through the loop.
         // Avoids the snapshot race where two pairs enter on the same bar when
         // only one slot is open.
@@ -288,7 +399,8 @@ impl PairsEngine {
                     .iter()
                     .any(|i| matches!(i.reason, crate::signals::SignalReason::PairsEntry));
                 let at_capacity = max_concurrent > 0 && current_open >= max_concurrent;
-                if at_capacity && is_entry {
+                let block_entry = at_capacity;
+                if block_entry && is_entry {
                     // Revert: on_price already set position + exit context.
                     // force_flat() clears all entry state to prevent stale values.
                     state.force_flat();

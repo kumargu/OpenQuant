@@ -1,0 +1,40 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+worktrees/
+results/
+queue/
+
+# Agent prompt files (generated per-session by launchers)
+CLAUDE.md
+AGENTS.md
+
+# Experimental code/artifacts
+dev/
+
+# Autoresearch experiment artifacts
+results.tsv
+run.log
+replay.log
+
+# Quant model training (local only)
+quant_model/
+corpus/arxiv_qfin.txt
+corpus/quant_trading_instruct.txt
+corpus/issue*.txt
+
+# Original autoresearch files (not needed)
+analysis.ipynb
+progress.png
+README.md
+.python-version
+uv.lock
+alpha_prep.md
+research_log.tsv

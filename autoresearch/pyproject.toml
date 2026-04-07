@@ -1,0 +1,7 @@
+[project]
+name = "autoresearch"
+version = "0.1.0"
+description = "Autonomous quant trading research — adapted from karpathy/autoresearch"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []

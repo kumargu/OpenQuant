@@ -233,6 +233,102 @@ impl ExitContext {
     }
 }
 
+/// Kalman filter for dynamic hedge ratio estimation.
+/// State: [alpha, beta] (intercept, hedge ratio).
+/// Updates on each daily spread observation.
+/// Palomar (2025): "Kalman filtering is a must in pairs trading."
+///
+/// Default parameters:
+/// - q=1e-5: slow-moving state (hedge ratio changes slowly between days)
+/// - r=1e-3: moderate observation noise (log-price measurement uncertainty)
+/// - warmup=10: minimum observations before Kalman overrides static OLS
+/// - max_beta=5.0: sanity cap on Kalman beta (resets filter if exceeded)
+const KALMAN_PROCESS_NOISE: f64 = 1e-5;
+const KALMAN_OBS_NOISE: f64 = 1e-3;
+const KALMAN_WARMUP: usize = 10;
+const KALMAN_MAX_BETA: f64 = 5.0;
+
+struct KalmanHedge {
+    /// State estimate: [alpha, beta]
+    x: [f64; 2],
+    /// Error covariance matrix (2x2, stored as [p00, p01, p10, p11])
+    p: [f64; 4],
+    /// Process noise variance (controls how fast beta can change)
+    q: f64,
+    /// Observation noise variance (measurement uncertainty)
+    r: f64,
+    /// Number of updates (for warmup)
+    n: usize,
+}
+
+impl KalmanHedge {
+    fn new(alpha: f64, beta: f64) -> Self {
+        Self {
+            x: [alpha, beta],
+            // Start with moderate uncertainty
+            p: [1.0, 0.0, 0.0, 1.0],
+            q: KALMAN_PROCESS_NOISE,
+            r: KALMAN_OBS_NOISE,
+            n: 0,
+        }
+    }
+
+    /// Update the filter with a new observation: y1 = alpha + beta * y2 + noise.
+    /// Returns the updated (alpha, beta).
+    fn update(&mut self, y1: f64, y2: f64) -> (f64, f64) {
+        // Prediction step: state doesn't change (random walk model)
+        // P = P + Q*I
+        self.p[0] += self.q;
+        self.p[3] += self.q;
+
+        // Observation model: H = [1, y2]
+        let h0 = 1.0;
+        let h1 = y2;
+
+        // Innovation: y_hat = H * x
+        let y_hat = h0 * self.x[0] + h1 * self.x[1];
+        let innovation = y1 - y_hat;
+
+        // Innovation covariance: S = H * P * H' + R
+        let s = h0 * (self.p[0] * h0 + self.p[1] * h1)
+            + h1 * (self.p[2] * h0 + self.p[3] * h1)
+            + self.r;
+
+        if s.abs() < 1e-15 || !s.is_finite() {
+            return (self.x[0], self.x[1]);
+        }
+
+        // Kalman gain: K = P * H' / S
+        let k0 = (self.p[0] * h0 + self.p[1] * h1) / s;
+        let k1 = (self.p[2] * h0 + self.p[3] * h1) / s;
+
+        // State update: x = x + K * innovation
+        self.x[0] += k0 * innovation;
+        self.x[1] += k1 * innovation;
+
+        // Covariance update: P = (I - K*H) * P
+        let p00 = self.p[0] - k0 * (h0 * self.p[0] + h1 * self.p[2]);
+        let p01 = self.p[1] - k0 * (h0 * self.p[1] + h1 * self.p[3]);
+        let p10 = self.p[2] - k1 * (h0 * self.p[0] + h1 * self.p[2]);
+        let p11 = self.p[3] - k1 * (h0 * self.p[1] + h1 * self.p[3]);
+        self.p = [p00, p01, p10, p11];
+
+        self.n += 1;
+
+        (self.x[0], self.x[1])
+    }
+
+    fn alpha(&self) -> f64 {
+        self.x[0]
+    }
+    fn beta(&self) -> f64 {
+        self.x[1]
+    }
+    fn is_warm(&self) -> bool {
+        self.n >= KALMAN_WARMUP
+    }
+}
+
 /// Mutable state for a single pair, updated on each bar.
 pub struct PairState {
     /// Most recent close price for leg A (cleared after spread computation).
@@ -286,6 +382,9 @@ pub struct PairState {
     /// preventing rolling-stat drift from producing false exit signals.
     /// See `ExitContext` and issue #182.
     exit_context: Option<ExitContext>,
+    /// Kalman filter for dynamic hedge ratio estimation.
+    /// Updates alpha and beta on each daily close, replacing static OLS values.
+    kalman: Option<KalmanHedge>,
 }
 
 impl Default for PairState {
@@ -314,7 +413,10 @@ impl PairState {
         } else {
             trading.lookback.max(1) // guard against misconfigured lookback=0
         };
-        Self::with_window(window)
+        let mut state = Self::with_window(window);
+        // Initialize Kalman filter with OLS alpha/beta from pair-picker
+        state.kalman = Some(KalmanHedge::new(config.alpha, config.beta));
+        state
     }
 
     pub fn with_window(window: usize) -> Self {
@@ -340,6 +442,7 @@ impl PairState {
             pause_bars: 0,
             consecutive_stops: 0,
             exit_context: None,
+            kalman: None,
         }
     }
 
@@ -384,9 +487,18 @@ impl PairState {
         self.last_price_a = None;
         self.last_price_b = None;
 
-        // Compute log-spread: spread = ln(price_A) - alpha - beta × ln(price_B)
-        // Alpha from TLS ensures z-scores are centered correctly.
-        let spread = price_a.ln() - config.alpha - config.beta * price_b.ln();
+        // Compute log-spread using Kalman-filtered alpha/beta if available,
+        // otherwise fall back to static OLS values from pair-picker.
+        let (alpha, beta) = if let Some(ref kf) = self.kalman {
+            if kf.is_warm() {
+                (kf.alpha(), kf.beta())
+            } else {
+                (config.alpha, config.beta)
+            }
+        } else {
+            (config.alpha, config.beta)
+        };
+        let spread = price_a.ln() - alpha - beta * price_b.ln();
 
         // ── Two-clock architecture ──
         // Signal clock (daily): push spread into rolling stats once per day.
@@ -408,6 +520,40 @@ impl PairState {
                 self.spread_stats.push(daily_spread);
                 self.spread_count += 1;
                 self.daily_bar_count += 1;
+            }
+            // Update Kalman filter with daily closes (only when flat — don't
+            // change hedge ratio mid-trade as it would invalidate exit context).
+            if self.position == PairPosition::Flat
+                && let Some(ref mut kf) = self.kalman
+            {
+                let (new_alpha, new_beta) = kf.update(price_a.ln(), price_b.ln());
+                // Guard: reject insane Kalman updates
+                if new_beta.is_finite() && new_beta.abs() < KALMAN_MAX_BETA && new_alpha.is_finite()
+                {
+                    // Log significant beta shifts (>5%) for debugging
+                    let beta_shift = ((new_beta - config.beta) / config.beta).abs();
+                    if beta_shift > 0.05 && kf.n % 5 == 0 {
+                        info!(
+                            pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                            ols_beta = format!("{:.4}", config.beta).as_str(),
+                            kalman_beta = format!("{:.4}", new_beta).as_str(),
+                            shift_pct = format!("{:.1}%", beta_shift * 100.0).as_str(),
+                            "Kalman beta diverged from OLS"
+                        );
+                    }
+                } else {
+                    // bug! — this should not happen with valid price data.
+                    // If it does, the pair's price relationship has broken badly.
+                    error!(
+                        pair_a = config.leg_a.as_str(),
+                        pair_b = config.leg_b.as_str(),
+                        kalman_alpha = format!("{:.4}", new_alpha).as_str(),
+                        kalman_beta = format!("{:.4}", new_beta).as_str(),
+                        bug = true,
+                        "Kalman produced insane hedge ratio — resetting"
+                    );
+                    *kf = KalmanHedge::new(config.alpha, config.beta);
+                }
             }
         }
         self.last_bar_day = bar_day; // safe: both legs have arrived at this point
@@ -487,9 +633,12 @@ impl PairState {
                 None => {
                     // Defensive fallback: no context means entry was not captured properly.
                     // Use rolling z to avoid blocking exits entirely.
-                    warn!(
+                    // bug! — exit_context should always be set when position is open.
+                    // If we reach here, the entry logic failed to freeze stats.
+                    error!(
                         pair_a = config.leg_a.as_str(),
                         pair_b = config.leg_b.as_str(),
+                        bug = true,
                         "pairs: exit_context missing for open position — falling back to rolling z"
                     );
                     z
@@ -569,18 +718,6 @@ impl PairState {
                         "pairs: STOP LOSS — spread diverged further from entry baseline"
                     );
                 }
-                info!(
-                    pair = pair_id.as_str(),
-                    ts = timestamp,
-                    rolling_z = format!("{:.2}", z).as_str(),
-                    fixed_exit_z = format!("{:.2}", exit_z).as_str(),
-                    days_held,
-                    price_a = format!("{:.2}", price_a).as_str(),
-                    price_b = format!("{:.2}", price_b).as_str(),
-                    exit = exit_reason,
-                    "pairs: EXIT"
-                );
-
                 // Record trade P&L for regime gate
                 // P&L weighted by beta to match actual position sizing.
                 // Leg A has weight 1.0, leg B has weight |entry_beta|.
@@ -595,6 +732,19 @@ impl PairState {
                     PairPosition::Flat => 0.0,
                 };
                 let net_bps = gross_bps - trading.cost_bps;
+
+                info!(
+                    pair = pair_id.as_str(),
+                    ts = timestamp,
+                    rolling_z = format!("{:.2}", z).as_str(),
+                    fixed_exit_z = format!("{:.2}", exit_z).as_str(),
+                    days_held,
+                    price_a = format!("{:.2}", price_a).as_str(),
+                    price_b = format!("{:.2}", price_b).as_str(),
+                    net_bps = format!("{:.1}", net_bps).as_str(),
+                    exit = exit_reason,
+                    "pairs: EXIT"
+                );
                 if self.trade_pnl_history.len() >= 10 {
                     self.trade_pnl_history.pop_front();
                 }
@@ -725,6 +875,18 @@ impl PairState {
         }
 
         if z < -trading.entry_z {
+            // Guard: don't enter if z is already beyond stop_z — would immediately stop out.
+            // Guard: z is already beyond stop_z — entering would immediately stop out.
+            if z.abs() > trading.stop_z {
+                let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
+                warn!(
+                    pair = pair_id.as_str(),
+                    z = format!("{:.2}", z).as_str(),
+                    stop_z = format!("{:.2}", trading.stop_z).as_str(),
+                    "pairs: BLOCKED ENTRY — z already beyond stop_z"
+                );
+                return vec![];
+            }
             // Spread too low → expect reversion UP → LONG spread (buy A, sell B)
             let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
 
@@ -767,13 +929,12 @@ impl PairState {
             self.entry_daily_bar = self.daily_bar_count;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
-            self.entry_beta = config.beta;
+            self.entry_beta = beta; // use Kalman-filtered beta if available
 
-            // Beta-weighted sizing: leg B notional = notional * |beta| to match
-            // the hedge ratio from the spread model (spread = ln(A) - β·ln(B)).
-            // This ensures the traded position is beta-neutral.
+            // Beta-weighted sizing: use the SAME beta as entry_beta (Kalman if available).
+            // This ensures open and close quantities match, preventing residual exposure.
             let qty_a = (trading.notional_per_leg / price_a).floor();
-            let qty_b = (trading.notional_per_leg * config.beta.abs() / price_b).floor();
+            let qty_b = (trading.notional_per_leg * beta.abs() / price_b).floor();
 
             return vec![
                 PairOrderIntent {
@@ -798,6 +959,18 @@ impl PairState {
                 },
             ];
         } else if z > trading.entry_z {
+            // Guard: don't enter if z is already beyond stop_z
+            if z.abs() > trading.stop_z {
+                let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
+                error!(
+                    pair = pair_id.as_str(),
+                    z = format!("{:.2}", z).as_str(),
+                    stop_z = format!("{:.2}", trading.stop_z).as_str(),
+                    bug = true,
+                    "pairs: BLOCKED ENTRY — z already beyond stop_z, would immediately stop out"
+                );
+                return vec![];
+            }
             // Spread too high → expect reversion DOWN → SHORT spread (sell A, buy B)
             let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
 
@@ -840,10 +1013,10 @@ impl PairState {
             self.entry_daily_bar = self.daily_bar_count;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
-            self.entry_beta = config.beta;
+            self.entry_beta = beta; // use Kalman-filtered beta if available
 
             let qty_a = (trading.notional_per_leg / price_a).floor();
-            let qty_b = (trading.notional_per_leg * config.beta.abs() / price_b).floor();
+            let qty_b = (trading.notional_per_leg * beta.abs() / price_b).floor();
 
             return vec![
                 PairOrderIntent {
