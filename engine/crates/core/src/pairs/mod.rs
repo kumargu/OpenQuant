@@ -97,6 +97,11 @@ pub struct PairsTradingConfig {
     /// For metals: set to 5 (block after 5 consecutive same-side days).
     #[serde(default)]
     pub spread_trend_gate: usize,
+    /// Allow entries on any bar (not just daily close), with max one per day.
+    /// Uses daily rolling stats for z-score but checks every minute bar.
+    /// Default: false (daily-close-only entries).
+    #[serde(default)]
+    pub intraday_entries: bool,
 }
 
 fn default_max_concurrent() -> usize {
@@ -128,6 +133,7 @@ impl Default for PairsTradingConfig {
             max_concurrent_pairs: 25,
             max_drift_z: 0.0,
             spread_trend_gate: 0, // disabled by default
+            intraday_entries: false,
         }
     }
 }
@@ -870,16 +876,9 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
-        // Default: entries fire only at daily close (when is_new_day triggers).
-        // With intraday_entries: entries fire on any bar, but still max one per day.
-        let entry_allowed = if trading.intraday_entries {
-            // Allow on any bar, but enforce one entry attempt per daily bar
-            // (entry_daily_bar tracks last entry day — reuse to prevent churn)
-            rolling_z_ready && self.entry_daily_bar != self.daily_bar_count
-        } else {
-            is_new_day && rolling_z_ready
-        };
-        if !entry_allowed {
+        // Entries fire only at daily close (when is_new_day triggers).
+        // Intraday entries are too noisy (exp23: 114 trades, -3040 bps).
+        if !is_new_day || !rolling_z_ready {
             return vec![];
         }
 
