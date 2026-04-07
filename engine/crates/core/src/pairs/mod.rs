@@ -89,9 +89,14 @@ pub struct PairsTradingConfig {
     /// When the gap exceeds this, force exit — the spread dynamics have
     /// shifted and the frozen context is unreliable.
     /// 0.0 = disabled. Default 0.0 (off for S&P where drift is rare).
-    /// For metals: set to 2.0 to catch cointegration breakdown.
     #[serde(default)]
     pub max_drift_z: f64,
+    /// Spread trend gate: block entries when z-score has been on the same
+    /// side of 0 for this many consecutive daily bars. Indicates the spread
+    /// is trending, not mean-reverting. 0 = disabled.
+    /// For metals: set to 5 (block after 5 consecutive same-side days).
+    #[serde(default)]
+    pub spread_trend_gate: usize,
 }
 
 fn default_max_concurrent() -> usize {
@@ -121,7 +126,8 @@ impl Default for PairsTradingConfig {
             cost_bps: 10.0,
             tz_offset_hours: -5,
             max_concurrent_pairs: 25,
-            max_drift_z: 0.0, // disabled by default (S&P doesn't need it)
+            max_drift_z: 0.0,
+            spread_trend_gate: 0, // disabled by default
         }
     }
 }
@@ -393,6 +399,11 @@ pub struct PairState {
     /// Kalman filter for dynamic hedge ratio estimation.
     /// Updates alpha and beta on each daily close, replacing static OLS values.
     kalman: Option<KalmanHedge>,
+    /// Spread trend tracking: consecutive daily bars with z on same side of 0.
+    /// High values (5+) indicate a trending spread — entries are riskier.
+    z_same_side_count: usize,
+    /// Sign of z on the previous daily bar (-1, 0, or 1).
+    z_last_sign: i8,
 }
 
 impl Default for PairState {
@@ -451,6 +462,9 @@ impl PairState {
             consecutive_stops: 0,
             exit_context: None,
             kalman: None,
+            // Spread trend tracking: count consecutive daily bars on same side of mean
+            z_same_side_count: 0,
+            z_last_sign: 0,
         }
     }
 
@@ -852,12 +866,37 @@ impl PairState {
             return vec![];
         }
 
+        // Track spread trend: count consecutive daily bars with z on the same side of 0.
+        // High values indicate a trending spread (not mean-reverting).
+        if rolling_z_ready {
+            let current_sign: i8 = if z > 0.0 { 1 } else { -1 };
+            if current_sign == self.z_last_sign {
+                self.z_same_side_count += 1;
+            } else {
+                self.z_same_side_count = 1;
+            }
+            self.z_last_sign = current_sign;
+        }
+
         // Earnings blackout: block entries around announcement dates.
         // The runner sets entry_blocked_until via block_entry().
         if self.entry_blocked_until > 0 && timestamp < self.entry_blocked_until {
             debug!(
                 pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
                 "pairs: ENTRY BLOCKED — earnings blackout"
+            );
+            return vec![];
+        }
+
+        // Spread trend gate: block entries when spread has been trending (same side of 0)
+        // for too many consecutive days. A trending spread won't revert on our timescale.
+        if trading.spread_trend_gate > 0 && self.z_same_side_count >= trading.spread_trend_gate {
+            debug!(
+                pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                z = %format_args!("{z:.2}"),
+                consecutive = self.z_same_side_count,
+                gate = trading.spread_trend_gate,
+                "pairs: ENTRY BLOCKED — spread trending (same side for too many days)"
             );
             return vec![];
         }
