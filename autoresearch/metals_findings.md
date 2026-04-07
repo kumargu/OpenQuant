@@ -95,6 +95,21 @@ openquant-runner replay \
   --bar-cache data/bar_cache_metals
 ```
 
+## Cross-Validation: In-Sample + Out-of-Sample
+
+| Pair | IS Trades | IS P&L | OOS Trades | OOS P&L | Combined |
+|------|-----------|--------|------------|---------|----------|
+| **RGLD/WPM** | 2 (+531) | +265.8/trade | 2 (+163) | +81.4/trade | **+694 bps** |
+| **AG/PAAS** | 3 (+467) | +155.6/trade | 0 | - | **+467 bps** |
+| SIL/SILJ | 6 (+412) | +68.7/trade | 1 (-382) | -381.6/trade | +30 bps |
+
+**RGLD/WPM is the most robust pair** — positive in both in-sample and out-of-sample,
+including during the tariff shock period. Royalty company spreads survived the crash.
+
+**SIL/SILJ has tail risk** — the ETF rebalancing edge is real (83% win rate in normal
+markets) but a single macro shock wipes months of gains. Needs position sizing or
+a VIX filter for production use.
+
 ## Forward Test Warning (Mar 15 - Apr 7, 2026)
 
 **-352 bps in 3 weeks.** The tariff shock in late March caused a regime break:
