@@ -240,7 +240,8 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         if n > 20 {
             let mean = spread.iter().sum::<f64>() / n as f64;
             let demeaned: Vec<f64> = spread.iter().map(|s| s - mean).collect();
-            let crossings = demeaned.windows(2)
+            let crossings = demeaned
+                .windows(2)
                 .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
                 .count();
             // Annualize: crossings per 252 trading days

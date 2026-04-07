@@ -21,9 +21,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-#[allow(unused_imports)]
-use std::path::Path;
-
 /// Bar cache backed by JSONL files on disk.
 pub struct BarCache {
     root: PathBuf,
@@ -53,16 +50,14 @@ impl BarCache {
 
         // First line must be the integrity header: #bars:N
         let expected_count = match lines.next() {
-            Some(header) if header.starts_with("#bars:") => {
-                match header[6..].parse::<usize>() {
-                    Ok(n) => n,
-                    Err(_) => {
-                        warn!(symbol, date, "corrupt cache header — deleting");
-                        let _ = std::fs::remove_file(&path);
-                        return None;
-                    }
+            Some(header) if header.starts_with("#bars:") => match header[6..].parse::<usize>() {
+                Ok(n) => n,
+                Err(_) => {
+                    warn!(symbol, date, "corrupt cache header — deleting");
+                    let _ = std::fs::remove_file(&path);
+                    return None;
                 }
-            }
+            },
             _ => {
                 warn!(symbol, date, "missing cache header — deleting");
                 let _ = std::fs::remove_file(&path);
@@ -88,7 +83,8 @@ impl BarCache {
         // Verify count matches header
         if bars.len() != expected_count {
             warn!(
-                symbol, date,
+                symbol,
+                date,
                 expected = expected_count,
                 actual = bars.len(),
                 "cache bar count mismatch (truncated?) — deleting"
@@ -182,31 +178,6 @@ impl BarCache {
     }
 }
 
-/// Stats for cache performance logging.
-pub struct CacheStats {
-    pub hits: usize,
-    pub misses: usize,
-}
-
-impl CacheStats {
-    pub fn new() -> Self {
-        Self { hits: 0, misses: 0 }
-    }
-
-    pub fn log_summary(&self) {
-        let total = self.hits + self.misses;
-        if total > 0 {
-            let rate = self.hits as f64 / total as f64 * 100.0;
-            info!(
-                hits = self.hits,
-                misses = self.misses,
-                rate = format!("{:.0}%", rate).as_str(),
-                "bar cache summary"
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,7 +218,10 @@ mod tests {
         cache.write_minute("AAPL", "2026-03-10", &bars1);
 
         // Second write with different data should be ignored
-        let bar2 = AlpacaBar { c: 999.0, ..sample_bar() };
+        let bar2 = AlpacaBar {
+            c: 999.0,
+            ..sample_bar()
+        };
         cache.write_minute("AAPL", "2026-03-10", &vec![bar2]);
 
         let read = cache.read_minute("AAPL", "2026-03-10").unwrap();
@@ -269,7 +243,11 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         // Write corrupt content (wrong header count)
-        std::fs::write(&path, "#bars:5\n{\"t\":\"x\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1}\n").unwrap();
+        std::fs::write(
+            &path,
+            "#bars:5\n{\"t\":\"x\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1}\n",
+        )
+        .unwrap();
 
         // Read should detect mismatch and delete
         assert!(cache.read_minute("AAPL", "2026-03-10").is_none());
@@ -284,7 +262,11 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         // Write truncated content (header says 2, only 1 bar)
-        std::fs::write(&path, "#bars:2\n{\"t\":\"2026-03-10T14:30:00Z\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1}\n").unwrap();
+        std::fs::write(
+            &path,
+            "#bars:2\n{\"t\":\"2026-03-10T14:30:00Z\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1}\n",
+        )
+        .unwrap();
 
         assert!(cache.read_minute("AAPL", "2026-03-10").is_none());
         assert!(!path.exists());

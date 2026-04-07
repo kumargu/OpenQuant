@@ -492,16 +492,9 @@ async fn run_replay_bars(
                         const MINUTE_MS: i64 = 60_000;
                         for (symbol, bars) in &raw {
                             for bar in bars {
-                                if let Ok(dt) =
-                                    chrono::DateTime::parse_from_rfc3339(&bar.t)
-                                {
-                                    let close_ts =
-                                        dt.timestamp_millis() + MINUTE_MS;
-                                    cached_bars.push((
-                                        symbol.clone(),
-                                        close_ts,
-                                        bar.c,
-                                    ));
+                                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
+                                    let close_ts = dt.timestamp_millis() + MINUTE_MS;
+                                    cached_bars.push((symbol.clone(), close_ts, bar.c));
                                 }
                             }
                         }

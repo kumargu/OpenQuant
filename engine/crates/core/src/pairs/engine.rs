@@ -80,9 +80,12 @@ impl DispersionTracker {
 
         let n = self.daily_returns.len() as f64;
         let mean = self.daily_returns.iter().sum::<f64>() / n;
-        let variance = self.daily_returns.iter()
+        let variance = self
+            .daily_returns
+            .iter()
             .map(|r| (r - mean).powi(2))
-            .sum::<f64>() / (n - 1.0);
+            .sum::<f64>()
+            / (n - 1.0);
         let dispersion = variance.sqrt();
 
         if dispersion.is_finite() {

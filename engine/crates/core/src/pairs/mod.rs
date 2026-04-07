@@ -237,6 +237,17 @@ impl ExitContext {
 /// State: [alpha, beta] (intercept, hedge ratio).
 /// Updates on each daily spread observation.
 /// Palomar (2025): "Kalman filtering is a must in pairs trading."
+///
+/// Default parameters:
+/// - q=1e-5: slow-moving state (hedge ratio changes slowly between days)
+/// - r=1e-3: moderate observation noise (log-price measurement uncertainty)
+/// - warmup=10: minimum observations before Kalman overrides static OLS
+/// - max_beta=5.0: sanity cap on Kalman beta (resets filter if exceeded)
+const KALMAN_PROCESS_NOISE: f64 = 1e-5;
+const KALMAN_OBS_NOISE: f64 = 1e-3;
+const KALMAN_WARMUP: usize = 10;
+const KALMAN_MAX_BETA: f64 = 5.0;
+
 struct KalmanHedge {
     /// State estimate: [alpha, beta]
     x: [f64; 2],
@@ -256,8 +267,8 @@ impl KalmanHedge {
             x: [alpha, beta],
             // Start with moderate uncertainty
             p: [1.0, 0.0, 0.0, 1.0],
-            q: 1e-5,  // slow-moving state (hedge ratio changes slowly)
-            r: 1e-3,  // moderate observation noise
+            q: KALMAN_PROCESS_NOISE,
+            r: KALMAN_OBS_NOISE,
             n: 0,
         }
     }
@@ -280,8 +291,8 @@ impl KalmanHedge {
 
         // Innovation covariance: S = H * P * H' + R
         let s = h0 * (self.p[0] * h0 + self.p[1] * h1)
-              + h1 * (self.p[2] * h0 + self.p[3] * h1)
-              + self.r;
+            + h1 * (self.p[2] * h0 + self.p[3] * h1)
+            + self.r;
 
         if s.abs() < 1e-15 || !s.is_finite() {
             return (self.x[0], self.x[1]);
@@ -307,9 +318,15 @@ impl KalmanHedge {
         (self.x[0], self.x[1])
     }
 
-    fn alpha(&self) -> f64 { self.x[0] }
-    fn beta(&self) -> f64 { self.x[1] }
-    fn is_warm(&self) -> bool { self.n >= 10 }
+    fn alpha(&self) -> f64 {
+        self.x[0]
+    }
+    fn beta(&self) -> f64 {
+        self.x[1]
+    }
+    fn is_warm(&self) -> bool {
+        self.n >= KALMAN_WARMUP
+    }
 }
 
 /// Mutable state for a single pair, updated on each bar.
@@ -510,7 +527,10 @@ impl PairState {
                 if let Some(ref mut kf) = self.kalman {
                     let (new_alpha, new_beta) = kf.update(price_a.ln(), price_b.ln());
                     // Guard: reject insane Kalman updates
-                    if new_beta.is_finite() && new_beta.abs() < 5.0 && new_alpha.is_finite() {
+                    if new_beta.is_finite()
+                        && new_beta.abs() < KALMAN_MAX_BETA
+                        && new_alpha.is_finite()
+                    {
                         // Kalman update accepted — spread will use new alpha/beta next bar
                     } else {
                         warn!(
@@ -518,7 +538,6 @@ impl PairState {
                             pair_b = config.leg_b.as_str(),
                             kalman_alpha = format!("{:.4}", new_alpha).as_str(),
                             kalman_beta = format!("{:.4}", new_beta).as_str(),
-                            bug = true,
                             "Kalman produced insane hedge ratio — resetting"
                         );
                         *kf = KalmanHedge::new(config.alpha, config.beta);
@@ -843,15 +862,14 @@ impl PairState {
 
         if z < -trading.entry_z {
             // Guard: don't enter if z is already beyond stop_z — would immediately stop out.
-            // This is a bug! situation that wastes a trade and costs money.
+            // Guard: z is already beyond stop_z — entering would immediately stop out.
             if z.abs() > trading.stop_z {
                 let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
-                error!(
+                warn!(
                     pair = pair_id.as_str(),
                     z = format!("{:.2}", z).as_str(),
                     stop_z = format!("{:.2}", trading.stop_z).as_str(),
-                    bug = true,
-                    "pairs: BLOCKED ENTRY — z already beyond stop_z, would immediately stop out"
+                    "pairs: BLOCKED ENTRY — z already beyond stop_z"
                 );
                 return vec![];
             }
