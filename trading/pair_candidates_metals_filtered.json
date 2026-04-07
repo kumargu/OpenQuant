@@ -7,7 +7,6 @@
     {"leg_a": "FNV", "leg_b": "WPM", "economic_rationale": "Gold streaming companies — identical business model, royalty triangle"},
     {"leg_a": "FNV", "leg_b": "RGLD", "economic_rationale": "Gold royalty companies — identical structures, royalty triangle"},
     {"leg_a": "RGLD", "leg_b": "WPM", "economic_rationale": "Gold royalty/streaming — PROVEN WINNER: identical business models"},
-    {"leg_a": "AG", "leg_b": "PAAS", "economic_rationale": "Pure-play silver miners — showed edge in later periods"},
     {"leg_a": "HL", "leg_b": "PAAS", "economic_rationale": "Silver/base metals miners"},
     {"leg_a": "FCX", "leg_b": "SCCO", "economic_rationale": "Pure-play copper producers — simpler ops than gold miners"},
     {"leg_a": "BHP", "leg_b": "RIO", "economic_rationale": "Diversified mining giants, near-identical commodity baskets"},
