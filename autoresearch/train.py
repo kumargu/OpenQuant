@@ -30,6 +30,21 @@ REPLAY_END = os.environ.get("REPLAY_END", "2026-03-28")
 # Bar cache — dramatically speeds up repeated replays by caching Alpaca bars
 BAR_CACHE = os.path.join(ROOT, "data", "bar_cache")
 
+# Metals mode — set METALS=1 to use metals config, candidates, and pipeline.
+# Overrides config, candidates, and pipeline flags for the replay command.
+METALS = os.environ.get("METALS", "")
+if METALS:
+    CONFIG = os.environ.get("CONFIG", os.path.join(ROOT, "config", "metals.toml"))
+    CANDIDATES = os.environ.get("CANDIDATES", os.path.join(ROOT, "trading", "pair_candidates_metals_filtered.json"))
+    PIPELINE = os.environ.get("PIPELINE", "metals")
+    BAR_CACHE = os.path.join(ROOT, "data", "bar_cache_metals")
+    if REPLAY_START == "2025-04-07":  # only override if not explicitly set
+        REPLAY_START = "2025-07-01"
+else:
+    CONFIG = os.environ.get("CONFIG", os.path.join(ROOT, "config", "pairs.toml"))
+    CANDIDATES = os.environ.get("CANDIDATES", "")
+    PIPELINE = os.environ.get("PIPELINE", "")
+
 # ---------------------------------------------------------------------------
 # Step 1: Build (if needed)
 # ---------------------------------------------------------------------------
@@ -74,8 +89,14 @@ t_replay_start = time.time()
 replay_log_path = os.path.join(ROOT, "autoresearch", "replay.log")
 
 with open(replay_log_path, "w") as log_file:
-    cmd = [RUNNER, "replay", "--start", REPLAY_START, "--end", REPLAY_END,
+    cmd = [RUNNER, "replay", "--config", CONFIG,
+           "--start", REPLAY_START, "--end", REPLAY_END,
            "--bar-cache", BAR_CACHE]
+    if CANDIDATES:
+        cmd += ["--candidates", CANDIDATES]
+    if PIPELINE:
+        cmd += ["--pipeline", PIPELINE]
+    print(f"CMD: {' '.join(cmd)}")
     proc = subprocess.run(
         cmd,
         cwd=ROOT,
