@@ -400,16 +400,19 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, c
             bar_cache: cache_dir,
         } => {
             let cache = cache_dir.map(bar_cache::BarCache::new);
+            let ctx = ReplayContext {
+                trading_dir: &trading_dir,
+                cache: cache.as_ref(),
+                candidates: candidates.as_deref(),
+                pipeline_cfg: &pipeline_cfg,
+            };
             run_replay_bars(
                 &alpaca,
                 &mut pairs_engine,
                 symbols,
                 &start,
                 &end,
-                &trading_dir,
-                cache.as_ref(),
-                candidates.as_deref(),
-                &pipeline_cfg,
+                &ctx,
             )
             .await;
         }
@@ -478,16 +481,22 @@ async fn run_stream(
 // whatever order Alpaca returned them — no artificial sort. The engine
 // never sees beyond the current minute.
 
+/// Context for replay that doesn't change between days.
+struct ReplayContext<'a> {
+    trading_dir: &'a std::path::Path,
+    cache: Option<&'a bar_cache::BarCache>,
+    candidates: Option<&'a std::path::Path>,
+    pipeline_cfg: &'a PipelineConfig,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_replay_bars(
     alpaca: &alpaca::AlpacaClient,
     engine: &mut PairsEngine,
     mut symbols: Vec<String>,
     start: &str,
     end: &str,
-    trading_dir: &std::path::Path,
-    cache: Option<&bar_cache::BarCache>,
-    candidates: Option<&std::path::Path>,
-    pipeline_cfg: &PipelineConfig,
+    ctx: &ReplayContext<'_>,
 ) {
     info!(start, end, "starting replay");
 
@@ -502,7 +511,7 @@ async fn run_replay_bars(
 
     // Load earnings calendar for blackout filtering
     let earnings_calendar =
-        earnings::load_earnings_calendar(&trading_dir.join("earnings_calendar.json"));
+        earnings::load_earnings_calendar(&ctx.trading_dir.join("earnings_calendar.json"));
     info!(
         symbols = earnings_calendar.len(),
         "loaded earnings calendar"
@@ -525,7 +534,7 @@ async fn run_replay_bars(
             .to_string();
 
         // Fetch bars — from cache if available, else from Alpaca API
-        let bars = if let Some(c) = cache {
+        let bars = if let Some(c) = ctx.cache {
             let (mut cached_bars, uncached_syms) = c.read_day(&symbols, &day_start);
             if !uncached_syms.is_empty() {
                 // Fetch only uncached symbols from API
@@ -633,10 +642,10 @@ async fn run_replay_bars(
         // Open positions in removed pairs get tightened stops for graceful exit.
         if (day - last_picker_run).num_days() >= 7 {
             info!(day = day_start.as_str(), "regenerating pairs (weekly)");
-            match pair_picker_service::generate_pairs_with_config(alpaca, trading_dir, day, 40, candidates.as_deref(), pipeline_cfg).await {
+            match pair_picker_service::generate_pairs_with_config(alpaca, ctx.trading_dir, day, 40, ctx.candidates, ctx.pipeline_cfg).await {
                 Ok(active_pairs) => {
                     // Write active_pairs.json so reload() can pick it up
-                    let ap_path = trading_dir.join("active_pairs.json");
+                    let ap_path = ctx.trading_dir.join("active_pairs.json");
                     if let Err(e) = pair_picker_service::write_active_pairs(&active_pairs, &ap_path)
                     {
                         warn!(error = e.as_str(), "failed to write active_pairs.json");
