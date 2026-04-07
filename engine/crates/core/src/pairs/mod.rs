@@ -97,11 +97,23 @@ pub struct PairsTradingConfig {
     /// For metals: set to 5 (block after 5 consecutive same-side days).
     #[serde(default)]
     pub spread_trend_gate: usize,
-    /// Allow entries on any bar (not just daily close), with max one per day.
-    /// Uses daily rolling stats for z-score but checks every minute bar.
-    /// Default: false (daily-close-only entries).
+    /// Allow entries on any bar (not just daily close).
+    /// Uses daily rolling stats for z-score but evaluates spread every bar.
+    /// Requires z to persist above entry_z for `intraday_confirm_bars`
+    /// consecutive bars before firing. Default: false.
     #[serde(default)]
     pub intraday_entries: bool,
+    /// Number of consecutive bars z must stay above entry_z before intraday
+    /// entry fires. Filters noise spikes. Only used when intraday_entries=true.
+    /// At 1-min bars, 30 = 30 minutes of sustained deviation.
+    /// At 30-min bars (future), 3 = 90 minutes.
+    /// Default: 30 (30 minutes).
+    #[serde(default = "default_intraday_confirm")]
+    pub intraday_confirm_bars: usize,
+}
+
+fn default_intraday_confirm() -> usize {
+    30
 }
 
 fn default_max_concurrent() -> usize {
@@ -134,6 +146,7 @@ impl Default for PairsTradingConfig {
             max_drift_z: 0.0,
             spread_trend_gate: 0, // disabled by default
             intraday_entries: false,
+            intraday_confirm_bars: 30,
         }
     }
 }
@@ -410,6 +423,12 @@ pub struct PairState {
     z_same_side_count: usize,
     /// Sign of z on the previous daily bar (-1, 0, or 1).
     z_last_sign: i8,
+    /// Intraday entry persistence: consecutive bars where |z| > entry_z.
+    /// Resets to 0 when |z| drops below threshold. Used with intraday_entries
+    /// to require sustained deviation before entry (filters noise spikes).
+    intraday_persist_count: usize,
+    /// Whether the last intraday z was above entry threshold (for persistence tracking).
+    intraday_persist_side: i8, // -1 = below -entry_z, +1 = above +entry_z, 0 = within
 }
 
 impl Default for PairState {
@@ -468,9 +487,10 @@ impl PairState {
             consecutive_stops: 0,
             exit_context: None,
             kalman: None,
-            // Spread trend tracking: count consecutive daily bars on same side of mean
             z_same_side_count: 0,
             z_last_sign: 0,
+            intraday_persist_count: 0,
+            intraday_persist_side: 0,
         }
     }
 
@@ -876,9 +896,45 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
-        // Entries fire only at daily close (when is_new_day triggers).
-        // Intraday entries are too noisy (exp23: 114 trades, -3040 bps).
-        if !is_new_day || !rolling_z_ready {
+        // Default: entries fire only at daily close (when is_new_day triggers).
+        // With intraday_entries: also check on non-daily bars, but require
+        // z to persist above threshold for intraday_confirm_bars consecutive bars.
+        // This filters noise spikes (exp23 showed raw intraday = 114 churn trades).
+        if trading.intraday_entries && rolling_z_ready && !is_new_day {
+            // Track persistence: how many consecutive bars has |z| > entry_z?
+            let side: i8 = if z < -trading.entry_z {
+                -1
+            } else if z > trading.entry_z {
+                1
+            } else {
+                0
+            };
+            if side != 0 && side == self.intraday_persist_side {
+                self.intraday_persist_count += 1;
+            } else if side != 0 {
+                self.intraday_persist_side = side;
+                self.intraday_persist_count = 1;
+            } else {
+                self.intraday_persist_count = 0;
+                self.intraday_persist_side = 0;
+            }
+
+            // Fire intraday entry only if z persisted for confirm_bars
+            if self.intraday_persist_count >= trading.intraday_confirm_bars {
+                info!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    z = %format_args!("{z:.2}"),
+                    persist = self.intraday_persist_count,
+                    confirm = trading.intraday_confirm_bars,
+                    "pairs: INTRADAY ENTRY — z persisted above threshold"
+                );
+                // Reset counter so we don't re-enter next bar
+                self.intraday_persist_count = 0;
+                // Fall through to entry logic below
+            } else {
+                return vec![];
+            }
+        } else if !is_new_day || !rolling_z_ready {
             return vec![];
         }
 

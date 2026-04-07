@@ -184,7 +184,8 @@ exit_z = 0.3            # Tight exit — capture full reversion
 stop_z = 6.0            # Wide stop — tighter (3.5/4.5) causes churn per experiments
 max_drift_z = 0.0       # Disabled — drift stop at 1.5 cut SIL/SILJ winners prematurely
 spread_trend_gate = 0   # Disabled — z crosses zero frequently before entry, gate never fires
-intraday_entries = true  # Enter on any bar but max one entry per day per pair
+intraday_entries = true        # Enter on any bar when z persists above threshold
+intraday_confirm_bars = 30    # z must stay above entry_z for 30 consecutive 1-min bars (30 minutes)
 
 lookback = 20           # Shorter than S&P (30) — metals HL~5d, lookback=20 is ~4x HL
 max_hold_bars = 10      # Per-pair override from active_pairs.json takes precedence
