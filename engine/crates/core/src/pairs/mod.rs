@@ -468,6 +468,12 @@ impl PairState {
         }
     }
 
+    /// Resize the spread rolling window without resetting accumulated observations.
+    /// Used during weekly reload when half-life changes slightly.
+    pub fn resize_spread_window(&mut self, new_window: usize) {
+        self.spread_stats.resize(new_window);
+    }
+
     /// Update with a new price for one leg. Returns order intents if a signal fires.
     ///
     /// The caller feeds bars for all symbols. This method checks if the symbol
@@ -1387,6 +1393,7 @@ mod tests {
             tz_offset_hours: -5,
             cost_bps: 10.0,
             max_concurrent_pairs: 0, // no limit in tests
+            ..Default::default()
         }
     }
 
@@ -1775,6 +1782,7 @@ mod tests {
             tz_offset_hours: -5,
             cost_bps: 10.0,
             max_concurrent_pairs: 0,
+            ..Default::default()
         };
 
         // Warmup: stable spread = ln(100) - ln(100) = 0
@@ -1905,6 +1913,7 @@ mod tests {
             tz_offset_hours: -5,
             cost_bps: 10.0,
             max_concurrent_pairs: 0,
+            ..Default::default()
         };
 
         // Warmup: stable spread = 0

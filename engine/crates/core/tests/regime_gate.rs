@@ -39,6 +39,7 @@ fn easy_trading() -> PairsTradingConfig {
         tz_offset_hours: 0,
         cost_bps: 10.0,
         max_concurrent_pairs: 0,
+        ..Default::default()
     }
 }
 

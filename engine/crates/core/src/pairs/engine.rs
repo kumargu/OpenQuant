@@ -295,10 +295,12 @@ impl PairsEngine {
                         pair = pair_id.as_str(),
                         old_window = config.lookback_bars,
                         new_window,
-                        "Refreshed spread window from active_pairs.json"
+                        spread_observations = state.spread_count(),
+                        "Resizing spread window (preserving observations)"
                     );
                     config.lookback_bars = new_cfg.lookback_bars;
-                    *state = PairState::with_window(new_window);
+                    // Resize instead of reset — preserve accumulated spread observations
+                    state.resize_spread_window(new_window);
                 }
             } else if state.position() != PairPosition::Flat {
                 info!(
