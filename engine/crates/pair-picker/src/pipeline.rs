@@ -13,7 +13,7 @@
 
 use crate::etf_filter::is_etf_component_pair;
 use crate::regime::{compute_regime_robustness, RegimeAdjustedThresholds};
-use crate::scorer::compute_score;
+use crate::scorer::{compute_score, MaxHoldConfig};
 use crate::stats::adf::adf_test;
 use crate::stats::beta_stability::check_beta_stability;
 use crate::stats::halflife::estimate_half_life;
@@ -72,6 +72,9 @@ pub struct PipelineConfig {
     pub min_spread_crossings: f64,
     /// Whether to apply the ETF-component exclusion filter.
     pub etf_filter_enabled: bool,
+    /// Max hold cap in days. Passed to MaxHoldConfig when building ActivePair.
+    /// Lower = cut losses faster on slow-reverting pairs.
+    pub max_hold_cap: usize,
 }
 
 impl Default for PipelineConfig {
@@ -87,6 +90,7 @@ impl Default for PipelineConfig {
             structural_break_gate: true,
             min_spread_crossings: 12.0,
             etf_filter_enabled: true,
+            max_hold_cap: 10,
         }
     }
 }
@@ -105,6 +109,7 @@ impl PipelineConfig {
             structural_break_gate: false, // disabled — metals beta drifts seasonally
             min_spread_crossings: 8.0,   // relaxed — slower oscillation
             etf_filter_enabled: true,
+            max_hold_cap: 5,             // shorter than S&P — metals trends persist
         }
     }
 
@@ -548,7 +553,8 @@ pub fn validate_candidates_with_config(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    results.iter().filter_map(|r| r.to_active_pair()).collect()
+    let mhc = MaxHoldConfig { max_hold_cap: cfg.max_hold_cap, ..MaxHoldConfig::default() };
+    results.iter().filter_map(|r| r.to_active_pair_with_config(&mhc)).collect()
 }
 
 /// Run the full pipeline: read candidates, validate, write results.
@@ -625,7 +631,8 @@ pub fn run_pipeline_from_candidates_with_config(
     });
 
     // Build output
-    let active_pairs: Vec<_> = results.iter().filter_map(|r| r.to_active_pair()).collect();
+    let mhc = MaxHoldConfig { max_hold_cap: cfg.max_hold_cap, ..MaxHoldConfig::default() };
+    let active_pairs: Vec<_> = results.iter().filter_map(|r| r.to_active_pair_with_config(&mhc)).collect();
 
     let output = ActivePairsFile {
         generated_at: Utc::now(),
