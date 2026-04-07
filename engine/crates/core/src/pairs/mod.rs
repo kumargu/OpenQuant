@@ -265,7 +265,7 @@ impl ExitContext {
 /// - max_beta=5.0: sanity cap on Kalman beta (resets filter if exceeded)
 const KALMAN_PROCESS_NOISE: f64 = 1e-5;
 const KALMAN_OBS_NOISE: f64 = 1e-3;
-const KALMAN_WARMUP: usize = 7; // reduced from 10 — balance speed vs accuracy
+const KALMAN_WARMUP: usize = 10;
 const KALMAN_MAX_BETA: f64 = 5.0;
 
 struct KalmanHedge {
