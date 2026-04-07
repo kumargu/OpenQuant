@@ -117,7 +117,7 @@ pub fn load_active_pairs(
             // Floor of 20 bars — fewer gives noisy z-scores for fast pairs.
             let lookback_bars = if p.half_life_days.is_finite() && p.half_life_days > 0.0 {
                 let hl_bars = p.half_life_days.ceil() as usize;
-                (2 * hl_bars).max(20).min(60)
+                (2 * hl_bars).clamp(20, 60)
             } else {
                 0 // use global fallback
             };

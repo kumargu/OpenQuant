@@ -62,12 +62,12 @@ impl DispersionTracker {
         self.current_day = day;
 
         // Compute return from previous close
-        if let Some(&prev) = self.last_close.get(symbol) {
-            if prev > 0.0 {
-                let ret = (close / prev).ln();
-                if ret.is_finite() {
-                    self.daily_returns.push(ret);
-                }
+        if let Some(&prev) = self.last_close.get(symbol)
+            && prev > 0.0
+        {
+            let ret = (close / prev).ln();
+            if ret.is_finite() {
+                self.daily_returns.push(ret);
             }
         }
         self.last_close.insert(symbol.to_string(), close);

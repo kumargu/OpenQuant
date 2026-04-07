@@ -19,7 +19,7 @@
 use crate::alpaca::AlpacaBar;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::warn;
 
 /// Bar cache backed by JSONL files on disk.
 pub struct BarCache {

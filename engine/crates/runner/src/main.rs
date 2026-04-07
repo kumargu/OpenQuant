@@ -355,7 +355,7 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
             end,
             bar_cache: cache_dir,
         } => {
-            let cache = cache_dir.map(|p| bar_cache::BarCache::new(p));
+            let cache = cache_dir.map(bar_cache::BarCache::new);
             run_replay_bars(
                 &alpaca,
                 &mut pairs_engine,
