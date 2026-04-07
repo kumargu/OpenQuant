@@ -29,3 +29,6 @@ bc9b95a	-46.3	9	discard	entry_z=1.8 — new trades lost badly. Reverted.
 eb2506b	-26.7	114	discard	intraday_entries — massive churn, no daily cap. Reverted.
 b7dc15e	18.3	13	discard	Kalman warmup=5 — unlocked URNM/URNJ (+270) but degraded AG/PAAS. Net worse.
 70dcdb8	-6.8	16	discard	Kalman warmup=7 — even worse. Reverted to 10.
+8d388e3	9.8	14	discard	intraday z=2.0 + 30-bar persist — too many small stop losses
+9d62ec4	61.9	9	keep	intraday z=3.0 + 30-bar persist — 1 extra trade, max_dd -81 (was -133)
+25720fa	83.2	8	keep	intraday z=4.0 — never fires, equivalent to disabled
