@@ -899,11 +899,10 @@ impl PairState {
             self.entry_price_b = price_b;
             self.entry_beta = beta; // use Kalman-filtered beta if available
 
-            // Beta-weighted sizing: leg B notional = notional * |beta| to match
-            // the hedge ratio from the spread model (spread = ln(A) - β·ln(B)).
-            // This ensures the traded position is beta-neutral.
+            // Beta-weighted sizing: use the SAME beta as entry_beta (Kalman if available).
+            // This ensures open and close quantities match, preventing residual exposure.
             let qty_a = (trading.notional_per_leg / price_a).floor();
-            let qty_b = (trading.notional_per_leg * config.beta.abs() / price_b).floor();
+            let qty_b = (trading.notional_per_leg * beta.abs() / price_b).floor();
 
             return vec![
                 PairOrderIntent {
@@ -985,7 +984,7 @@ impl PairState {
             self.entry_beta = beta; // use Kalman-filtered beta if available
 
             let qty_a = (trading.notional_per_leg / price_a).floor();
-            let qty_b = (trading.notional_per_leg * config.beta.abs() / price_b).floor();
+            let qty_b = (trading.notional_per_leg * beta.abs() / price_b).floor();
 
             return vec![
                 PairOrderIntent {

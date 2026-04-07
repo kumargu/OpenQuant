@@ -28,6 +28,7 @@ replay.log
 quant_model/
 corpus/arxiv_qfin.txt
 corpus/quant_trading_instruct.txt
+corpus/issue*.txt
 
 # Original autoresearch files (not needed)
 analysis.ipynb
