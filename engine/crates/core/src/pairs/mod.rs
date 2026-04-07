@@ -106,10 +106,14 @@ pub struct PairsTradingConfig {
     /// Number of consecutive bars z must stay above entry_z before intraday
     /// entry fires. Filters noise spikes. Only used when intraday_entries=true.
     /// At 1-min bars, 30 = 30 minutes of sustained deviation.
-    /// At 30-min bars (future), 3 = 90 minutes.
     /// Default: 30 (30 minutes).
     #[serde(default = "default_intraday_confirm")]
     pub intraday_confirm_bars: usize,
+    /// Z-score threshold for intraday entries (higher than daily to filter noise).
+    /// 0.0 = use entry_z (same threshold for daily and intraday).
+    /// Researcher recommends z=2.5 for intraday vs z=2.0 for daily.
+    #[serde(default)]
+    pub intraday_entry_z: f64,
 }
 
 fn default_intraday_confirm() -> usize {
@@ -147,6 +151,7 @@ impl Default for PairsTradingConfig {
             spread_trend_gate: 0, // disabled by default
             intraday_entries: false,
             intraday_confirm_bars: 30,
+            intraday_entry_z: 0.0,
         }
     }
 }
@@ -901,10 +906,16 @@ impl PairState {
         // z to persist above threshold for intraday_confirm_bars consecutive bars.
         // This filters noise spikes (exp23 showed raw intraday = 114 churn trades).
         if trading.intraday_entries && rolling_z_ready && !is_new_day {
-            // Track persistence: how many consecutive bars has |z| > entry_z?
-            let side: i8 = if z < -trading.entry_z {
+            // Intraday uses a higher z threshold to filter noise (default: entry_z)
+            let intra_z = if trading.intraday_entry_z > 0.0 {
+                trading.intraday_entry_z
+            } else {
+                trading.entry_z
+            };
+            // Track persistence: how many consecutive bars has |z| > intra_z?
+            let side: i8 = if z < -intra_z {
                 -1
-            } else if z > trading.entry_z {
+            } else if z > intra_z {
                 1
             } else {
                 0
