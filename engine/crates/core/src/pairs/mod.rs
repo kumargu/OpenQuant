@@ -870,11 +870,16 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
-        // Entry signals only fire when a new day starts (we just pushed a daily
-        // observation into rolling stats). This guarantees exactly one entry
-        // opportunity per pair per day — no churning from multiple bars in the
-        // daily-close window.
-        if !is_new_day || !rolling_z_ready {
+        // Default: entries fire only at daily close (when is_new_day triggers).
+        // With intraday_entries: entries fire on any bar, but still max one per day.
+        let entry_allowed = if trading.intraday_entries {
+            // Allow on any bar, but enforce one entry attempt per daily bar
+            // (entry_daily_bar tracks last entry day — reuse to prevent churn)
+            rolling_z_ready && self.entry_daily_bar != self.daily_bar_count
+        } else {
+            is_new_day && rolling_z_ready
+        };
+        if !entry_allowed {
             return vec![];
         }
 
