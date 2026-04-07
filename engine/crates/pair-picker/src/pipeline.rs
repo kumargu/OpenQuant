@@ -109,7 +109,7 @@ impl PipelineConfig {
             structural_break_gate: false, // disabled — metals beta drifts seasonally
             min_spread_crossings: 8.0,   // relaxed — slower oscillation
             etf_filter_enabled: true,
-            max_hold_cap: 5,             // shorter than S&P — metals trends persist
+            max_hold_cap: 7,             // shorter than S&P (10) but room for SIL/SILJ reversion
         }
     }
 
