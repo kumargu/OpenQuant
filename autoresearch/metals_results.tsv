@@ -18,3 +18,9 @@ a295c44	25.7	6	discard	entry_z=1.8 — caught marginal entry that stop-lossed. R
 b75f313	70.1	6	keep	entry_z=2.5 + max_hold_cap=5. BEST avg_bps! Sharpe 0.42. Fewer trades, better quality.
 06ac83e	70.1	6	keep	expanded universe (uranium/royalty/steel from researcher). No new trades.
 75e50db	70.1	6	keep	ADF p<0.20 — more pairs pass but none reach entry_z=2.5. Converged.
+06ac83e	70.1	6	keep	expanded universe (uranium/royalty/steel from researcher). No new trades.
+345419b	51.6	8	keep	lookback = 3x HL. No effect.
+b75f313	70.1	6	keep	entry_z=2.5. Best avg_bps/Sharpe but 2 fewer trades. Similar total P&L.
+83d0270	51.6	8	keep	back to entry_z=2.0 for more trade diversity.
+df63f9f	51.6	8	keep	spread trend gate — never fires (z crosses 0 before entry). Disabled.
+a7773bc	83.2	8	keep	*** PRESERVE SPREAD STATS ON RELOAD *** — resize instead of reset. +61% P&L improvement!
