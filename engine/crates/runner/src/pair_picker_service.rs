@@ -130,7 +130,7 @@ pub fn to_pair_configs(pairs: &[ActivePair]) -> Vec<PairConfig> {
             };
             let lookback_bars = if p.half_life_days.is_finite() && p.half_life_days > 0.0 {
                 let hl_bars = p.half_life_days.ceil() as usize;
-                (2 * hl_bars).min(60)
+                (3 * hl_bars).min(60) // 3x HL for better z-score estimation (was 2x)
             } else {
                 0
             };
