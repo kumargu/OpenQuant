@@ -136,7 +136,7 @@ regime_change_run_length = 20
 max_position_notional = 10_000.0
 max_daily_loss = 500.0
 min_reward_cost_ratio = 3.0
-estimated_cost_bps = 0.005
+estimated_cost_bps = 30.0
 bet_sizing = "linear"
 kelly_fraction = 0.5
 kelly_min_size = 0.05
@@ -179,7 +179,7 @@ market_close = "16:00"
 
 [pairs_trading]
 
-entry_z = 2.5           # Higher conviction — filters marginal entries that stop-loss
+entry_z = 2.0           # Standard — more trades, similar total P&L to 2.5
 exit_z = 0.3            # Tight exit — capture full reversion
 stop_z = 6.0            # Wide stop — tighter (3.5/4.5) causes churn per experiments
 max_drift_z = 0.0       # Disabled — drift stop at 1.5 cut SIL/SILJ winners prematurely
