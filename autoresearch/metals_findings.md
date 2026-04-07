@@ -62,28 +62,33 @@ Same engine, same thresholds.
 
 ## Production Config
 
-### metals.toml (pairs_trading section)
+### metals.toml (pairs_trading section) — converged via 13 autoresearch experiments
 ```toml
 entry_z = 2.0
 exit_z = 0.3
 stop_z = 6.0
-max_hold_bars = 10
-cost_bps = 30.0
+lookback = 20
+max_hold_bars = 10  # per-pair override from pair-picker takes precedence
+cost_bps = 30.0     # profitable even at 50 bps (stress-tested)
+max_drift_z = 0.0   # disabled — drift stop at 1.5 cut SIL/SILJ winners
 ```
 
 ### Pipeline: metals profile
 ```
-adf_pvalue_threshold: 0.10
-max_validation_window: 252
+adf_pvalue_threshold: 0.15
+max_validation_window: 150
 min_r_squared: 0.20
 max_half_life: 60.0
 structural_break_gate: false
 min_spread_crossings: 8.0
+max_hold_cap: 5  # shorter than S&P (10) — AG/PAAS loss cut from -230 to +6 bps
 ```
 
+### Best result: +51.6 avg_bps, 8 trades, 62.5% win, Sharpe 0.32, max_dd -141 bps
+
 ### Universe: pair_candidates_metals_filtered.json
-21 pairs — royalty triangle, ETF pairs, silver miners, base metals.
-NO gold miner-vs-miner or miner-vs-royalty pairs.
+19 pairs — royalty triangle, ETF pairs, silver miners, base metals.
+NO gold miner-vs-miner, miner-vs-royalty, or ETF-vs-miner pairs.
 
 ## Run Command
 ```bash
