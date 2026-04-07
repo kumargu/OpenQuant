@@ -604,6 +604,12 @@ impl PairState {
             let mean = self.spread_stats.mean();
             let sd = self.spread_stats.std_dev();
             if sd < 1e-10 {
+                debug!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    std_dev = %format_args!("{sd:.12}"),
+                    spread_count = self.spread_count,
+                    "pairs: SKIPPED — zero spread variance (flat spread)"
+                );
                 return vec![];
             }
             (spread - mean) / sd
