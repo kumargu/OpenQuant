@@ -184,7 +184,7 @@ exit_z = 0.3            # Tight exit — capture full reversion
 stop_z = 6.0            # Wide stop — tighter (3.5/4.5) causes churn per experiments
 
 lookback = 30           # Default lookback for spread z-score
-max_hold_bars = 5       # Shorter than S&P (10) — metals trends persist, exit faster
+max_hold_bars = 10      # Per-pair override from active_pairs.json takes precedence
 min_hold_bars = 1       # Min days before reversion exit
 notional_per_leg = 1000.0
 max_concurrent_pairs = 25
