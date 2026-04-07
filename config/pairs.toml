@@ -486,7 +486,7 @@ asset_class = "disabled"
 [pairs_trading]
 
 entry_z = 2.0           # Enter when |z| > entry_z
-exit_z = 0.5            # Exit when |z| < exit_z (spread reverted)
+exit_z = 0.3            # Exit when |z| < exit_z — tighter exit captures more of the move
 stop_z = 6.0            # Stop loss when |z| > stop_z
 
 # Default lookback for spread z-score. Per-pair windows from half-life
