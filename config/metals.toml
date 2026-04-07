@@ -1,0 +1,194 @@
+# OpenQuant Metals Configuration
+#
+# Baseline config for metals pairs trading autoresearch.
+# Started from S&P 500 defaults — differences are documented.
+# Every change from this baseline must be justified by replay evidence.
+#
+# Usage:
+#   openquant-runner replay --config config/metals.toml \
+#     --candidates trading/pair_candidates_metals.json \
+#     --start 2026-01-01 --end 2026-03-31
+
+mode = "pairs"
+
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+[metrics]
+enabled = true
+
+
+# ---------------------------------------------------------------------------
+# Signal — not used by pairs engine, but ConfigFile expects these sections
+# ---------------------------------------------------------------------------
+[signal]
+buy_z_threshold = -2.2
+sell_z_threshold = 1.8
+min_relative_volume = 1.2
+min_score = 0.5
+trend_filter = true
+adaptive_z = true
+adaptive_z_percentile = 0.05
+
+
+# ---------------------------------------------------------------------------
+# Momentum
+# ---------------------------------------------------------------------------
+[momentum]
+min_adx = 20.0
+min_score = 0.3
+directional_filter = true
+min_relative_volume = 0.8
+
+
+# ---------------------------------------------------------------------------
+# Combiner
+# ---------------------------------------------------------------------------
+[combiner]
+enabled = true
+min_net_score = 0.2
+min_strategies = 1
+min_exit_strategies = 2
+weight_mean_reversion = 0.30
+weight_momentum = 0.35
+weight_vwap_reversion = 0.35
+weight_breakout = 0.0
+cusum_entry_gate = false
+max_regime_change_prob = 0.3
+blocked_hours_utc = []
+
+[combiner.regime_mean_reversion]
+low_vol = 1.5
+normal = 1.0
+high_vol = 0.2
+crisis = 0.0
+
+[combiner.regime_momentum]
+low_vol = 0.3
+normal = 1.0
+high_vol = 1.5
+crisis = 0.5
+
+[combiner.regime_vwap_reversion]
+low_vol = 1.3
+normal = 1.0
+high_vol = 0.5
+crisis = 0.0
+
+[combiner.regime_breakout]
+low_vol = 0.5
+normal = 1.0
+high_vol = 1.2
+crisis = 0.3
+
+
+# ---------------------------------------------------------------------------
+# VWAP Reversion
+# ---------------------------------------------------------------------------
+[vwap_reversion]
+enabled = true
+buy_z_threshold = -1.8
+sell_z_threshold = 0.5
+min_relative_volume = 1.0
+min_score = 0.3
+session_start_skip_bars = 30
+
+
+# ---------------------------------------------------------------------------
+# Breakout
+# ---------------------------------------------------------------------------
+[breakout]
+enabled = false
+squeeze_required = true
+min_volume_surge = 1.2
+trailing_stop_atr_mult = 3.0
+min_score = 0.3
+
+
+# ---------------------------------------------------------------------------
+# GJR-GARCH
+# ---------------------------------------------------------------------------
+[garch]
+omega = 0.000005
+alpha = 0.06
+beta = 0.87
+gamma = 0.10
+
+
+# ---------------------------------------------------------------------------
+# Regime Detection
+# ---------------------------------------------------------------------------
+[regime]
+bocpd_hazard = 250.0
+bocpd_max_run = 50
+vol_percentile_low = 0.30
+vol_percentile_high = 0.70
+crisis_drawdown = -0.05
+crisis_vol_percentile = 0.90
+regime_change_run_length = 20
+
+
+# ---------------------------------------------------------------------------
+# Risk
+# ---------------------------------------------------------------------------
+[risk]
+max_position_notional = 10_000.0
+max_daily_loss = 500.0
+min_reward_cost_ratio = 3.0
+estimated_cost_bps = 0.005
+bet_sizing = "linear"
+kelly_fraction = 0.5
+kelly_min_size = 0.05
+kelly_max_size = 0.80
+kelly_prior_wins = 12.0
+kelly_prior_losses = 8.0
+kelly_fraction_low_vol = 0.6
+kelly_fraction_high_vol = 0.25
+kelly_fraction_crisis = 0.10
+drawdown_deleverage = true
+drawdown_deleverage_curve = 2.0
+
+
+# ---------------------------------------------------------------------------
+# Exit
+# ---------------------------------------------------------------------------
+[exit]
+stop_loss_pct = 0.0
+stop_loss_atr_mult = 2.5
+max_hold_bars = 150
+take_profit_pct = 0.0
+min_hold_bars = 10
+
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+[data]
+max_bar_age_seconds = 120
+timezone_offset_hours = -4
+market_open = "09:30"
+market_close = "16:00"
+
+
+# ---------------------------------------------------------------------------
+# Pairs Trading — the section the runner uses
+# ---------------------------------------------------------------------------
+# Starting with S&P 500 defaults as honest baseline.
+# Autoresearch will tune these via replay evidence.
+
+[pairs_trading]
+
+entry_z = 2.0           # Standard. Use 2.5 for conservative mode (profitable in all windows but fewer trades)
+exit_z = 0.3            # Tight exit — capture full reversion
+stop_z = 6.0            # Wide stop — tighter (3.5/4.5) causes churn per experiments
+
+lookback = 30           # Default lookback for spread z-score
+max_hold_bars = 10      # Per-pair override from active_pairs.json takes precedence
+min_hold_bars = 1       # Min days before reversion exit
+notional_per_leg = 1000.0
+max_concurrent_pairs = 25
+last_entry_hour = 23
+force_close_minute = 1440
+tz_offset_hours = -4
+cost_bps = 30.0         # Round-trip cost — may differ for metals ETFs

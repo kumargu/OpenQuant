@@ -26,6 +26,7 @@ use openquant_core::config::ConfigFile;
 use openquant_core::pairs::engine::PairsEngine;
 use std::io::Write;
 use std::path::PathBuf;
+use pair_picker::pipeline::PipelineConfig;
 use tracing::{error, info, warn};
 
 // ── CLI ──────────────────────────────────────────────────────────────
@@ -60,6 +61,16 @@ struct StreamArgs {
 
     #[arg(long, default_value = "trading")]
     trading_dir: PathBuf,
+
+    /// Path to pair candidates JSON (default: <trading_dir>/pair_candidates.json).
+    /// Use to run with alternative universes (e.g., metals).
+    #[arg(long)]
+    candidates: Option<PathBuf>,
+
+    /// Pipeline profile for pair-picker thresholds.
+    /// "default" = S&P 500 equities, "metals" = relaxed for commodities.
+    #[arg(long, default_value = "default")]
+    pipeline: String,
 }
 
 /// Args for replay (adds date range).
@@ -74,6 +85,16 @@ struct ReplayArgs {
 
     #[arg(long, default_value = "trading")]
     trading_dir: PathBuf,
+
+    /// Path to pair candidates JSON (default: <trading_dir>/pair_candidates.json).
+    /// Use to run with alternative universes (e.g., metals).
+    #[arg(long)]
+    candidates: Option<PathBuf>,
+
+    /// Pipeline profile for pair-picker thresholds.
+    /// "default" = S&P 500 equities, "metals" = relaxed for commodities.
+    #[arg(long, default_value = "default")]
+    pipeline: String,
 
     /// Replay start date (YYYY-MM-DD).
     #[arg(long)]
@@ -133,24 +154,30 @@ async fn main() {
         .with_writer(tee)
         .init();
 
-    // Convert CLI command → (config, trading_dir, data_dir, run_mode)
-    let (config, trading_dir, data_dir, run_mode) = match cli.command {
+    // Convert CLI command → (config, trading_dir, data_dir, candidates, pipeline, run_mode)
+    let (config, trading_dir, data_dir, candidates, pipeline, run_mode) = match cli.command {
         Command::Live(a) => (
             a.config,
             a.trading_dir,
             a.data_dir,
+            a.candidates,
+            a.pipeline,
             RunMode::Stream(ExecutionMode::Live),
         ),
         Command::Paper(a) => (
             a.config,
             a.trading_dir,
             a.data_dir,
+            a.candidates,
+            a.pipeline,
             RunMode::Stream(ExecutionMode::Paper),
         ),
         Command::Replay(a) => (
             a.config,
             a.trading_dir,
             a.data_dir,
+            a.candidates,
+            a.pipeline,
             RunMode::Replay {
                 start: a.start,
                 end: a.end,
@@ -159,12 +186,12 @@ async fn main() {
         ),
     };
 
-    run(config, trading_dir, data_dir, run_mode).await;
+    run(config, trading_dir, data_dir, candidates, pipeline, run_mode).await;
 }
 
 // ── Unified run function ─────────────────────────────────────────────
 
-async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, run_mode: RunMode) {
+async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, candidates: Option<PathBuf>, pipeline_profile: String, run_mode: RunMode) {
     let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
 
     // ── Log mode ──
@@ -210,6 +237,23 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
         data_dir.clone()
     };
 
+    // ── Resolve pipeline config ──
+    let pipeline_cfg = match pipeline_profile.as_str() {
+        "metals" => {
+            info!("using METALS pipeline thresholds (relaxed, no structural break gate)");
+            PipelineConfig::metals()
+        }
+        "metals-strict" => {
+            info!("using METALS-STRICT pipeline thresholds (relaxed ADF/HL, structural break gate ON)");
+            PipelineConfig::metals_strict()
+        }
+        "default" | "" => PipelineConfig::default(),
+        other => {
+            error!(profile = other, "unknown pipeline profile — use 'default', 'metals', or 'metals-strict'");
+            std::process::exit(1);
+        }
+    };
+
     // ── Initialize pairs engine ──
     let mut ptc = cfg_file.pairs_trading.clone();
     ptc.tz_offset_hours = cfg_file.data.timezone_offset_hours;
@@ -228,7 +272,7 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
                 "replay: generating fresh pairs from pair-picker"
             );
             let active_pairs =
-                match pair_picker_service::generate_pairs(&alpaca, &trading_dir, price_end, 40)
+                match pair_picker_service::generate_pairs_with_config(&alpaca, &trading_dir, price_end, 40, candidates.as_deref(), &pipeline_cfg)
                     .await
                 {
                     Ok(p) => p,
@@ -364,6 +408,8 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, r
                 &end,
                 &trading_dir,
                 cache.as_ref(),
+                candidates.as_deref(),
+                &pipeline_cfg,
             )
             .await;
         }
@@ -440,6 +486,8 @@ async fn run_replay_bars(
     end: &str,
     trading_dir: &std::path::Path,
     cache: Option<&bar_cache::BarCache>,
+    candidates: Option<&std::path::Path>,
+    pipeline_cfg: &PipelineConfig,
 ) {
     info!(start, end, "starting replay");
 
@@ -585,7 +633,7 @@ async fn run_replay_bars(
         // Open positions in removed pairs get tightened stops for graceful exit.
         if (day - last_picker_run).num_days() >= 7 {
             info!(day = day_start.as_str(), "regenerating pairs (weekly)");
-            match pair_picker_service::generate_pairs(alpaca, trading_dir, day, 40).await {
+            match pair_picker_service::generate_pairs_with_config(alpaca, trading_dir, day, 40, candidates.as_deref(), pipeline_cfg).await {
                 Ok(active_pairs) => {
                     // Write active_pairs.json so reload() can pick it up
                     let ap_path = trading_dir.join("active_pairs.json");

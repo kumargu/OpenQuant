@@ -6,7 +6,7 @@
 use crate::alpaca::AlpacaClient;
 use openquant_core::pairs::PairConfig;
 use pair_picker::graph::RelationshipGraph;
-use pair_picker::pipeline::{validate_candidates, InMemoryPrices};
+use pair_picker::pipeline::{validate_candidates_with_config, InMemoryPrices, PipelineConfig};
 use pair_picker::types::ActivePair;
 use std::path::Path;
 use tracing::info;
@@ -16,17 +16,34 @@ use tracing::info;
 /// `price_end_date`: daily bars are fetched up to (but not including) this date.
 /// For replay: set to the replay start date to prevent look-ahead bias.
 /// For live/paper: set to today.
-pub async fn generate_pairs(
+///
+/// `candidates_override`: when set, load candidates from this path instead of
+/// the default `trading_dir/pair_candidates.json`. Used for alternative
+/// universes (e.g., metals).
+pub async fn generate_pairs_with_config(
     alpaca: &AlpacaClient,
     trading_dir: &Path,
     price_end_date: chrono::NaiveDate,
     top_k: usize,
+    candidates_override: Option<&Path>,
+    pipeline_cfg: &PipelineConfig,
 ) -> Result<Vec<ActivePair>, String> {
-    // Load relationship graph for candidate generation
+    // Load candidates — override path takes priority over graph/default
     let graph_path = trading_dir.join("stock_relationships.json");
-    let candidates_path = trading_dir.join("pair_candidates.json");
+    let default_candidates_path = trading_dir.join("pair_candidates.json");
 
-    let candidates = if graph_path.exists() {
+    let candidates = if let Some(override_path) = candidates_override {
+        let contents = std::fs::read_to_string(override_path)
+            .map_err(|e| format!("read candidates override: {e}"))?;
+        let file: pair_picker::types::PairCandidatesFile =
+            serde_json::from_str(&contents).map_err(|e| format!("parse error: {e}"))?;
+        info!(
+            candidates = file.pairs.len(),
+            path = %override_path.display(),
+            "loaded candidates from override path"
+        );
+        file.pairs
+    } else if graph_path.exists() {
         let graph = RelationshipGraph::load(&graph_path)
             .ok_or("Failed to load stock_relationships.json")?;
         let c = graph.to_candidates();
@@ -35,9 +52,9 @@ pub async fn generate_pairs(
             "generated candidates from relationship graph"
         );
         c
-    } else if candidates_path.exists() {
-        let contents =
-            std::fs::read_to_string(&candidates_path).map_err(|e| format!("read error: {e}"))?;
+    } else if default_candidates_path.exists() {
+        let contents = std::fs::read_to_string(&default_candidates_path)
+            .map_err(|e| format!("read error: {e}"))?;
         let file: pair_picker::types::PairCandidatesFile =
             serde_json::from_str(&contents).map_err(|e| format!("parse error: {e}"))?;
         info!(
@@ -78,7 +95,7 @@ pub async fn generate_pairs(
     let provider = InMemoryPrices { data: prices };
 
     // Run validation pipeline (in-memory, no file I/O)
-    let mut active_pairs = validate_candidates(&candidates, &provider);
+    let mut active_pairs = validate_candidates_with_config(&candidates, &provider, pipeline_cfg);
 
     // Truncate to top_k
     active_pairs.truncate(top_k);

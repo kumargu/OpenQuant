@@ -1,0 +1,25 @@
+{
+  "pairs": [
+    {"leg_a": "GLD", "leg_b": "SLV", "economic_rationale": "Gold-silver ratio: centuries of mean-reversion evidence"},
+    {"leg_a": "GLD", "leg_b": "IAU", "economic_rationale": "Both track spot gold price, near-arbitrage spread"},
+    {"leg_a": "GDX", "leg_b": "GDXJ", "economic_rationale": "Senior vs junior gold miners ETF, same sector beta"},
+    {"leg_a": "SIL", "leg_b": "SILJ", "economic_rationale": "Senior vs junior silver miners ETF — PROVEN WINNER: mechanical rebalancing"},
+    {"leg_a": "FNV", "leg_b": "WPM", "economic_rationale": "Gold streaming companies — identical business model, royalty triangle"},
+    {"leg_a": "FNV", "leg_b": "RGLD", "economic_rationale": "Gold royalty companies — identical structures, royalty triangle"},
+    {"leg_a": "RGLD", "leg_b": "WPM", "economic_rationale": "Gold royalty/streaming — PROVEN WINNER: identical business models"},
+    {"leg_a": "AG", "leg_b": "PAAS", "economic_rationale": "Pure-play silver miners — showed edge in later periods"},
+    {"leg_a": "HL", "leg_b": "PAAS", "economic_rationale": "Silver/base metals miners"},
+    {"leg_a": "FCX", "leg_b": "SCCO", "economic_rationale": "Pure-play copper producers — simpler ops than gold miners"},
+    {"leg_a": "BHP", "leg_b": "RIO", "economic_rationale": "Diversified mining giants, near-identical commodity baskets"},
+    {"leg_a": "BHP", "leg_b": "VALE", "economic_rationale": "Diversified miners, iron ore + base metals overlap"},
+    {"leg_a": "RIO", "leg_b": "VALE", "economic_rationale": "Diversified miners"},
+    {"leg_a": "GLD", "leg_b": "GDX", "economic_rationale": "Gold price ETF vs gold miners ETF"},
+    {"leg_a": "SLV", "leg_b": "SIL", "economic_rationale": "Silver price vs silver miners ETF"},
+    {"leg_a": "GLD", "leg_b": "SGOL", "economic_rationale": "Both physically backed gold ETFs"},
+    {"leg_a": "GDX", "leg_b": "SIL", "economic_rationale": "Gold miners vs silver miners ETF"},
+    {"leg_a": "SLV", "leg_b": "PAAS", "economic_rationale": "Silver ETF vs largest silver miner"},
+    {"leg_a": "AG", "leg_b": "HL", "economic_rationale": "Silver miners with base metals exposure"},
+    {"leg_a": "AG", "leg_b": "CDE", "economic_rationale": "Pure-play silver miners"},
+    {"leg_a": "FCX", "leg_b": "TECK", "economic_rationale": "Base metals: copper + zinc vs pure copper"}
+  ]
+}
