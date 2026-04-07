@@ -23,3 +23,17 @@ dev/
 results.tsv
 run.log
 replay.log
+
+# Quant model training (local only)
+quant_model/
+corpus/arxiv_qfin.txt
+corpus/quant_trading_instruct.txt
+
+# Original autoresearch files (not needed)
+analysis.ipynb
+progress.png
+README.md
+.python-version
+uv.lock
+alpha_prep.md
+research_log.tsv
