@@ -531,13 +531,26 @@ impl PairState {
                         && new_beta.abs() < KALMAN_MAX_BETA
                         && new_alpha.is_finite()
                     {
-                        // Kalman update accepted — spread will use new alpha/beta next bar
+                        // Log significant beta shifts (>5%) for debugging
+                        let beta_shift = ((new_beta - config.beta) / config.beta).abs();
+                        if beta_shift > 0.05 && kf.n % 5 == 0 {
+                            info!(
+                                pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                                ols_beta = format!("{:.4}", config.beta).as_str(),
+                                kalman_beta = format!("{:.4}", new_beta).as_str(),
+                                shift_pct = format!("{:.1}%", beta_shift * 100.0).as_str(),
+                                "Kalman beta diverged from OLS"
+                            );
+                        }
                     } else {
-                        warn!(
+                        // bug! — this should not happen with valid price data.
+                        // If it does, the pair's price relationship has broken badly.
+                        error!(
                             pair_a = config.leg_a.as_str(),
                             pair_b = config.leg_b.as_str(),
                             kalman_alpha = format!("{:.4}", new_alpha).as_str(),
                             kalman_beta = format!("{:.4}", new_beta).as_str(),
+                            bug = true,
                             "Kalman produced insane hedge ratio — resetting"
                         );
                         *kf = KalmanHedge::new(config.alpha, config.beta);
@@ -622,9 +635,12 @@ impl PairState {
                 None => {
                     // Defensive fallback: no context means entry was not captured properly.
                     // Use rolling z to avoid blocking exits entirely.
-                    warn!(
+                    // bug! — exit_context should always be set when position is open.
+                    // If we reach here, the entry logic failed to freeze stats.
+                    error!(
                         pair_a = config.leg_a.as_str(),
                         pair_b = config.leg_b.as_str(),
+                        bug = true,
                         "pairs: exit_context missing for open position — falling back to rolling z"
                     );
                     z
