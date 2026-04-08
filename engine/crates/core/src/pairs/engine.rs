@@ -307,8 +307,11 @@ impl PairsEngine {
                         "Resizing spread window (preserving observations)"
                     );
                     config.lookback_bars = new_cfg.lookback_bars;
-                    // Resize instead of reset — preserve accumulated spread observations
-                    state.resize_spread_window(new_window);
+                    // Full reset on window change. Resize() preserves spread
+                    // observations but they were computed with old alpha/beta,
+                    // creating inconsistency with the fresh hedge ratio.
+                    // TODO: resize + recompute spreads with new alpha/beta.
+                    *state = PairState::for_pair(config, &self.trading_config);
                 }
             } else if state.position() != PairPosition::Flat {
                 info!(

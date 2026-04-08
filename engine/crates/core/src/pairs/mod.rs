@@ -592,6 +592,12 @@ impl PairState {
         self.spread_stats.resize(new_window);
     }
 
+    /// Reset Kalman filter to fresh OLS values.
+    /// Called on window resize to prevent stale alpha/beta from the old window.
+    pub fn reset_kalman(&mut self, alpha: f64, beta: f64) {
+        self.kalman = Some(KalmanHedge::new(alpha, beta));
+    }
+
     /// Update with a new price for one leg. Returns order intents if a signal fires.
     ///
     /// The caller feeds bars for all symbols. This method checks if the symbol
