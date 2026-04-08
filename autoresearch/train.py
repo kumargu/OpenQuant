@@ -30,13 +30,13 @@ REPLAY_END = os.environ.get("REPLAY_END", "2026-03-28")
 # Bar cache — dramatically speeds up repeated replays by caching Alpaca bars
 BAR_CACHE = os.path.join(ROOT, "data", "bar_cache")
 
-# Metals mode — set METALS=1 to use metals config, candidates, and pipeline.
-# Overrides config, candidates, and pipeline flags for the replay command.
-METALS = os.environ.get("METALS", "")
-if METALS:
+# Engine mode — "metals" or "snp500" (default).
+# --engine is REQUIRED by the runner, so we must always set it.
+ENGINE = os.environ.get("ENGINE", "snp500")
+if ENGINE == "metals":
     CONFIG = os.environ.get("CONFIG", os.path.join(ROOT, "config", "metals.toml"))
-    CANDIDATES = os.environ.get("CANDIDATES", os.path.join(ROOT, "trading", "pair_candidates_metals_filtered.json"))
-    PIPELINE = os.environ.get("PIPELINE", "metals")
+    CANDIDATES = os.environ.get("CANDIDATES", os.path.join(ROOT, "trading", "metals_pairs.json"))
+    PIPELINE = os.environ.get("PIPELINE", "force")
     BAR_CACHE = os.path.join(ROOT, "data", "bar_cache_metals")
     if REPLAY_START == "2025-04-07":  # only override if not explicitly set
         REPLAY_START = "2025-07-01"
@@ -89,7 +89,7 @@ t_replay_start = time.time()
 replay_log_path = os.path.join(ROOT, "autoresearch", "replay.log")
 
 with open(replay_log_path, "w") as log_file:
-    cmd = [RUNNER, "replay", "--config", CONFIG,
+    cmd = [RUNNER, "replay", "--engine", ENGINE, "--config", CONFIG,
            "--start", REPLAY_START, "--end", REPLAY_END,
            "--bar-cache", BAR_CACHE]
     if CANDIDATES:

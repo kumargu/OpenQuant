@@ -1,13 +1,12 @@
 # OpenQuant Metals Configuration
 #
-# Baseline config for metals pairs trading autoresearch.
-# Started from S&P 500 defaults — differences are documented.
-# Every change from this baseline must be justified by replay evidence.
+# Tuned via 29+ autoresearch experiments. 5 curated metals pairs.
+# Pair selection is structural (same commodity + same structure),
+# not statistical (ADF cointegration rejects all profitable metals pairs).
 #
 # Usage:
-#   openquant-runner replay --config config/metals.toml \
-#     --candidates trading/pair_candidates_metals.json \
-#     --start 2026-01-01 --end 2026-03-31
+#   openquant-runner replay --engine metals --start 2025-07-01 --end 2026-03-28
+#   openquant-runner paper --engine metals
 
 mode = "pairs"
 

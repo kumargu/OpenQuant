@@ -292,20 +292,12 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, c
     // ── Resolve pipeline config ──
     let pipeline_cfg = match pipeline_profile.as_str() {
         "metals" => {
-            info!("using METALS pipeline thresholds (relaxed, no structural break gate)");
+            info!("using METALS pipeline thresholds");
             PipelineConfig::metals()
         }
-        "metals-strict" => {
-            info!("using METALS-STRICT pipeline thresholds (relaxed ADF/HL, structural break gate ON)");
-            PipelineConfig::metals_strict()
-        }
         "force" => {
-            info!("using FORCE pipeline — ALL pairs pass validation (autoresearch)");
+            info!("using FORCE pipeline — all pairs pass validation");
             PipelineConfig::force()
-        }
-        "metals-curated" => {
-            info!("using METALS-CURATED pipeline — R² + beta stability, no ADF gate");
-            PipelineConfig::metals_curated()
         }
         "default" | "" => PipelineConfig::default(),
         other => {
