@@ -667,6 +667,9 @@ impl PairState {
                 self.spread_count += 1;
                 self.daily_bar_count += 1;
             }
+            // Reset intraday persistence — bars from yesterday don't count toward today.
+            self.intraday_persist_count = 0;
+            self.intraday_persist_side = 0;
             // Update Kalman filter with daily closes (only when flat — don't
             // change hedge ratio mid-trade as it would invalidate exit context).
             if self.position == PairPosition::Flat
@@ -1391,6 +1394,9 @@ impl PairState {
         self.entry_price_a = 0.0;
         self.entry_price_b = 0.0;
         self.entry_beta = 1.0;
+        // Reset per-day entry marker so engine-level cap cancellations
+        // (max_concurrent, max_daily_entries) don't block retries same day.
+        self.last_entry_day = 0;
     }
 
     /// Restore position from external state (e.g., Alpaca positions on restart).
