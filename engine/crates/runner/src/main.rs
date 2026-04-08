@@ -49,10 +49,53 @@ enum Command {
     Replay(ReplayArgs),
 }
 
+/// Asset class / strategy variant. Each variant defines its own config,
+/// pair candidates, and pipeline defaults.
+///
+/// Usage:
+///   openquant-runner paper --engine snp500
+///   openquant-runner replay --engine metals --start 2025-07-01 --end 2026-03-28
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum Engine {
+    /// S&P 500 equities — ADF cointegration, GICS sector pairs.
+    #[value(alias = "pairs")]
+    Snp500,
+    /// Metals — curated structurally-similar pairs, force pipeline (bypasses ADF).
+    Metals,
+    // Future: Bitcoin, etc.
+}
+
+impl Engine {
+    fn config_path(&self) -> &'static str {
+        match self {
+            Engine::Snp500 => "config/pairs.toml",
+            Engine::Metals => "config/metals.toml",
+        }
+    }
+
+    fn candidates_path(&self) -> Option<&'static str> {
+        match self {
+            Engine::Snp500 => None, // uses stock_relationships.json / pair_candidates.json
+            Engine::Metals => Some("trading/metals_pairs.json"),
+        }
+    }
+
+    fn pipeline(&self) -> &'static str {
+        match self {
+            Engine::Snp500 => "default",
+            Engine::Metals => "force",
+        }
+    }
+}
+
 /// Shared args for live and paper (both use WebSocket streaming).
 #[derive(clap::Args, Debug, Clone)]
 struct StreamArgs {
-    /// Path to TOML config file. Defaults based on --engine.
+    /// Asset class / strategy variant.
+    #[arg(long, value_enum, default_value_t = Engine::Snp500)]
+    engine: Engine,
+
+    /// Override config file (default: selected by --engine).
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -62,25 +105,23 @@ struct StreamArgs {
     #[arg(long, default_value = "trading")]
     trading_dir: PathBuf,
 
-    /// Path to pair candidates JSON. Defaults based on --engine.
+    /// Override pair candidates JSON (default: selected by --engine).
     #[arg(long)]
     candidates: Option<PathBuf>,
 
-    /// Pipeline profile for pair-picker thresholds.
+    /// Override pipeline profile (default: selected by --engine).
     #[arg(long)]
     pipeline: Option<String>,
-
-    /// Engine mode: selects config, candidates, and pipeline defaults.
-    ///   pairs (default) — S&P 500 equities, ADF cointegration
-    ///   metals — curated metals pairs, force pipeline (bypasses ADF)
-    #[arg(long, default_value = "pairs")]
-    engine: String,
 }
 
 /// Args for replay (adds date range).
 #[derive(clap::Args, Debug, Clone)]
 struct ReplayArgs {
-    /// Path to TOML config file (default: config/pairs.toml).
+    /// Asset class / strategy variant.
+    #[arg(long, value_enum, default_value_t = Engine::Snp500)]
+    engine: Engine,
+
+    /// Override config file (default: selected by --engine).
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -90,17 +131,13 @@ struct ReplayArgs {
     #[arg(long, default_value = "trading")]
     trading_dir: PathBuf,
 
-    /// Path to pair candidates JSON. Defaults based on --engine.
+    /// Override pair candidates JSON (default: selected by --engine).
     #[arg(long)]
     candidates: Option<PathBuf>,
 
-    /// Pipeline profile for pair-picker thresholds.
+    /// Override pipeline profile (default: selected by --engine).
     #[arg(long)]
     pipeline: Option<String>,
-
-    /// Engine mode: pairs (S&P 500) or metals (curated metals pairs).
-    #[arg(long, default_value = "pairs")]
-    engine: String,
 
     /// Replay start date (YYYY-MM-DD).
     #[arg(long)]
@@ -121,24 +158,15 @@ const DEFAULT_CONFIG: &str = "config/pairs.toml";
 /// Resolve engine-specific defaults for config, candidates, and pipeline.
 /// Explicit CLI flags always override engine defaults.
 fn resolve_engine(
-    engine: &str,
+    engine: Engine,
     config: Option<PathBuf>,
     candidates: Option<PathBuf>,
     pipeline: Option<String>,
 ) -> (Option<PathBuf>, Option<PathBuf>, String) {
-    match engine {
-        "metals" => {
-            let config = config.or_else(|| Some(PathBuf::from("config/metals.toml")));
-            let candidates = candidates.or_else(|| Some(PathBuf::from("trading/metals_pairs.json")));
-            let pipeline = pipeline.unwrap_or_else(|| "force".to_string());
-            (config, candidates, pipeline)
-        }
-        _ => {
-            let config = config.or_else(|| Some(PathBuf::from("config/pairs.toml")));
-            let pipeline = pipeline.unwrap_or_else(|| "default".to_string());
-            (config, candidates, pipeline)
-        }
-    }
+    let config = config.or_else(|| Some(PathBuf::from(engine.config_path())));
+    let candidates = candidates.or_else(|| engine.candidates_path().map(PathBuf::from));
+    let pipeline = pipeline.unwrap_or_else(|| engine.pipeline().to_string());
+    (config, candidates, pipeline)
 }
 
 /// What the runner does after the engine emits intents.
@@ -187,19 +215,19 @@ async fn main() {
     let (config, trading_dir, data_dir, candidates, pipeline, run_mode) = match cli.command {
         Command::Live(a) => {
             let (config, candidates, pipeline) =
-                resolve_engine(&a.engine, a.config, a.candidates, a.pipeline);
+                resolve_engine(a.engine, a.config, a.candidates, a.pipeline);
             (config, a.trading_dir, a.data_dir, candidates, pipeline,
              RunMode::Stream(ExecutionMode::Live))
         }
         Command::Paper(a) => {
             let (config, candidates, pipeline) =
-                resolve_engine(&a.engine, a.config, a.candidates, a.pipeline);
+                resolve_engine(a.engine, a.config, a.candidates, a.pipeline);
             (config, a.trading_dir, a.data_dir, candidates, pipeline,
              RunMode::Stream(ExecutionMode::Paper))
         }
         Command::Replay(a) => {
             let (config, candidates, pipeline) =
-                resolve_engine(&a.engine, a.config, a.candidates, a.pipeline);
+                resolve_engine(a.engine, a.config, a.candidates, a.pipeline);
             (config, a.trading_dir, a.data_dir, candidates, pipeline,
              RunMode::Replay {
                  start: a.start,
