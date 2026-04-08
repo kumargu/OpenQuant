@@ -58,7 +58,6 @@ enum Command {
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Engine {
     /// S&P 500 equities — ADF cointegration, GICS sector pairs.
-    #[value(alias = "pairs")]
     Snp500,
     /// Metals — curated structurally-similar pairs, force pipeline (bypasses ADF).
     Metals,
@@ -92,7 +91,8 @@ impl Engine {
 #[derive(clap::Args, Debug, Clone)]
 struct StreamArgs {
     /// Asset class / strategy variant.
-    #[arg(long, value_enum, default_value_t = Engine::Snp500)]
+    /// Required. Selects config, candidates, and pipeline for the asset class.
+    #[arg(long, value_enum)]
     engine: Engine,
 
     /// Override config file (default: selected by --engine).
@@ -118,7 +118,8 @@ struct StreamArgs {
 #[derive(clap::Args, Debug, Clone)]
 struct ReplayArgs {
     /// Asset class / strategy variant.
-    #[arg(long, value_enum, default_value_t = Engine::Snp500)]
+    /// Required. Selects config, candidates, and pipeline for the asset class.
+    #[arg(long, value_enum)]
     engine: Engine,
 
     /// Override config file (default: selected by --engine).
