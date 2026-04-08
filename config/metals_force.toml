@@ -124,9 +124,10 @@ exit_z = 0.3
 stop_z = 6.0
 max_drift_z = 0.0
 spread_trend_gate = 0
-intraday_entries = true        # Enter on any bar
-intraday_confirm_bars = 10     # 10 minutes of persistence (low bar)
+intraday_entries = true        # Enter on any bar (max one per pair per day)
+intraday_confirm_bars = 10     # 10 minutes of persistence
 intraday_entry_z = 2.0         # Intraday slightly higher than daily
+max_daily_entries = 4          # Max 4 new entries per day across all pairs
 
 lookback = 20
 max_hold_bars = 10

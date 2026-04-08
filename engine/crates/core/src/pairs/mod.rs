@@ -111,9 +111,16 @@ pub struct PairsTradingConfig {
     pub intraday_confirm_bars: usize,
     /// Z-score threshold for intraday entries (higher than daily to filter noise).
     /// 0.0 = use entry_z (same threshold for daily and intraday).
-    /// Researcher recommends z=2.5 for intraday vs z=2.0 for daily.
     #[serde(default)]
     pub intraday_entry_z: f64,
+    /// Maximum new entries per day across all pairs. 0 = no limit.
+    /// Prevents over-trading on volatile days. Default 4.
+    #[serde(default = "default_max_daily_entries")]
+    pub max_daily_entries: usize,
+}
+
+fn default_max_daily_entries() -> usize {
+    4
 }
 
 fn default_intraday_confirm() -> usize {
@@ -152,6 +159,7 @@ impl Default for PairsTradingConfig {
             intraday_entries: false,
             intraday_confirm_bars: 30,
             intraday_entry_z: 0.0,
+            max_daily_entries: 4,
         }
     }
 }
@@ -434,6 +442,8 @@ pub struct PairState {
     intraday_persist_count: usize,
     /// Whether the last intraday z was above entry threshold (for persistence tracking).
     intraday_persist_side: i8, // -1 = below -entry_z, +1 = above +entry_z, 0 = within
+    /// Calendar day of last entry (timestamp / 86_400_000). Prevents re-entry same day.
+    last_entry_day: i64,
 }
 
 impl Default for PairState {
@@ -496,6 +506,7 @@ impl PairState {
             z_last_sign: 0,
             intraday_persist_count: 0,
             intraday_persist_side: 0,
+            last_entry_day: 0,
         }
     }
 
@@ -949,6 +960,12 @@ impl PairState {
             return vec![];
         }
 
+        // One entry per pair per day: block if already entered today
+        let bar_day = timestamp / 86_400_000;
+        if self.last_entry_day == bar_day {
+            return vec![];
+        }
+
         // Track spread trend: count consecutive daily bars with z on the same side of 0.
         // High values indicate a trending spread (not mean-reverting).
         if rolling_z_ready {
@@ -1078,6 +1095,7 @@ impl PairState {
 
             self.position = PairPosition::LongSpread;
             self.entry_daily_bar = self.daily_bar_count;
+            self.last_entry_day = timestamp / 86_400_000;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
             self.entry_beta = beta; // use Kalman-filtered beta if available
@@ -1162,6 +1180,7 @@ impl PairState {
 
             self.position = PairPosition::ShortSpread;
             self.entry_daily_bar = self.daily_bar_count;
+            self.last_entry_day = timestamp / 86_400_000;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
             self.entry_beta = beta; // use Kalman-filtered beta if available
