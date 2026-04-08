@@ -660,6 +660,12 @@ impl PairState {
         // was the daily close. Push the buffered spread into rolling stats.
         // No timezone math needed for the gate — just date comparison.
         // ── New-day detection ──
+        // Uses UTC midnight boundary (timestamp / 86_400_000). This works for
+        // US market hours (9:30-16:00 ET = 13:30-20:00 UTC) because all trading
+        // happens within one UTC day. The daily counters (last_entry_day,
+        // max_daily_entries, intraday persistence) reset at 00:00 UTC = 20:00 ET,
+        // well after market close. Would need tz-aware day boundary for 24h markets.
+        //
         // We update last_bar_day only when BOTH legs have arrived (spread computed).
         // This prevents the first leg from consuming the new-day flag before
         // the second leg can use it for entry evaluation.
