@@ -1,36 +1,112 @@
 //! Pairs trading — market-neutral mean-reversion on spread between two correlated assets.
 //!
-//! Instead of trading individual stock mean-reversion (1-2 bps edge, wiped by costs),
-//! pairs trading captures the spread reversion between two related assets (8-10 bps edge).
-//!
-//! # How it works
+//! # Data flow and rolling stats lifecycle
 //!
 //! ```text
-//!  spread = ln(price_A) - β × ln(price_B)
-//!
-//!  z = (spread - rolling_mean) / rolling_std
-//!
-//!  z < -entry_z  →  LONG spread:  BUY A, SELL B
-//!  z > +entry_z  →  SHORT spread: SELL A, BUY B
-//!  |z| < exit_z  →  CLOSE both legs (spread reverted)
-//!  |z| > stop_z  →  STOP LOSS (spread diverged further)
+//! ┌─────────────────────────────────────────────────────────────────────┐
+//! │                        BAR ARRIVES (per minute)                     │
+//! │                                                                     │
+//! │  Alpaca WebSocket / REST  ──►  PairsEngine::on_bar(symbol, ts, px) │
+//! │                                    │                                │
+//! │                         ┌──────────▼──────────┐                    │
+//! │                         │   PairState::on_price │ (for each pair   │
+//! │                         │   matching this symbol)│                  │
+//! │                         └──────────┬──────────┘                    │
+//! │                                    │                                │
+//! │                    ┌───────────────▼───────────────┐               │
+//! │                    │  Both legs have fresh prices?  │               │
+//! │                    │  (last_price_a AND last_price_b)│              │
+//! │                    └───────────────┬───────────────┘               │
+//! │                              No: return              Yes: ▼        │
+//! │                                                                     │
+//! │              spread = ln(price_A) - α - β × ln(price_B)           │
+//! │              (β from Kalman filter if warm, else OLS from picker)  │
+//! │                                                                     │
+//! │  ┌─────────────────────────────────────────────────────────────┐   │
+//! │  │                   TWO-CLOCK ARCHITECTURE                     │   │
+//! │  │                                                               │   │
+//! │  │  SIGNAL CLOCK (daily):                                        │   │
+//! │  │    When calendar day changes (is_new_day):                    │   │
+//! │  │    1. Push yesterday's spread into RollingStats               │   │
+//! │  │    2. spread_count += 1                                       │   │
+//! │  │    3. daily_bar_count += 1                                    │   │
+//! │  │    4. Compute z = (spread - rolling_mean) / rolling_std       │   │
+//! │  │    5. Check entry signals (z vs entry_z threshold)            │   │
+//! │  │                                                               │   │
+//! │  │  RISK CLOCK (every bar):                                      │   │
+//! │  │    On every minute bar (whether is_new_day or not):           │   │
+//! │  │    1. Compute spread from current prices                      │   │
+//! │  │    2. If holding: check stop loss via frozen ExitContext       │   │
+//! │  │    3. If holding: check max_hold (uses daily_bar_count)       │   │
+//! │  │    4. If intraday_entries: check persistence filter for entry  │   │
+//! │  └─────────────────────────────────────────────────────────────┘   │
+//! │                                                                     │
+//! │  ┌─────────────────────────────────────────────────────────────┐   │
+//! │  │                   ROLLING STATS LIFECYCLE                     │   │
+//! │  │                                                               │   │
+//! │  │  RollingStats: Welford's online mean/variance over N bars     │   │
+//! │  │                                                               │   │
+//! │  │  Created: PairState::for_pair() — window = 3 × ceil(HL)      │   │
+//! │  │  Fed:     once per day (is_new_day) with daily-close spread   │   │
+//! │  │  Ready:   when spread_count >= window (e.g., 15 daily bars)   │   │
+//! │  │                                                               │   │
+//! │  │  On weekly reload (pair-picker regen):                        │   │
+//! │  │    If pair stays with same window → stats PRESERVED           │   │
+//! │  │    If window changes → RollingStats::resize() (preserves      │   │
+//! │  │      existing observations, adjusts capacity)                 │   │
+//! │  │    If pair is new → cold start, needs N days to warm up       │   │
+//! │  │                                                               │   │
+//! │  │  NOT persisted to disk — rebuilt from warmup bars on restart.  │   │
+//! │  │  Warmup: runner fetches ~30 daily bars before replay/live     │   │
+//! │  │  start, feeds them through on_bar() to fill rolling stats.    │   │
+//! │  └─────────────────────────────────────────────────────────────┘   │
+//! │                                                                     │
+//! │  ┌─────────────────────────────────────────────────────────────┐   │
+//! │  │                   ENTRY FLOW                                  │   │
+//! │  │                                                               │   │
+//! │  │  Daily entry (default):                                       │   │
+//! │  │    is_new_day AND spread_count >= window AND |z| > entry_z    │   │
+//! │  │    → one chance per pair per day at daily close                │   │
+//! │  │                                                               │   │
+//! │  │  Intraday entry (if intraday_entries=true):                   │   │
+//! │  │    On non-daily bars, if daily entry missed:                  │   │
+//! │  │    |z| > intraday_entry_z for intraday_confirm_bars in a row  │   │
+//! │  │    → max one intraday entry per pair per day (last_entry_day) │   │
+//! │  │    → max max_daily_entries new entries per day globally        │   │
+//! │  │                                                               │   │
+//! │  │  Guards (checked in order):                                   │   │
+//! │  │    1. One entry per pair per day (last_entry_day == bar_day)  │   │
+//! │  │    2. Earnings blackout (entry_blocked_until)                 │   │
+//! │  │    3. Regime gate (paused after consecutive stops)            │   │
+//! │  │    4. Last entry hour (no entries after market close)         │   │
+//! │  │    5. Position cap (max_concurrent_pairs)                    │   │
+//! │  │    6. Daily entry cap (max_daily_entries)                    │   │
+//! │  │    7. z beyond stop_z (would immediately stop out)           │   │
+//! │  │                                                               │   │
+//! │  │  On entry:                                                    │   │
+//! │  │    Freeze ExitContext (entry-time mean + std for exit z)      │   │
+//! │  │    Set position = LongSpread or ShortSpread                   │   │
+//! │  │    Record entry_daily_bar, last_entry_day, entry prices       │   │
+//! │  └─────────────────────────────────────────────────────────────┘   │
+//! │                                                                     │
+//! │  ┌─────────────────────────────────────────────────────────────┐   │
+//! │  │                   EXIT FLOW                                   │   │
+//! │  │                                                               │   │
+//! │  │  Runs on EVERY bar (not just daily) via frozen ExitContext:   │   │
+//! │  │    exit_z = (current_spread - entry_mean) / entry_std         │   │
+//! │  │                                                               │   │
+//! │  │  Exit triggers (checked every bar):                           │   │
+//! │  │    1. Reversion: |exit_z| < exit_z_threshold (past min_hold) │   │
+//! │  │    2. Stop loss: |exit_z| > stop_z (immediate, no min_hold)  │   │
+//! │  │    3. Max hold: days_held >= max_hold_bars (daily count)      │   │
+//! │  │    4. Force close: past force_close_minute (EOD)              │   │
+//! │  │    5. Drift stop: |rolling_z - exit_z| > max_drift_z         │   │
+//! │  │                                                               │   │
+//! │  │  Frozen ExitContext prevents rolling-stat drift from          │   │
+//! │  │  producing false reversion signals (issue #182).              │   │
+//! │  └─────────────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────────────┘
 //! ```
-//!
-//! # Why it works after costs
-//!
-//! Single-stock mean-reversion: ~1.2 bps edge, breakeven at 1.2 bps.
-//! Pairs spread reversion: ~8-10 bps edge, breakeven at ~3 bps per leg.
-//! The spread reverts faster and more reliably than individual prices because
-//! market-wide moves cancel out — only the idiosyncratic component remains.
-//!
-//! # Validated pairs (walk-forward, real dollar P&L, 12 bps cost deducted)
-//!
-//! | Pair      | OOS $/day | Win Rate | Edge (bps) |
-//! |-----------|-----------|----------|------------|
-//! | GLD/SLV   | $118      | 70%      | ~10        |
-//! | COIN/PLTR | $108      | 71%      | ~9         |
-//! | C/JPM     | $86       | 75%      | ~9         |
-//! | GS/MS     | $77       | 76%      | ~9         |
 
 pub mod active_pairs;
 pub mod engine;
