@@ -247,9 +247,13 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, c
             info!("using METALS-STRICT pipeline thresholds (relaxed ADF/HL, structural break gate ON)");
             PipelineConfig::metals_strict()
         }
+        "force" => {
+            info!("using FORCE pipeline — ALL pairs pass validation (autoresearch)");
+            PipelineConfig::force()
+        }
         "default" | "" => PipelineConfig::default(),
         other => {
-            error!(profile = other, "unknown pipeline profile — use 'default', 'metals', or 'metals-strict'");
+            error!(profile = other, "unknown pipeline profile");
             std::process::exit(1);
         }
     };

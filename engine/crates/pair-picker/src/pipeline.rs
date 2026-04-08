@@ -114,12 +114,27 @@ impl PipelineConfig {
     }
 
     /// Metals with structural break gate re-enabled.
-    /// Experiment data shows pairs with breaks (GOLD/KGC, AEM/GOLD) are
-    /// consistent losers. Keep the wider ADF/HL to let ETF pairs through.
     pub fn metals_strict() -> Self {
         Self {
-            structural_break_gate: true, // RE-ENABLED — break pairs are losers
+            structural_break_gate: true,
             ..Self::metals()
+        }
+    }
+
+    /// Force ALL pairs through — bypass every validation gate.
+    /// Used for autoresearch experiments to see raw pair behavior.
+    pub fn force() -> Self {
+        Self {
+            min_history_bars: 20,
+            max_validation_window: 252,
+            min_r_squared: 0.0,
+            adf_pvalue_threshold: 1.0,  // everything passes
+            min_half_life: 0.0,
+            max_half_life: 9999.0,
+            structural_break_gate: false,
+            min_spread_crossings: 0.0,
+            etf_filter_enabled: false,  // allow ETF-component pairs too
+            max_hold_cap: 10,
         }
     }
 }
@@ -437,15 +452,17 @@ pub fn validate_pair_with_config(
         );
 
         // Use regime-adjusted ADF threshold (p<0.01 in volatile vs p<0.05 in calm)
-        let thresholds = RegimeAdjustedThresholds::from_regime(robustness.current_regime);
-        if let Some(p) = result.adf_pvalue {
-            if p > thresholds.adf_pvalue_threshold && result.is_cointegrated {
-                // ADF passed at 0.05 but fails the tighter volatile threshold
-                result.is_cointegrated = false;
-                result.rejection_reasons.push(format!(
-                    "Regime-tightened: ADF p={p:.4} > {:.2} (volatile regime threshold)",
-                    thresholds.adf_pvalue_threshold
-                ));
+        // Skip when pipeline config has a very relaxed ADF threshold (force mode)
+        if cfg.adf_pvalue_threshold < 0.50 {
+            let thresholds = RegimeAdjustedThresholds::from_regime(robustness.current_regime);
+            if let Some(p) = result.adf_pvalue {
+                if p > thresholds.adf_pvalue_threshold && result.is_cointegrated {
+                    result.is_cointegrated = false;
+                    result.rejection_reasons.push(format!(
+                        "Regime-tightened: ADF p={p:.4} > {:.2} (volatile regime threshold)",
+                        thresholds.adf_pvalue_threshold
+                    ));
+                }
             }
         }
 
