@@ -13,6 +13,7 @@
 //! - Compare against MacKinnon (1994) critical values
 
 use super::ols::ols_multiple;
+use tracing::debug;
 
 /// ADF test result.
 #[derive(Debug, Clone)]
@@ -27,6 +28,11 @@ pub struct AdfResult {
     pub n_obs: usize,
     /// Whether null hypothesis is rejected at 5% level.
     pub is_stationary: bool,
+    /// Raw gamma coefficient (mean-reversion speed). More negative = faster reversion.
+    /// This is the AR(1) coefficient on y_{t-1} in the ADF regression.
+    /// Useful independently of statistical significance — a pair can have strong
+    /// mean-reversion (large |gamma|) but fail the ADF significance test.
+    pub gamma: f64,
 }
 
 /// MacKinnon (1994) approximate critical values for ADF with constant, no trend.
@@ -60,7 +66,6 @@ pub fn adf_test(series: &[f64], max_lags: Option<usize>, engle_granger: bool) ->
     let mut best_aic = f64::INFINITY;
     let mut best_lag = 0;
 
-    // Start from 0 lags (basic Dickey-Fuller) — optimal for clean spreads
     for p in 0..=max_p {
         if let Some(aic) = adf_aic(series, p) {
             if aic < best_aic {
@@ -70,7 +75,15 @@ pub fn adf_test(series: &[f64], max_lags: Option<usize>, engle_granger: bool) ->
         }
     }
 
-    // Run ADF regression with optimal lag
+    debug!(
+        n = n,
+        max_lags = max_p,
+        best_lag,
+        best_aic = format!("{best_aic:.2}").as_str(),
+        engle_granger,
+        "ADF lag selection"
+    );
+
     adf_regression(series, best_lag, engle_granger)
 }
 
@@ -163,12 +176,24 @@ fn adf_regression(series: &[f64], p: usize, engle_granger: bool) -> Option<AdfRe
     let p_value = interpolate_p_value(test_stat, table);
     let is_stationary = p_value < 0.05;
 
+    debug!(
+        n_obs = t_len,
+        lags = p,
+        gamma = format!("{gamma:.6}").as_str(),
+        se_gamma = format!("{se_gamma:.6}").as_str(),
+        test_stat = format!("{test_stat:.4}").as_str(),
+        p_value = format!("{p_value:.4}").as_str(),
+        engle_granger,
+        "ADF regression result"
+    );
+
     Some(AdfResult {
         test_statistic: test_stat,
         p_value,
         lags: p,
         n_obs: t_len,
         is_stationary,
+        gamma,
     })
 }
 
