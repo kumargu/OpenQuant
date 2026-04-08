@@ -145,7 +145,9 @@ impl RollingStats {
     /// If shrinking, drops oldest values and recomputes stats.
     /// If growing, keeps all values and waits for more to fill.
     pub fn resize(&mut self, new_window: usize) {
-        assert!(new_window > 0, "RollingStats window must be > 0");
+        if new_window == 0 {
+            return; // graceful no-op instead of panic in production
+        }
         if new_window == self.capacity {
             return;
         }
