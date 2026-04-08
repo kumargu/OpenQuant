@@ -926,7 +926,7 @@ impl PairState {
                 }
                 self.trade_pnl_history.push_back(net_bps);
 
-                if stopped {
+                if stopped || drift_stopped {
                     self.consecutive_stops += 1;
                 } else {
                     self.consecutive_stops = 0;
@@ -1040,7 +1040,7 @@ impl PairState {
         }
 
         // One entry per pair per day: block if already entered today
-        let bar_day = timestamp / 86_400_000;
+        // (bar_day computed at line 660)
         if self.last_entry_day == bar_day {
             return vec![];
         }
@@ -1397,6 +1397,8 @@ impl PairState {
         // Reset per-day entry marker so engine-level cap cancellations
         // (max_concurrent, max_daily_entries) don't block retries same day.
         self.last_entry_day = 0;
+        self.intraday_persist_count = 0;
+        self.intraday_persist_side = 0;
     }
 
     /// Restore position from external state (e.g., Alpaca positions on restart).

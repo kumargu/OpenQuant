@@ -166,6 +166,10 @@ impl RollingStats {
         }
         // For growing: existing observations remain, just expand capacity
         self.capacity = new_window;
+        // Pre-allocate if growing beyond current VecDeque capacity
+        if new_window > self.buf.capacity() {
+            self.buf.reserve(new_window - self.buf.capacity());
+        }
     }
 }
 
