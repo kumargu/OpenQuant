@@ -52,7 +52,7 @@ enum Command {
 /// Shared args for live and paper (both use WebSocket streaming).
 #[derive(clap::Args, Debug, Clone)]
 struct StreamArgs {
-    /// Path to TOML config file (default: config/pairs.toml).
+    /// Path to TOML config file. Defaults based on --engine.
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -62,15 +62,19 @@ struct StreamArgs {
     #[arg(long, default_value = "trading")]
     trading_dir: PathBuf,
 
-    /// Path to pair candidates JSON (default: <trading_dir>/pair_candidates.json).
-    /// Use to run with alternative universes (e.g., metals).
+    /// Path to pair candidates JSON. Defaults based on --engine.
     #[arg(long)]
     candidates: Option<PathBuf>,
 
     /// Pipeline profile for pair-picker thresholds.
-    /// "default" = S&P 500 equities, "metals" = relaxed for commodities.
-    #[arg(long, default_value = "default")]
-    pipeline: String,
+    #[arg(long)]
+    pipeline: Option<String>,
+
+    /// Engine mode: selects config, candidates, and pipeline defaults.
+    ///   pairs (default) — S&P 500 equities, ADF cointegration
+    ///   metals — curated metals pairs, force pipeline (bypasses ADF)
+    #[arg(long, default_value = "pairs")]
+    engine: String,
 }
 
 /// Args for replay (adds date range).
@@ -86,15 +90,17 @@ struct ReplayArgs {
     #[arg(long, default_value = "trading")]
     trading_dir: PathBuf,
 
-    /// Path to pair candidates JSON (default: <trading_dir>/pair_candidates.json).
-    /// Use to run with alternative universes (e.g., metals).
+    /// Path to pair candidates JSON. Defaults based on --engine.
     #[arg(long)]
     candidates: Option<PathBuf>,
 
     /// Pipeline profile for pair-picker thresholds.
-    /// "default" = S&P 500 equities, "metals" = relaxed for commodities.
-    #[arg(long, default_value = "default")]
-    pipeline: String,
+    #[arg(long)]
+    pipeline: Option<String>,
+
+    /// Engine mode: pairs (S&P 500) or metals (curated metals pairs).
+    #[arg(long, default_value = "pairs")]
+    engine: String,
 
     /// Replay start date (YYYY-MM-DD).
     #[arg(long)]
@@ -111,6 +117,29 @@ struct ReplayArgs {
 }
 
 const DEFAULT_CONFIG: &str = "config/pairs.toml";
+
+/// Resolve engine-specific defaults for config, candidates, and pipeline.
+/// Explicit CLI flags always override engine defaults.
+fn resolve_engine(
+    engine: &str,
+    config: Option<PathBuf>,
+    candidates: Option<PathBuf>,
+    pipeline: Option<String>,
+) -> (Option<PathBuf>, Option<PathBuf>, String) {
+    match engine {
+        "metals" => {
+            let config = config.or_else(|| Some(PathBuf::from("config/metals.toml")));
+            let candidates = candidates.or_else(|| Some(PathBuf::from("trading/metals_pairs.json")));
+            let pipeline = pipeline.unwrap_or_else(|| "force".to_string());
+            (config, candidates, pipeline)
+        }
+        _ => {
+            let config = config.or_else(|| Some(PathBuf::from("config/pairs.toml")));
+            let pipeline = pipeline.unwrap_or_else(|| "default".to_string());
+            (config, candidates, pipeline)
+        }
+    }
+}
 
 /// What the runner does after the engine emits intents.
 enum RunMode {
@@ -156,34 +185,28 @@ async fn main() {
 
     // Convert CLI command → (config, trading_dir, data_dir, candidates, pipeline, run_mode)
     let (config, trading_dir, data_dir, candidates, pipeline, run_mode) = match cli.command {
-        Command::Live(a) => (
-            a.config,
-            a.trading_dir,
-            a.data_dir,
-            a.candidates,
-            a.pipeline,
-            RunMode::Stream(ExecutionMode::Live),
-        ),
-        Command::Paper(a) => (
-            a.config,
-            a.trading_dir,
-            a.data_dir,
-            a.candidates,
-            a.pipeline,
-            RunMode::Stream(ExecutionMode::Paper),
-        ),
-        Command::Replay(a) => (
-            a.config,
-            a.trading_dir,
-            a.data_dir,
-            a.candidates,
-            a.pipeline,
-            RunMode::Replay {
-                start: a.start,
-                end: a.end,
-                bar_cache: a.bar_cache,
-            },
-        ),
+        Command::Live(a) => {
+            let (config, candidates, pipeline) =
+                resolve_engine(&a.engine, a.config, a.candidates, a.pipeline);
+            (config, a.trading_dir, a.data_dir, candidates, pipeline,
+             RunMode::Stream(ExecutionMode::Live))
+        }
+        Command::Paper(a) => {
+            let (config, candidates, pipeline) =
+                resolve_engine(&a.engine, a.config, a.candidates, a.pipeline);
+            (config, a.trading_dir, a.data_dir, candidates, pipeline,
+             RunMode::Stream(ExecutionMode::Paper))
+        }
+        Command::Replay(a) => {
+            let (config, candidates, pipeline) =
+                resolve_engine(&a.engine, a.config, a.candidates, a.pipeline);
+            (config, a.trading_dir, a.data_dir, candidates, pipeline,
+             RunMode::Replay {
+                 start: a.start,
+                 end: a.end,
+                 bar_cache: a.bar_cache,
+             })
+        }
     };
 
     run(config, trading_dir, data_dir, candidates, pipeline, run_mode).await;
