@@ -121,6 +121,24 @@ impl PipelineConfig {
         }
     }
 
+    /// Alternative filter for metals — uses R² + beta stability instead of ADF.
+    /// Derived from Phase B diagnostic: ADF rejects profitable pairs (URNM/URNJ,
+    /// FNV/WPM) while R² + beta_cv correctly separates winners from losers.
+    pub fn metals_curated() -> Self {
+        Self {
+            min_history_bars: 90,
+            max_validation_window: 150,
+            min_r_squared: 0.60,          // strong co-movement required
+            adf_pvalue_threshold: 1.0,    // DISABLE ADF gate entirely
+            min_half_life: 0.1,
+            max_half_life: 60.0,
+            structural_break_gate: false,
+            min_spread_crossings: 6.0,    // relaxed
+            etf_filter_enabled: false,
+            max_hold_cap: 10,
+        }
+    }
+
     /// Force ALL pairs through — bypass every validation gate.
     /// Used for autoresearch experiments to see raw pair behavior.
     pub fn force() -> Self {

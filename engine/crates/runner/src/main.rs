@@ -251,6 +251,10 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, c
             info!("using FORCE pipeline — ALL pairs pass validation (autoresearch)");
             PipelineConfig::force()
         }
+        "metals-curated" => {
+            info!("using METALS-CURATED pipeline — R² + beta stability, no ADF gate");
+            PipelineConfig::metals_curated()
+        }
         "default" | "" => PipelineConfig::default(),
         other => {
             error!(profile = other, "unknown pipeline profile");
