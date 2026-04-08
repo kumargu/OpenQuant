@@ -140,6 +140,39 @@ impl RollingStats {
     pub fn window(&self) -> usize {
         self.capacity
     }
+
+    /// Resize the window without losing existing observations.
+    /// If shrinking, drops oldest values and recomputes stats.
+    /// If growing, keeps all values and waits for more to fill.
+    pub fn resize(&mut self, new_window: usize) {
+        if new_window == 0 {
+            return; // graceful no-op instead of panic in production
+        }
+        if new_window == self.capacity {
+            return;
+        }
+        if new_window < self.buf.len() {
+            // Shrinking: drop oldest values, recompute from remaining
+            while self.buf.len() > new_window {
+                self.buf.pop_front();
+            }
+            // Recompute mean/m2 from scratch (two-pass for stability)
+            let n = self.buf.len() as f64;
+            if n > 0.0 {
+                self.mean = self.buf.iter().sum::<f64>() / n;
+                self.m2 = self.buf.iter().map(|x| (x - self.mean).powi(2)).sum();
+            } else {
+                self.mean = 0.0;
+                self.m2 = 0.0;
+            }
+        }
+        // For growing: existing observations remain, just expand capacity
+        self.capacity = new_window;
+        // Pre-allocate if growing beyond current VecDeque capacity
+        if new_window > self.buf.capacity() {
+            self.buf.reserve(new_window - self.buf.capacity());
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,34 @@
+commit	avg_bps	trades	status	description
+497f2ba	-7.3	10	keep	baseline: filtered universe, entry_z=2.0, stop_z=6.0, metals pipeline, Jul2025-Mar2026
+9b9524e	28.9	8	keep	remove SLV/PAAS (ETF vs miner, lost -343 bps). +231 total bps
+232e1f6	50.7	5	keep	remove AG/PAAS (size mismatch). Only SIL/SILJ trades. 80% win, Sharpe 0.45
+b833548	50.7	5	keep	shorter validation window (150 bars) — no new trades, same result
+f9fa5eb	50.7	5	keep	ADF p<0.15 — pairs pass but z-scores never reach entry
+a295c44	25.7	6	discard	entry_z=1.8 — caught marginal entry that stop-lossed. Reverted
+7b7780e	28.9	8	discard	AG/PAAS back + max_hold=5 — max_hold didn't apply (per-pair override). Reverted
+13e50b8	51.6	8	keep	max_hold_cap in PipelineConfig (5 for metals) + AG/PAAS. BEST: +413 total bps
+736552c	45.1	8	discard	max_hold_cap=7 — AG/PAAS went negative at day 7. Cap=5 is optimal. Reverted
+436cc71	51.6	8	keep	lookback=20 — per-pair override active, no change. Theoretically better.
+1fe6f02	51.6	8	keep	exit_z=0.5 — no change (frozen exit overrides). Reverted.
+87a6c05	51.6	8	keep	drift stop at 2.0 — never fired (max drift was 1.88)
+852f011	11.4	8	discard	drift stop at 1.5 — too aggressive, cut SIL/SILJ winners. Reverted
+4ec1729	51.6	8	keep	drift stop disabled (max_drift_z=0.0). Feature kept for future use
+0c0a305	31.6	8	keep	cost_bps=50 stress test — STILL PROFITABLE (+253 bps). Edge survives. Reverted to 30.
+345419b	51.6	8	keep	lookback = 3x HL (was 2x). No effect but theoretically better.
+b75f313	70.1	6	keep	entry_z=2.5 + max_hold_cap=5. BEST avg_bps! Sharpe 0.42. Fewer trades, better quality.
+06ac83e	70.1	6	keep	expanded universe (uranium/royalty/steel from researcher). No new trades.
+75e50db	70.1	6	keep	ADF p<0.20 — more pairs pass but none reach entry_z=2.5. Converged.
+06ac83e	70.1	6	keep	expanded universe (uranium/royalty/steel from researcher). No new trades.
+345419b	51.6	8	keep	lookback = 3x HL. No effect.
+b75f313	70.1	6	keep	entry_z=2.5. Best avg_bps/Sharpe but 2 fewer trades. Similar total P&L.
+83d0270	51.6	8	keep	back to entry_z=2.0 for more trade diversity.
+df63f9f	51.6	8	keep	spread trend gate — never fires (z crosses 0 before entry). Disabled.
+a7773bc	83.2	8	keep	*** PRESERVE SPREAD STATS ON RELOAD *** — resize instead of reset. +61% P&L improvement!
+c3aafed	83.2	8	keep	zero-variance logging — no instances found (good)
+bc9b95a	-46.3	9	discard	entry_z=1.8 — new trades lost badly. Reverted.
+eb2506b	-26.7	114	discard	intraday_entries — massive churn, no daily cap. Reverted.
+b7dc15e	18.3	13	discard	Kalman warmup=5 — unlocked URNM/URNJ (+270) but degraded AG/PAAS. Net worse.
+70dcdb8	-6.8	16	discard	Kalman warmup=7 — even worse. Reverted to 10.
+8d388e3	9.8	14	discard	intraday z=2.0 + 30-bar persist — too many small stop losses
+9d62ec4	61.9	9	keep	intraday z=3.0 + 30-bar persist — 1 extra trade, max_dd -81 (was -133)
+25720fa	83.2	8	keep	intraday z=4.0 — never fires, equivalent to disabled

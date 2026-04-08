@@ -1,36 +1,112 @@
 //! Pairs trading — market-neutral mean-reversion on spread between two correlated assets.
 //!
-//! Instead of trading individual stock mean-reversion (1-2 bps edge, wiped by costs),
-//! pairs trading captures the spread reversion between two related assets (8-10 bps edge).
-//!
-//! # How it works
+//! # Data flow and rolling stats lifecycle
 //!
 //! ```text
-//!  spread = ln(price_A) - β × ln(price_B)
-//!
-//!  z = (spread - rolling_mean) / rolling_std
-//!
-//!  z < -entry_z  →  LONG spread:  BUY A, SELL B
-//!  z > +entry_z  →  SHORT spread: SELL A, BUY B
-//!  |z| < exit_z  →  CLOSE both legs (spread reverted)
-//!  |z| > stop_z  →  STOP LOSS (spread diverged further)
+//! ┌─────────────────────────────────────────────────────────────────────┐
+//! │                        BAR ARRIVES (per minute)                     │
+//! │                                                                     │
+//! │  Alpaca WebSocket / REST  ──►  PairsEngine::on_bar(symbol, ts, px) │
+//! │                                    │                                │
+//! │                         ┌──────────▼──────────┐                    │
+//! │                         │   PairState::on_price │ (for each pair   │
+//! │                         │   matching this symbol)│                  │
+//! │                         └──────────┬──────────┘                    │
+//! │                                    │                                │
+//! │                    ┌───────────────▼───────────────┐               │
+//! │                    │  Both legs have fresh prices?  │               │
+//! │                    │  (last_price_a AND last_price_b)│              │
+//! │                    └───────────────┬───────────────┘               │
+//! │                              No: return              Yes: ▼        │
+//! │                                                                     │
+//! │              spread = ln(price_A) - α - β × ln(price_B)           │
+//! │              (β from Kalman filter if warm, else OLS from picker)  │
+//! │                                                                     │
+//! │  ┌─────────────────────────────────────────────────────────────┐   │
+//! │  │                   TWO-CLOCK ARCHITECTURE                     │   │
+//! │  │                                                               │   │
+//! │  │  SIGNAL CLOCK (daily):                                        │   │
+//! │  │    When calendar day changes (is_new_day):                    │   │
+//! │  │    1. Push yesterday's spread into RollingStats               │   │
+//! │  │    2. spread_count += 1                                       │   │
+//! │  │    3. daily_bar_count += 1                                    │   │
+//! │  │    4. Compute z = (spread - rolling_mean) / rolling_std       │   │
+//! │  │    5. Check entry signals (z vs entry_z threshold)            │   │
+//! │  │                                                               │   │
+//! │  │  RISK CLOCK (every bar):                                      │   │
+//! │  │    On every minute bar (whether is_new_day or not):           │   │
+//! │  │    1. Compute spread from current prices                      │   │
+//! │  │    2. If holding: check stop loss via frozen ExitContext       │   │
+//! │  │    3. If holding: check max_hold (uses daily_bar_count)       │   │
+//! │  │    4. If intraday_entries: check persistence filter for entry  │   │
+//! │  └─────────────────────────────────────────────────────────────┘   │
+//! │                                                                     │
+//! │  ┌─────────────────────────────────────────────────────────────┐   │
+//! │  │                   ROLLING STATS LIFECYCLE                     │   │
+//! │  │                                                               │   │
+//! │  │  RollingStats: Welford's online mean/variance over N bars     │   │
+//! │  │                                                               │   │
+//! │  │  Created: PairState::for_pair() — window = 3 × ceil(HL)      │   │
+//! │  │  Fed:     once per day (is_new_day) with daily-close spread   │   │
+//! │  │  Ready:   when spread_count >= window (e.g., 15 daily bars)   │   │
+//! │  │                                                               │   │
+//! │  │  On weekly reload (pair-picker regen):                        │   │
+//! │  │    If pair stays with same window → stats PRESERVED           │   │
+//! │  │    If window changes → RollingStats::resize() (preserves      │   │
+//! │  │      existing observations, adjusts capacity)                 │   │
+//! │  │    If pair is new → cold start, needs N days to warm up       │   │
+//! │  │                                                               │   │
+//! │  │  NOT persisted to disk — rebuilt from warmup bars on restart.  │   │
+//! │  │  Warmup: runner fetches ~30 daily bars before replay/live     │   │
+//! │  │  start, feeds them through on_bar() to fill rolling stats.    │   │
+//! │  └─────────────────────────────────────────────────────────────┘   │
+//! │                                                                     │
+//! │  ┌─────────────────────────────────────────────────────────────┐   │
+//! │  │                   ENTRY FLOW                                  │   │
+//! │  │                                                               │   │
+//! │  │  Daily entry (default):                                       │   │
+//! │  │    is_new_day AND spread_count >= window AND |z| > entry_z    │   │
+//! │  │    → one chance per pair per day at daily close                │   │
+//! │  │                                                               │   │
+//! │  │  Intraday entry (if intraday_entries=true):                   │   │
+//! │  │    On non-daily bars, if daily entry missed:                  │   │
+//! │  │    |z| > intraday_entry_z for intraday_confirm_bars in a row  │   │
+//! │  │    → max one intraday entry per pair per day (last_entry_day) │   │
+//! │  │    → max max_daily_entries new entries per day globally        │   │
+//! │  │                                                               │   │
+//! │  │  Guards (checked in order):                                   │   │
+//! │  │    1. One entry per pair per day (last_entry_day == bar_day)  │   │
+//! │  │    2. Earnings blackout (entry_blocked_until)                 │   │
+//! │  │    3. Regime gate (paused after consecutive stops)            │   │
+//! │  │    4. Last entry hour (no entries after market close)         │   │
+//! │  │    5. Position cap (max_concurrent_pairs)                    │   │
+//! │  │    6. Daily entry cap (max_daily_entries)                    │   │
+//! │  │    7. z beyond stop_z (would immediately stop out)           │   │
+//! │  │                                                               │   │
+//! │  │  On entry:                                                    │   │
+//! │  │    Freeze ExitContext (entry-time mean + std for exit z)      │   │
+//! │  │    Set position = LongSpread or ShortSpread                   │   │
+//! │  │    Record entry_daily_bar, last_entry_day, entry prices       │   │
+//! │  └─────────────────────────────────────────────────────────────┘   │
+//! │                                                                     │
+//! │  ┌─────────────────────────────────────────────────────────────┐   │
+//! │  │                   EXIT FLOW                                   │   │
+//! │  │                                                               │   │
+//! │  │  Runs on EVERY bar (not just daily) via frozen ExitContext:   │   │
+//! │  │    exit_z = (current_spread - entry_mean) / entry_std         │   │
+//! │  │                                                               │   │
+//! │  │  Exit triggers (checked every bar):                           │   │
+//! │  │    1. Reversion: |exit_z| < exit_z_threshold (past min_hold) │   │
+//! │  │    2. Stop loss: |exit_z| > stop_z (immediate, no min_hold)  │   │
+//! │  │    3. Max hold: days_held >= max_hold_bars (daily count)      │   │
+//! │  │    4. Force close: past force_close_minute (EOD)              │   │
+//! │  │    5. Drift stop: |rolling_z - exit_z| > max_drift_z         │   │
+//! │  │                                                               │   │
+//! │  │  Frozen ExitContext prevents rolling-stat drift from          │   │
+//! │  │  producing false reversion signals (issue #182).              │   │
+//! │  └─────────────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────────────┘
 //! ```
-//!
-//! # Why it works after costs
-//!
-//! Single-stock mean-reversion: ~1.2 bps edge, breakeven at 1.2 bps.
-//! Pairs spread reversion: ~8-10 bps edge, breakeven at ~3 bps per leg.
-//! The spread reverts faster and more reliably than individual prices because
-//! market-wide moves cancel out — only the idiosyncratic component remains.
-//!
-//! # Validated pairs (walk-forward, real dollar P&L, 12 bps cost deducted)
-//!
-//! | Pair      | OOS $/day | Win Rate | Edge (bps) |
-//! |-----------|-----------|----------|------------|
-//! | GLD/SLV   | $118      | 70%      | ~10        |
-//! | COIN/PLTR | $108      | 71%      | ~9         |
-//! | C/JPM     | $86       | 75%      | ~9         |
-//! | GS/MS     | $77       | 76%      | ~9         |
 
 pub mod active_pairs;
 pub mod engine;
@@ -85,6 +161,46 @@ pub struct PairsTradingConfig {
     /// 0 = no limit. Default 25 (fits ~$50K notional at $1K/leg).
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_pairs: usize,
+    /// Maximum allowed drift between rolling z and frozen exit z.
+    /// When the gap exceeds this, force exit — the spread dynamics have
+    /// shifted and the frozen context is unreliable.
+    /// 0.0 = disabled. Default 0.0 (off for S&P where drift is rare).
+    #[serde(default)]
+    pub max_drift_z: f64,
+    /// Spread trend gate: block entries when z-score has been on the same
+    /// side of 0 for this many consecutive daily bars. Indicates the spread
+    /// is trending, not mean-reverting. 0 = disabled.
+    /// For metals: set to 5 (block after 5 consecutive same-side days).
+    #[serde(default)]
+    pub spread_trend_gate: usize,
+    /// Allow entries on any bar (not just daily close).
+    /// Uses daily rolling stats for z-score but evaluates spread every bar.
+    /// Requires z to persist above entry_z for `intraday_confirm_bars`
+    /// consecutive bars before firing. Default: false.
+    #[serde(default)]
+    pub intraday_entries: bool,
+    /// Number of consecutive bars z must stay above entry_z before intraday
+    /// entry fires. Filters noise spikes. Only used when intraday_entries=true.
+    /// At 1-min bars, 30 = 30 minutes of sustained deviation.
+    /// Default: 30 (30 minutes).
+    #[serde(default = "default_intraday_confirm")]
+    pub intraday_confirm_bars: usize,
+    /// Z-score threshold for intraday entries (higher than daily to filter noise).
+    /// 0.0 = use entry_z (same threshold for daily and intraday).
+    #[serde(default)]
+    pub intraday_entry_z: f64,
+    /// Maximum new entries per day across all pairs. 0 = no limit.
+    /// Prevents over-trading on volatile days. Default 4.
+    #[serde(default = "default_max_daily_entries")]
+    pub max_daily_entries: usize,
+}
+
+fn default_max_daily_entries() -> usize {
+    4
+}
+
+fn default_intraday_confirm() -> usize {
+    30
 }
 
 fn default_max_concurrent() -> usize {
@@ -114,6 +230,12 @@ impl Default for PairsTradingConfig {
             cost_bps: 10.0,
             tz_offset_hours: -5,
             max_concurrent_pairs: 25,
+            max_drift_z: 0.0,
+            spread_trend_gate: 0, // disabled by default
+            intraday_entries: false,
+            intraday_confirm_bars: 30,
+            intraday_entry_z: 0.0,
+            max_daily_entries: 4,
         }
     }
 }
@@ -385,6 +507,19 @@ pub struct PairState {
     /// Kalman filter for dynamic hedge ratio estimation.
     /// Updates alpha and beta on each daily close, replacing static OLS values.
     kalman: Option<KalmanHedge>,
+    /// Spread trend tracking: consecutive daily bars with z on same side of 0.
+    /// High values (5+) indicate a trending spread — entries are riskier.
+    z_same_side_count: usize,
+    /// Sign of z on the previous daily bar (-1, 0, or 1).
+    z_last_sign: i8,
+    /// Intraday entry persistence: consecutive bars where |z| > entry_z.
+    /// Resets to 0 when |z| drops below threshold. Used with intraday_entries
+    /// to require sustained deviation before entry (filters noise spikes).
+    intraday_persist_count: usize,
+    /// Whether the last intraday z was above entry threshold (for persistence tracking).
+    intraday_persist_side: i8, // -1 = below -entry_z, +1 = above +entry_z, 0 = within
+    /// Calendar day of last entry (timestamp / 86_400_000). Prevents re-entry same day.
+    last_entry_day: i64,
 }
 
 impl Default for PairState {
@@ -443,7 +578,24 @@ impl PairState {
             consecutive_stops: 0,
             exit_context: None,
             kalman: None,
+            z_same_side_count: 0,
+            z_last_sign: 0,
+            intraday_persist_count: 0,
+            intraday_persist_side: 0,
+            last_entry_day: 0,
         }
+    }
+
+    /// Resize the spread rolling window without resetting accumulated observations.
+    /// Used during weekly reload when half-life changes slightly.
+    pub fn resize_spread_window(&mut self, new_window: usize) {
+        self.spread_stats.resize(new_window);
+    }
+
+    /// Reset Kalman filter to fresh OLS values.
+    /// Called on window resize to prevent stale alpha/beta from the old window.
+    pub fn reset_kalman(&mut self, alpha: f64, beta: f64) {
+        self.kalman = Some(KalmanHedge::new(alpha, beta));
     }
 
     /// Update with a new price for one leg. Returns order intents if a signal fires.
@@ -508,6 +660,12 @@ impl PairState {
         // was the daily close. Push the buffered spread into rolling stats.
         // No timezone math needed for the gate — just date comparison.
         // ── New-day detection ──
+        // Uses UTC midnight boundary (timestamp / 86_400_000). This works for
+        // US market hours (9:30-16:00 ET = 13:30-20:00 UTC) because all trading
+        // happens within one UTC day. The daily counters (last_entry_day,
+        // max_daily_entries, intraday persistence) reset at 00:00 UTC = 20:00 ET,
+        // well after market close. Would need tz-aware day boundary for 24h markets.
+        //
         // We update last_bar_day only when BOTH legs have arrived (spread computed).
         // This prevents the first leg from consuming the new-day flag before
         // the second leg can use it for entry evaluation.
@@ -521,6 +679,9 @@ impl PairState {
                 self.spread_count += 1;
                 self.daily_bar_count += 1;
             }
+            // Reset intraday persistence — bars from yesterday don't count toward today.
+            self.intraday_persist_count = 0;
+            self.intraday_persist_side = 0;
             // Update Kalman filter with daily closes (only when flat — don't
             // change hedge ratio mid-trade as it would invalidate exit context).
             if self.position == PairPosition::Flat
@@ -560,13 +721,18 @@ impl PairState {
         self.pending_daily_spread = Some(spread); // always buffer latest spread
         self.bar_count += 1;
 
-        // Compute ET time for force_close and last_entry_hour checks
+        // Convert UTC timestamp to market-local time.
+        // All internal state (bar_day, last_entry_day, daily counters) uses raw
+        // UTC timestamps. Market-local time is ONLY used for:
+        //   - force_close_minute: EOD position close
+        //   - last_entry_hour: no entries after this hour
+        // The tz_offset_hours config says where the market lives (e.g., -4 = EDT).
         let tz_offset_ms: i64 = (trading.tz_offset_hours as i64) * 3600 * 1000;
         let local_ms = timestamp + tz_offset_ms;
         let secs_of_day = ((local_ms / 1000) % 86400 + 86400) % 86400;
-        let et_hour = (secs_of_day / 3600) as u32;
-        let et_min = ((secs_of_day % 3600) / 60) as u32;
-        let et_minutes = et_hour * 60 + et_min;
+        let market_hour = (secs_of_day / 3600) as u32;
+        let market_min = ((secs_of_day % 3600) / 60) as u32;
+        let market_minutes = market_hour * 60 + market_min;
 
         // Rolling z-score — only valid after enough daily observations
         let min_lookback = self.spread_stats.window();
@@ -576,6 +742,12 @@ impl PairState {
             let mean = self.spread_stats.mean();
             let sd = self.spread_stats.std_dev();
             if sd < 1e-10 {
+                debug!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    std_dev = %format_args!("{sd:.12}"),
+                    spread_count = self.spread_count,
+                    "pairs: SKIPPED — zero spread variance (flat spread)"
+                );
                 return vec![];
             }
             (spread - mean) / sd
@@ -661,6 +833,25 @@ impl PairState {
                 PairPosition::Flat => false,
             };
 
+            // Exit condition: cointegration drift — rolling z and frozen z diverge
+            // beyond max_drift_z, indicating the spread relationship has shifted.
+            // This catches cointegration breakdown during a live trade.
+            let drift = (z - exit_z).abs();
+            let drift_stopped = trading.max_drift_z > 0.0 && drift > trading.max_drift_z;
+            if drift_stopped {
+                let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
+                error!(
+                    pair = pair_id.as_str(),
+                    ts = timestamp,
+                    rolling_z = %format_args!("{z:.2}"),
+                    fixed_exit_z = %format_args!("{exit_z:.2}"),
+                    drift = %format_args!("{drift:.2}"),
+                    max_drift_z = trading.max_drift_z,
+                    days_held,
+                    "pairs: STOP LOSS — cointegration drift exceeded threshold"
+                );
+            }
+
             // Exit condition: max hold (per-pair override from pair-picker, or global fallback)
             let effective_max_hold = if config.max_hold_bars > 0 {
                 config.max_hold_bars // per-pair HL-adaptive: ceil(2.5 * HL) capped at 10
@@ -670,14 +861,14 @@ impl PairState {
             let max_held = effective_max_hold > 0 && days_held >= effective_max_hold;
 
             // Exit condition: force close before end of day (no overnight holding)
-            let force_close = et_minutes >= trading.force_close_minute;
+            let force_close = market_minutes >= trading.force_close_minute;
             if force_close {
                 info!(
                     pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
                     ts = timestamp,
-                    et_hour,
-                    et_min,
-                    et_minutes,
+                    market_hour,
+                    market_min,
+                    market_minutes,
                     force_close_minute = trading.force_close_minute,
                     "pairs: EOD FORCE CLOSE triggered"
                 );
@@ -687,8 +878,8 @@ impl PairState {
             let past_min_hold = days_held >= trading.min_hold_bars;
             let can_exit_reversion = reverted && past_min_hold;
 
-            if can_exit_reversion || stopped || max_held || force_close {
-                let reason = if stopped {
+            if can_exit_reversion || stopped || drift_stopped || max_held || force_close {
+                let reason = if stopped || drift_stopped {
                     SignalReason::StopLoss
                 } else if force_close || max_held {
                     SignalReason::MaxHoldTime
@@ -699,6 +890,8 @@ impl PairState {
                 let pair_id = format!("{}/{}", config.leg_a, config.leg_b);
                 let exit_reason = if stopped {
                     "stop_loss"
+                } else if drift_stopped {
+                    "drift_stop"
                 } else if force_close {
                     "eod_close"
                 } else if max_held {
@@ -750,7 +943,7 @@ impl PairState {
                 }
                 self.trade_pnl_history.push_back(net_bps);
 
-                if stopped {
+                if stopped || drift_stopped {
                     self.consecutive_stops += 1;
                 } else {
                     self.consecutive_stops = 0;
@@ -815,12 +1008,70 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
-        // Entry signals only fire when a new day starts (we just pushed a daily
-        // observation into rolling stats). This guarantees exactly one entry
-        // opportunity per pair per day — no churning from multiple bars in the
-        // daily-close window.
-        if !is_new_day || !rolling_z_ready {
+        // Default: entries fire only at daily close (when is_new_day triggers).
+        // With intraday_entries: also check on non-daily bars, but require
+        // z to persist above threshold for intraday_confirm_bars consecutive bars.
+        // This filters noise spikes (exp23 showed raw intraday = 114 churn trades).
+        if trading.intraday_entries && rolling_z_ready && !is_new_day {
+            // Intraday uses a higher z threshold to filter noise (default: entry_z)
+            let intra_z = if trading.intraday_entry_z > 0.0 {
+                trading.intraday_entry_z
+            } else {
+                trading.entry_z
+            };
+            // Track persistence: how many consecutive bars has |z| > intra_z?
+            let side: i8 = if z < -intra_z {
+                -1
+            } else if z > intra_z {
+                1
+            } else {
+                0
+            };
+            if side != 0 && side == self.intraday_persist_side {
+                self.intraday_persist_count += 1;
+            } else if side != 0 {
+                self.intraday_persist_side = side;
+                self.intraday_persist_count = 1;
+            } else {
+                self.intraday_persist_count = 0;
+                self.intraday_persist_side = 0;
+            }
+
+            // Fire intraday entry only if z persisted for confirm_bars
+            if self.intraday_persist_count >= trading.intraday_confirm_bars {
+                info!(
+                    pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                    z = %format_args!("{z:.2}"),
+                    persist = self.intraday_persist_count,
+                    confirm = trading.intraday_confirm_bars,
+                    "pairs: INTRADAY ENTRY — z persisted above threshold"
+                );
+                // Reset counter so we don't re-enter next bar
+                self.intraday_persist_count = 0;
+                // Fall through to entry logic below
+            } else {
+                return vec![];
+            }
+        } else if !is_new_day || !rolling_z_ready {
             return vec![];
+        }
+
+        // One entry per pair per day: block if already entered today
+        // (bar_day computed at line 660)
+        if self.last_entry_day == bar_day {
+            return vec![];
+        }
+
+        // Track spread trend: count consecutive daily bars with z on the same side of 0.
+        // High values indicate a trending spread (not mean-reverting).
+        if rolling_z_ready {
+            let current_sign: i8 = if z > 0.0 { 1 } else { -1 };
+            if current_sign == self.z_last_sign {
+                self.z_same_side_count += 1;
+            } else {
+                self.z_same_side_count = 1;
+            }
+            self.z_last_sign = current_sign;
         }
 
         // Earnings blackout: block entries around announcement dates.
@@ -829,6 +1080,19 @@ impl PairState {
             debug!(
                 pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
                 "pairs: ENTRY BLOCKED — earnings blackout"
+            );
+            return vec![];
+        }
+
+        // Spread trend gate: block entries when spread has been trending (same side of 0)
+        // for too many consecutive days. A trending spread won't revert on our timescale.
+        if trading.spread_trend_gate > 0 && self.z_same_side_count >= trading.spread_trend_gate {
+            debug!(
+                pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
+                z = %format_args!("{z:.2}"),
+                consecutive = self.z_same_side_count,
+                gate = trading.spread_trend_gate,
+                "pairs: ENTRY BLOCKED — spread trending (same side for too many days)"
             );
             return vec![];
         }
@@ -863,11 +1127,11 @@ impl PairState {
         }
 
         // Block entries after last_entry_hour (avoid overnight risk)
-        if et_hour >= trading.last_entry_hour {
+        if market_hour >= trading.last_entry_hour {
             debug!(
                 pair_a = config.leg_a.as_str(),
                 pair_b = config.leg_b.as_str(),
-                et_hour,
+                market_hour,
                 z = %format_args!("{z:.2}"),
                 "pairs: ENTRY BLOCKED — past last_entry_hour"
             );
@@ -927,6 +1191,7 @@ impl PairState {
 
             self.position = PairPosition::LongSpread;
             self.entry_daily_bar = self.daily_bar_count;
+            self.last_entry_day = timestamp / 86_400_000;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
             self.entry_beta = beta; // use Kalman-filtered beta if available
@@ -1011,6 +1276,7 @@ impl PairState {
 
             self.position = PairPosition::ShortSpread;
             self.entry_daily_bar = self.daily_bar_count;
+            self.last_entry_day = timestamp / 86_400_000;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
             self.entry_beta = beta; // use Kalman-filtered beta if available
@@ -1145,6 +1411,11 @@ impl PairState {
         self.entry_price_a = 0.0;
         self.entry_price_b = 0.0;
         self.entry_beta = 1.0;
+        // Reset per-day entry marker so engine-level cap cancellations
+        // (max_concurrent, max_daily_entries) don't block retries same day.
+        self.last_entry_day = 0;
+        self.intraday_persist_count = 0;
+        self.intraday_persist_side = 0;
     }
 
     /// Restore position from external state (e.g., Alpaca positions on restart).
@@ -1319,6 +1590,7 @@ mod tests {
             tz_offset_hours: -5,
             cost_bps: 10.0,
             max_concurrent_pairs: 0, // no limit in tests
+            ..Default::default()
         }
     }
 
@@ -1707,6 +1979,7 @@ mod tests {
             tz_offset_hours: -5,
             cost_bps: 10.0,
             max_concurrent_pairs: 0,
+            ..Default::default()
         };
 
         // Warmup: stable spread = ln(100) - ln(100) = 0
@@ -1837,6 +2110,7 @@ mod tests {
             tz_offset_hours: -5,
             cost_bps: 10.0,
             max_concurrent_pairs: 0,
+            ..Default::default()
         };
 
         // Warmup: stable spread = 0

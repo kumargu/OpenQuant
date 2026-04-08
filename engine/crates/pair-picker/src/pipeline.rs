@@ -13,10 +13,10 @@
 
 use crate::etf_filter::is_etf_component_pair;
 use crate::regime::{compute_regime_robustness, RegimeAdjustedThresholds};
-use crate::scorer::compute_score;
+use crate::scorer::{compute_score, MaxHoldConfig};
 use crate::stats::adf::adf_test;
 use crate::stats::beta_stability::check_beta_stability;
-use crate::stats::halflife::{estimate_half_life, is_half_life_valid};
+use crate::stats::halflife::estimate_half_life;
 use crate::stats::ols::tls_simple;
 use crate::types::{
     ActivePair, ActivePairsFile, PairCandidate, PairCandidatesFile, ValidationResult,
@@ -25,7 +25,7 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Minimum number of daily bars required for validation.
 /// Lowered from 200 to 90: captures recent regime while still providing
@@ -45,6 +45,91 @@ pub const MAX_VALIDATION_WINDOW: usize = 150;
 /// (e.g., NVDA/AMD at R²=0.21) while remaining below the strict production threshold.
 /// Lowered from 0.40 to 0.30 per issue #180.
 pub const MIN_R_SQUARED: f64 = 0.30;
+
+/// Configurable pipeline thresholds for different asset classes.
+///
+/// S&P 500 defaults work for correlated equities within the same GICS sector.
+/// Metals, commodities, and other asset classes need different thresholds
+/// because their volatility structure, mean-reversion speed, and correlation
+/// dynamics differ fundamentally.
+#[derive(Debug, Clone)]
+pub struct PipelineConfig {
+    /// Minimum daily bars required for validation.
+    pub min_history_bars: usize,
+    /// Maximum validation window (caps to most recent N bars).
+    pub max_validation_window: usize,
+    /// Minimum R² for TLS regression.
+    pub min_r_squared: f64,
+    /// ADF p-value threshold for cointegration. Default 0.05.
+    pub adf_pvalue_threshold: f64,
+    /// Minimum OU half-life in days.
+    pub min_half_life: f64,
+    /// Maximum OU half-life in days.
+    pub max_half_life: f64,
+    /// Whether structural break is a hard rejection gate.
+    pub structural_break_gate: bool,
+    /// Minimum annualized spread zero-crossings.
+    pub min_spread_crossings: f64,
+    /// Whether to apply the ETF-component exclusion filter.
+    pub etf_filter_enabled: bool,
+    /// Max hold cap in days. Passed to MaxHoldConfig when building ActivePair.
+    /// Lower = cut losses faster on slow-reverting pairs.
+    pub max_hold_cap: usize,
+}
+
+impl Default for PipelineConfig {
+    /// S&P 500 defaults — the production configuration.
+    fn default() -> Self {
+        Self {
+            min_history_bars: MIN_HISTORY_BARS,
+            max_validation_window: MAX_VALIDATION_WINDOW,
+            min_r_squared: MIN_R_SQUARED,
+            adf_pvalue_threshold: 0.05,
+            min_half_life: 1.0,
+            max_half_life: 40.0,
+            structural_break_gate: true,
+            min_spread_crossings: 12.0,
+            etf_filter_enabled: true,
+            max_hold_cap: 10,
+        }
+    }
+}
+
+impl PipelineConfig {
+    /// Relaxed config for metals/commodities exploration.
+    /// Structural break gate disabled — useful for initial exploration.
+    pub fn metals() -> Self {
+        Self {
+            min_history_bars: 90,
+            max_validation_window: 150, // shorter window — excludes supercycle, sees recent cointegration
+            min_r_squared: 0.20,        // looser — metals can have weaker linear fit
+            adf_pvalue_threshold: 0.20, // very relaxed — OR/SAND at p=0.19, royalty pairs borderline
+            min_half_life: 1.0,
+            max_half_life: 60.0,          // metals revert slower
+            structural_break_gate: false, // disabled — metals beta drifts seasonally
+            min_spread_crossings: 8.0,    // relaxed — slower oscillation
+            etf_filter_enabled: true,
+            max_hold_cap: 5, // shorter than S&P — metals trends persist
+        }
+    }
+
+    /// Force ALL pairs through — bypass every validation gate.
+    /// Used for autoresearch experiments to see raw pair behavior.
+    pub fn force() -> Self {
+        Self {
+            min_history_bars: 20,
+            max_validation_window: 252,
+            min_r_squared: 0.0,
+            adf_pvalue_threshold: 1.0, // everything passes
+            min_half_life: 0.0,
+            max_half_life: 9999.0,
+            structural_break_gate: false,
+            min_spread_crossings: 0.0,
+            etf_filter_enabled: false, // allow ETF-component pairs too
+            max_hold_cap: 10,
+        }
+    }
+}
 
 /// Price data for a single symbol: ordered daily close prices.
 pub type PriceData = Vec<f64>;
@@ -68,26 +153,40 @@ impl PriceProvider for InMemoryPrices {
     }
 }
 
-/// Validate a single candidate pair.
+/// Validate a single candidate pair using default (S&P 500) thresholds.
 pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) -> ValidationResult {
+    validate_pair_with_config(candidate, provider, &PipelineConfig::default())
+}
+
+/// Validate a single candidate pair with configurable thresholds.
+pub fn validate_pair_with_config(
+    candidate: &PairCandidate,
+    provider: &dyn PriceProvider,
+    cfg: &PipelineConfig,
+) -> ValidationResult {
+    let pair_id = format!("{}/{}", candidate.leg_a, candidate.leg_b);
     let mut result = ValidationResult::new(candidate);
 
+    debug!(pair = pair_id.as_str(), "validating pair");
+
     // Step 1: ETF exclusion (instant reject)
-    if is_etf_component_pair(&candidate.leg_a, &candidate.leg_b) {
+    if cfg.etf_filter_enabled && is_etf_component_pair(&candidate.leg_a, &candidate.leg_b) {
         result.etf_excluded = true;
         result.rejection_reasons.push("ETF-component pair".into());
+        debug!(pair = pair_id.as_str(), "REJECTED: ETF-component pair");
         return result;
     }
+    debug!(pair = pair_id.as_str(), "passed ETF filter");
 
     // Step 2: Get price data
     let prices_a = match provider.get_prices(&candidate.leg_a) {
-        Some(p) if p.len() >= MIN_HISTORY_BARS => p,
+        Some(p) if p.len() >= cfg.min_history_bars => p,
         Some(p) => {
             result.rejection_reasons.push(format!(
                 "{}: only {} bars (need {})",
                 candidate.leg_a,
                 p.len(),
-                MIN_HISTORY_BARS
+                cfg.min_history_bars
             ));
             return result;
         }
@@ -100,13 +199,13 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     };
 
     let prices_b = match provider.get_prices(&candidate.leg_b) {
-        Some(p) if p.len() >= MIN_HISTORY_BARS => p,
+        Some(p) if p.len() >= cfg.min_history_bars => p,
         Some(p) => {
             result.rejection_reasons.push(format!(
                 "{}: only {} bars (need {})",
                 candidate.leg_b,
                 p.len(),
-                MIN_HISTORY_BARS
+                cfg.min_history_bars
             ));
             return result;
         }
@@ -119,13 +218,23 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     };
 
     // Use the most recent observations. If more data is available than needed,
-    // cap to MAX_VALIDATION_WINDOW to focus on the recent regime.
+    // cap to max_validation_window to focus on the recent regime.
     let n = prices_a
         .len()
         .min(prices_b.len())
-        .min(MAX_VALIDATION_WINDOW);
+        .min(cfg.max_validation_window);
     let prices_a = &prices_a[prices_a.len() - n..];
     let prices_b = &prices_b[prices_b.len() - n..];
+
+    debug!(
+        pair = pair_id.as_str(),
+        bars = n,
+        price_a_first = prices_a[0],
+        price_a_last = prices_a[n - 1],
+        price_b_first = prices_b[0],
+        price_b_last = prices_b[n - 1],
+        "price data loaded"
+    );
 
     // Guard: reject non-positive prices before ln() — data corruption, bad API
     // response, or stock split artifacts would produce -inf/NaN that silently
@@ -168,12 +277,26 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     result.beta = Some(ols.beta);
     result.beta_r_squared = Some(ols.r_squared);
 
+    debug!(
+        pair = pair_id.as_str(),
+        alpha = format!("{:.6}", ols.alpha).as_str(),
+        beta = format!("{:.4}", ols.beta).as_str(),
+        r_squared = format!("{:.4}", ols.r_squared).as_str(),
+        "TLS regression result"
+    );
+
     // Step 3b: Minimum R² — below this the hedge ratio is meaningless noise
-    if ols.r_squared < MIN_R_SQUARED {
+    if ols.r_squared < cfg.min_r_squared {
         result.rejection_reasons.push(format!(
-            "R²={:.3} below minimum {MIN_R_SQUARED}",
-            ols.r_squared
+            "R²={:.3} below minimum {:.2}",
+            ols.r_squared, cfg.min_r_squared
         ));
+        debug!(
+            pair = pair_id.as_str(),
+            r_squared = format!("{:.4}", ols.r_squared).as_str(),
+            threshold = cfg.min_r_squared,
+            "REJECTED: low R²"
+        );
     }
 
     // Step 4: Engle-Granger cointegration
@@ -199,15 +322,28 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
         Some(adf) => {
             result.adf_statistic = Some(adf.test_statistic);
             result.adf_pvalue = Some(adf.p_value);
-            result.is_cointegrated = adf.is_stationary;
-            if !adf.is_stationary {
+            // Use configurable threshold instead of ADF's hardcoded 0.05
+            result.is_cointegrated = adf.p_value < cfg.adf_pvalue_threshold;
+            debug!(
+                pair = pair_id.as_str(),
+                adf_stat = format!("{:.4}", adf.test_statistic).as_str(),
+                adf_pvalue = format!("{:.6}", adf.p_value).as_str(),
+                threshold = cfg.adf_pvalue_threshold,
+                is_cointegrated = result.is_cointegrated,
+                "ADF cointegration test"
+            );
+            if !result.is_cointegrated {
                 result.rejection_reasons.push(format!(
-                    "Not cointegrated (ADF p={:.4}, stat={:.3})",
-                    adf.p_value, adf.test_statistic
+                    "Not cointegrated (ADF p={:.4} > {:.2}, stat={:.3})",
+                    adf.p_value, cfg.adf_pvalue_threshold, adf.test_statistic
                 ));
             }
         }
         None => {
+            debug!(
+                pair = pair_id.as_str(),
+                "ADF test failed — insufficient data or numerical issue"
+            );
             result.rejection_reasons.push("ADF test failed".into());
             return result;
         }
@@ -217,15 +353,28 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     match estimate_half_life(&spread) {
         Some(hl) => {
             result.half_life = Some(hl.half_life);
-            result.half_life_valid = is_half_life_valid(hl.half_life);
+            result.half_life_valid =
+                hl.half_life >= cfg.min_half_life && hl.half_life <= cfg.max_half_life;
+            debug!(
+                pair = pair_id.as_str(),
+                half_life = format!("{:.2}", hl.half_life).as_str(),
+                phi = format!("{:.6}", hl.phi).as_str(),
+                valid = result.half_life_valid,
+                range = format!("[{}, {}]", cfg.min_half_life, cfg.max_half_life).as_str(),
+                "OU half-life estimation"
+            );
             if !result.half_life_valid {
                 result.rejection_reasons.push(format!(
-                    "Half-life {:.1} days outside valid range [1, 40]",
-                    hl.half_life
+                    "Half-life {:.1} days outside valid range [{}, {}]",
+                    hl.half_life, cfg.min_half_life, cfg.max_half_life
                 ));
             }
         }
         None => {
+            debug!(
+                pair = pair_id.as_str(),
+                "half-life estimation failed — spread not mean-reverting"
+            );
             result
                 .rejection_reasons
                 .push("Half-life estimation failed (not mean-reverting)".into());
@@ -247,10 +396,10 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
             // Annualize: crossings per 252 trading days
             let annual_crossings = crossings as f64 * 252.0 / n as f64;
             result.spread_crossings = Some(annual_crossings);
-            if annual_crossings < 12.0 {
+            if annual_crossings < cfg.min_spread_crossings {
                 result.rejection_reasons.push(format!(
-                    "Low spread crossing frequency: {:.1}/year (need ≥12)",
-                    annual_crossings
+                    "Low spread crossing frequency: {:.1}/year (need ≥{:.0})",
+                    annual_crossings, cfg.min_spread_crossings
                 ));
             }
         }
@@ -262,6 +411,14 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
             result.beta_cv = Some(bs.cv);
             result.structural_break = bs.structural_break;
             result.beta_stable = bs.is_stable;
+            debug!(
+                pair = pair_id.as_str(),
+                beta_cv = format!("{:.4}", bs.cv).as_str(),
+                structural_break = bs.structural_break,
+                max_shift_pct = format!("{:.2}%", bs.max_shift_pct * 100.0).as_str(),
+                is_stable = bs.is_stable,
+                "beta stability check"
+            );
             if !bs.is_stable {
                 let mut reasons = Vec::new();
                 if bs.cv >= 0.20 {
@@ -278,6 +435,7 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
             }
         }
         None => {
+            debug!(pair = pair_id.as_str(), "beta stability check failed");
             result
                 .rejection_reasons
                 .push("Beta stability check failed".into());
@@ -288,17 +446,26 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     if let Some(beta) = result.beta {
         let robustness = compute_regime_robustness(prices_a, prices_b, beta);
         result.regime_robustness = Some(robustness.score);
+        debug!(
+            pair = pair_id.as_str(),
+            regime_robustness = format!("{:.3}", robustness.score).as_str(),
+            current_regime = ?robustness.current_regime,
+            sufficient_data = robustness.sufficient_data,
+            "regime robustness"
+        );
 
         // Use regime-adjusted ADF threshold (p<0.01 in volatile vs p<0.05 in calm)
-        let thresholds = RegimeAdjustedThresholds::from_regime(robustness.current_regime);
-        if let Some(p) = result.adf_pvalue {
-            if p > thresholds.adf_pvalue_threshold && result.is_cointegrated {
-                // ADF passed at 0.05 but fails the tighter volatile threshold
-                result.is_cointegrated = false;
-                result.rejection_reasons.push(format!(
-                    "Regime-tightened: ADF p={p:.4} > {:.2} (volatile regime threshold)",
-                    thresholds.adf_pvalue_threshold
-                ));
+        // Skip when pipeline config has a very relaxed ADF threshold (force mode)
+        if cfg.adf_pvalue_threshold < 0.50 {
+            let thresholds = RegimeAdjustedThresholds::from_regime(robustness.current_regime);
+            if let Some(p) = result.adf_pvalue {
+                if p > thresholds.adf_pvalue_threshold && result.is_cointegrated {
+                    result.is_cointegrated = false;
+                    result.rejection_reasons.push(format!(
+                        "Regime-tightened: ADF p={p:.4} > {:.2} (volatile regime threshold)",
+                        thresholds.adf_pvalue_threshold
+                    ));
+                }
             }
         }
 
@@ -323,14 +490,33 @@ pub fn validate_pair(candidate: &PairCandidate, provider: &dyn PriceProvider) ->
     // Beta CV is a SCORE penalty (handled by compute_score), not a hard gate.
     // Structural break remains a hard gate — it indicates a genuinely broken relationship.
     // See research issue #202 and Principal Engineer review for justification.
-    let r_squared_ok = result.beta_r_squared.unwrap_or(0.0) >= MIN_R_SQUARED;
-    let crossings_ok = result.spread_crossings.unwrap_or(0.0) >= 12.0;
+    let r_squared_ok = result.beta_r_squared.unwrap_or(0.0) >= cfg.min_r_squared;
+    let crossings_ok = result.spread_crossings.unwrap_or(0.0) >= cfg.min_spread_crossings;
+    let structural_break_ok = if cfg.structural_break_gate {
+        !result.structural_break
+    } else {
+        true // skip structural break gate
+    };
     result.passed = result.is_cointegrated
         && result.half_life_valid
-        && !result.structural_break
+        && structural_break_ok
         && r_squared_ok
         && crossings_ok
         && !result.etf_excluded;
+
+    debug!(
+        pair = pair_id.as_str(),
+        passed = result.passed,
+        score = format!("{:.4}", result.score).as_str(),
+        cointegrated = result.is_cointegrated,
+        half_life_valid = result.half_life_valid,
+        structural_break = result.structural_break,
+        r_squared_ok,
+        crossings_ok,
+        etf_excluded = result.etf_excluded,
+        rejection_count = result.rejection_reasons.len(),
+        "final verdict"
+    );
 
     result
 }
@@ -342,10 +528,27 @@ pub fn validate_candidates(
     candidates: &[PairCandidate],
     provider: &dyn PriceProvider,
 ) -> Vec<ActivePair> {
+    validate_candidates_with_config(candidates, provider, &PipelineConfig::default())
+}
+
+/// Validate candidates with configurable pipeline thresholds.
+pub fn validate_candidates_with_config(
+    candidates: &[PairCandidate],
+    provider: &dyn PriceProvider,
+    cfg: &PipelineConfig,
+) -> Vec<ActivePair> {
+    info!(
+        adf_p = cfg.adf_pvalue_threshold,
+        max_hl = cfg.max_half_life,
+        min_r2 = cfg.min_r_squared,
+        structural_break_gate = cfg.structural_break_gate,
+        max_window = cfg.max_validation_window,
+        "pipeline config"
+    );
     let mut results: Vec<ValidationResult> = candidates
         .iter()
         .map(|c| {
-            let r = validate_pair(c, provider);
+            let r = validate_pair_with_config(c, provider, cfg);
             if r.passed {
                 info!(
                     "PASS: {}/{} — score={:.3}, hl={:.1}d",
@@ -370,7 +573,14 @@ pub fn validate_candidates(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    results.iter().filter_map(|r| r.to_active_pair()).collect()
+    let mhc = MaxHoldConfig {
+        max_hold_cap: cfg.max_hold_cap,
+        ..MaxHoldConfig::default()
+    };
+    results
+        .iter()
+        .filter_map(|r| r.to_active_pair_with_config(&mhc))
+        .collect()
 }
 
 /// Run the full pipeline: read candidates, validate, write results.
@@ -399,10 +609,25 @@ pub fn run_pipeline_from_candidates(
     output_path: &Path,
     provider: &dyn PriceProvider,
 ) -> Result<Vec<ValidationResult>, PipelineError> {
+    run_pipeline_from_candidates_with_config(
+        candidates,
+        output_path,
+        provider,
+        &PipelineConfig::default(),
+    )
+}
+
+/// Run pipeline with configurable thresholds.
+pub fn run_pipeline_from_candidates_with_config(
+    candidates: &[PairCandidate],
+    output_path: &Path,
+    provider: &dyn PriceProvider,
+    cfg: &PipelineConfig,
+) -> Result<Vec<ValidationResult>, PipelineError> {
     let mut results: Vec<ValidationResult> = candidates
         .iter()
         .map(|c| {
-            let r = validate_pair(c, provider);
+            let r = validate_pair_with_config(c, provider, cfg);
             if r.passed {
                 let hl = r.half_life.unwrap_or(0.0);
                 let mhd = crate::scorer::compute_max_hold_days(
@@ -437,7 +662,14 @@ pub fn run_pipeline_from_candidates(
     });
 
     // Build output
-    let active_pairs: Vec<_> = results.iter().filter_map(|r| r.to_active_pair()).collect();
+    let mhc = MaxHoldConfig {
+        max_hold_cap: cfg.max_hold_cap,
+        ..MaxHoldConfig::default()
+    };
+    let active_pairs: Vec<_> = results
+        .iter()
+        .filter_map(|r| r.to_active_pair_with_config(&mhc))
+        .collect();
 
     let output = ActivePairsFile {
         generated_at: Utc::now(),

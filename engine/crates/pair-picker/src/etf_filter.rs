@@ -71,7 +71,20 @@ const ETF_COMPONENTS: &[(&str, &[&str])] = &[
             "PLD", "AMT", "CCI", "EQIX", "SPG", "PSA", "O", "DLR", "WELL", "AVB",
         ],
     ),
-    ("GLD", &["GOLD", "NEM", "AEM", "RGLD"]),
+    (
+        "GLD",
+        &["GOLD", "NEM", "AEM", "RGLD", "FNV", "WPM", "KGC", "BTG"],
+    ),
+    (
+        "GDX",
+        &[
+            "NEM", "GOLD", "AEM", "FNV", "WPM", "RGLD", "KGC", "AGI", "BTG", "HMY",
+        ],
+    ),
+    ("GDXJ", &["AGI", "BTG", "KGC", "HMY", "CDE", "MAG"]),
+    ("SIL", &["PAAS", "AG", "HL", "CDE", "MAG", "WPM"]),
+    ("SILJ", &["AG", "CDE", "MAG", "HL"]),
+    ("COPX", &["FCX", "SCCO", "TECK"]),
     (
         "SMH",
         &[
@@ -106,8 +119,9 @@ pub fn is_etf_component_pair(sym_a: &str, sym_b: &str) -> bool {
 /// List all known ETF symbols.
 pub fn known_etfs() -> &'static [&'static str] {
     &[
-        "XLF", "XLE", "XLK", "XLV", "XLY", "XLP", "XLU", "XLI", "XLB", "XLRE", "GLD", "SLV", "SMH",
-        "QQQ", "SPY", "IWM", "DIA", "EEM", "TLT", "HYG", "LQD", "XBI",
+        "XLF", "XLE", "XLK", "XLV", "XLY", "XLP", "XLU", "XLI", "XLB", "XLRE", "GLD", "SLV", "IAU",
+        "SGOL", "GDX", "GDXJ", "SIL", "SILJ", "COPX", "PPLT", "PALL", "URNM", "URNJ", "SLX", "XME",
+        "PICK", "SMH", "QQQ", "SPY", "IWM", "DIA", "EEM", "TLT", "HYG", "LQD", "XBI",
     ]
 }
 
