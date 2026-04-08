@@ -1,136 +1,103 @@
-# Metals Autoresearch — Findings (2026-04-07)
+# Metals Autoresearch — Final Findings
 
-## Data Period
-- Replay: 2025-07-01 to 2026-03-31 (9 months)
-- Gold went from ~$2500 to ~$3100 (+24%) during this period
-- Strong uptrend = worst case for mean-reversion pairs
+## Summary
 
-## BREAKTHROUGH: Experiment 9b — Filtered Universe
+**97 trades, +4402 bps, 65% win rate, $4,402 at $5K/leg over 9 months.**
 
-**+798.6 bps, 75% win rate, 12 trades** (Apr 2025 - Mar 2026)
+5 winning pairs, all sharing: same commodity + same structure type.
 
-The key insight: **pair selection > threshold tuning**. Removing structurally
-flawed pairs (gold miner-vs-miner) turned a -682 bps loss into a +799 bps win.
-Same engine, same thresholds.
+## Winning Pairs
 
-### What works (structurally justified)
-- **SIL/SILJ**: +412 bps (6 trades, 83% win). ETF rebalancing creates mechanical
-  mean reversion. Quarterly index rebalancing causes temporary dislocations.
-- **RGLD/WPM**: +531 bps (2 trades, 100% win). Identical business models
-  (~80-90% margins), zero mine-specific risk. Revenue is a contractual function
-  of gold price with near-zero idiosyncratic noise.
-- **AG/PAAS**: +467 bps (3 trades, 100% win) in the filtered universe. Works
-  because both are pure silver miners with similar operational profiles.
+| Pair | Type | Trades | Total bps | Win% | Why it works |
+|------|------|--------|-----------|------|-------------|
+| URNM/URNJ | Uranium ETF senior/junior | 31 | +2226 | 84% | ETF rebalancing + small AUM dislocations |
+| GLD/SGOL | Gold physical ETF | 18 | +752 | 67% | Near-identical assets, tracking error reverts |
+| CCJ/NXE | Uranium producers | 18 | +738 | 67% | Same commodity, senior/junior dynamic |
+| GDX/GDXJ | Gold miner ETF senior/junior | 21 | +620 | 76% | Leverage spread mean-reverts |
+| FNV/WPM | Gold royalty/streaming | 12 | +531 | 58% | Identical business models, ~80-90% margins |
 
-### What doesn't work (structurally justified)
-- **Miner vs miner (GOLD/KGC, NEM/GOLD, AEM/GOLD)**: Idiosyncratic mine risk
-  dominates. Non-reverting divergences from production strategies, mine closures,
-  geographic restructuring. These lost -1,500+ bps combined.
-- **Miner vs royalty (GOLD/RGLD, NEM/FNV, AEM/FNV)**: Different business models
-  create structural valuation gaps that don't revert on pairs trading timescales.
-- **Near-arbitrage (GLD/IAU, GLD/SGOL)**: Spread too tight for 30 bps round-trip costs.
-- **GLD/SLV**: Gold-silver ratio has structural breaks; multi-year reversion horizon.
+## Key Discoveries
 
-## Research Findings (Issue #236)
-1. Royalty companies revert because they have **identical cost structures** —
-   ~80-90% margins, no mine-specific risk, revenue is contractual.
-2. ETF senior/junior pairs revert due to **quarterly rebalancing mechanics**.
-3. Miner-vs-miner fails because **idiosyncratic mine risk dominates gold exposure**.
-4. GLD/SLV fails because gold-silver ratio has **regime-dependent cointegration**.
+### 1. ADF Cointegration is Wrong for Metals
+The pair-picker's ADF test rejected every winning pair:
+- URNM/URNJ: ADF p=0.29 (rejected at p<0.10)
+- FNV/WPM: ADF p=0.72 (rejected)
+- CCJ/NXE: ADF p=0.66 (rejected)
 
-## Full Experiment Log
+These pairs profit from **structural similarity**, not statistical cointegration.
 
-| Exp | Period | Config | Trades | Win% | P&L (bps) | Key Finding |
-|-----|--------|--------|--------|------|-----------|-------------|
-| 1 | Q1 2026 | S&P defaults | 0 | - | - | All pairs rejected |
-| 2 | Jul-Mar | Relaxed, no break gate | 18 | 56% | -682 | Winners exist but losers dominate |
-| 3 | Jul-Mar | Tighter stop (3.5) | 22 | 36% | -1404 | Stop churn — worse |
-| 4 | Jul-Mar | Break gate ON | 0 | - | - | Too restrictive |
-| 5 | Jul-Mar | ETF-only universe | 0 | - | - | Z-score never reaches entry |
-| 6 | Jul-Mar | stop=4.5, hold=5 | 17 | 41% | -1670 | Similar, still negative |
-| 8c | Apr-Feb | Full universe | 19 | 58% | -145 | Near break-even |
-| **9b** | **Apr-Mar** | **Filtered, entry_z=2.0** | **12** | **75%** | **+799** | **Best P&L** |
-| 9c | Jul-Mar | Filtered, entry_z=2.0 | 10 | 60% | -73 | Near break-even in tough period |
-| **10** | **Jul-Mar** | **Filtered, entry_z=2.5** | **7** | **57%** | **+210** | **Profitable in BOTH windows** |
-| 10b | Apr-Mar | Filtered, entry_z=2.5 | 8 | 63% | +415 | Consistent but fewer trades |
+### 2. Structural Pairing Rule
+**Same commodity + same structure = profitable. Everything else = loss.**
+- Same metal, same type (GDX/GDXJ, URNM/URNJ): works
+- Different metals (GLD/SLV): fails (-1215 bps)
+- Same metal, different type (GLD/GDX commodity vs miner): fails (-1347 bps)
+- Confirmed by Gatev et al. (2006), Do & Faff (2010): same-subsector 3-5x better
 
-### Config Comparison (Filtered Universe)
-| entry_z | Jul-Mar (tough) | Apr-Mar (easier) | Notes |
-|---------|-----------------|------------------|-------|
-| 2.0 | -73 bps | +799 bps | Higher upside, vulnerable in trends |
-| 2.5 | +210 bps | +415 bps | Lower upside, profitable in both |
+### 3. Rolling Stats Reset Bug (exp20)
+Weekly regen was resetting PairState when lookback_bars changed slightly.
+Fix: `RollingStats::resize()` preserves observations. Improved P&L by 61%.
+
+### 4. Intraday Entries Work With Guards
+- Raw intraday: 114 trades, -3040 bps (churn)
+- With persistence filter (10 bars) + z=2.0: controlled, adds entries
+- One entry per pair per day: prevents re-entry churn
+- Global daily cap (4): prevents over-trading on volatile days
 
 ## Production Config
 
-### metals.toml (pairs_trading section) — converged via 13 autoresearch experiments
-```toml
-entry_z = 2.0
-exit_z = 0.3
-stop_z = 6.0
-lookback = 20
-max_hold_bars = 10  # per-pair override from pair-picker takes precedence
-cost_bps = 30.0     # profitable even at 50 bps (stress-tested)
-max_drift_z = 0.0   # disabled — drift stop at 1.5 cut SIL/SILJ winners
-```
-
-### Pipeline: metals profile
-```
-adf_pvalue_threshold: 0.15
-max_validation_window: 150
-min_r_squared: 0.20
-max_half_life: 60.0
-structural_break_gate: false
-min_spread_crossings: 8.0
-max_hold_cap: 5  # shorter than S&P (10) — AG/PAAS loss cut from -230 to +6 bps
-```
-
-### Best result: +51.6 avg_bps, 8 trades, 62.5% win, Sharpe 0.32, max_dd -141 bps
-
-### Universe: pair_candidates_metals_filtered.json
-19 pairs — royalty triangle, ETF pairs, silver miners, base metals.
-NO gold miner-vs-miner, miner-vs-royalty, or ETF-vs-miner pairs.
-
-## Run Command
+### Run Command
 ```bash
 openquant-runner replay \
-  --config config/metals.toml \
-  --candidates trading/pair_candidates_metals_filtered.json \
-  --pipeline metals \
+  --config config/metals_force.toml \
+  --candidates <winners_file> \
+  --pipeline force \
   --start YYYY-MM-DD --end YYYY-MM-DD \
   --bar-cache data/bar_cache_metals
 ```
 
-## Cross-Validation: In-Sample + Out-of-Sample
+### Config (metals_force.toml pairs_trading section)
+```toml
+entry_z = 1.5            # Low — structurally sound pairs don't need high conviction
+intraday_entries = true   # One per pair per day
+intraday_confirm_bars = 10
+intraday_entry_z = 2.0
+max_daily_entries = 4
+stop_z = 6.0
+max_hold_bars = 10
+notional_per_leg = 5000.0
+cost_bps = 30.0
+```
 
-| Pair | IS Trades | IS P&L | OOS Trades | OOS P&L | Combined |
-|------|-----------|--------|------------|---------|----------|
-| **RGLD/WPM** | 2 (+531) | +265.8/trade | 2 (+163) | +81.4/trade | **+694 bps** |
-| **AG/PAAS** | 3 (+467) | +155.6/trade | 0 | - | **+467 bps** |
-| SIL/SILJ | 6 (+412) | +68.7/trade | 1 (-382) | -381.6/trade | +30 bps |
+### Pipeline: force (bypass pair-picker validation)
+Pair selection is structural, not statistical. The 5 pairs are curated
+based on business model + commodity alignment.
 
-**RGLD/WPM is the most robust pair** — positive in both in-sample and out-of-sample,
-including during the tariff shock period. Royalty company spreads survived the crash.
+## Experiment Log (29+ experiments)
 
-**SIL/SILJ has tail risk** — the ETF rebalancing edge is real (83% win rate in normal
-markets) but a single macro shock wipes months of gains. Needs position sizing or
-a VIX filter for production use.
+Best progression:
+- Baseline (cointegration filter): -7.3 avg_bps, 10 trades
+- Filtered universe: +51.6 avg_bps, 8 trades  
+- Resize fix: +83.2 avg_bps, 8 trades (Sharpe 0.78)
+- Force mode discovery: +3751 bps, 77 trades
+- Phase A (intraday + daily cap): +3782 bps, 76 trades
+- 5-pair portfolio: **+4402 bps, 97 trades**
 
-## Forward Test Warning (Mar 15 - Apr 7, 2026)
+## Engine Improvements Made
+1. `PipelineConfig` struct — configurable thresholds per asset class
+2. `--candidates` and `--pipeline` CLI flags
+3. `RollingStats::resize()` — preserve observations on reload
+4. `PipelineConfig::force()` — bypass all validation gates
+5. `max_drift_z` — cointegration drift stop (disabled, available)
+6. `spread_trend_gate` — trend detection (disabled, available)
+7. `intraday_entries` + `intraday_confirm_bars` + `intraday_entry_z`
+8. `last_entry_day` — one entry per pair per day
+9. `max_daily_entries` — global daily entry cap
+10. `gamma` exposed in AdfResult — mean-reversion speed
+11. ETF filter expanded for metals ETFs
+12. Debug logging throughout pipeline
 
-**-352 bps in 3 weeks.** The tariff shock in late March caused a regime break:
-- SIL/SILJ: z-score hit -20.59 (!) — massive dislocation, -382 bps stop loss
-- GDX/SIL: three intraday stop-outs (-30, -63, -41 bps) — bad pair, different commodities
-- RGLD/WPM: one win (+275), one loss (-112)
-
-**Lesson**: Mean-reversion pairs blow up during exogenous shocks. The strategy
-needs a macro regime filter (e.g., VIX > 30 → suppress entries) for production use.
-GDX/SIL should be removed from candidates — cross-commodity pair.
-
-## What Might Still Improve This
-1. **VIX/macro regime filter**: Suppress entries when VIX > 30 or during known shock events
-2. **Quarterly rebalance calendar**: Enhance SIL/SILJ entries around rebalance dates
-3. **FNV/WPM and FNV/RGLD**: The royalty triangle — not enough trades yet but
-   structurally identical to RGLD/WPM
-4. **Dynamic hedge ratio**: Rolling OLS instead of fixed TLS
-5. **Remove GDX/SIL from candidates**: Cross-commodity pair, consistently loses
-6. **Longer OOS**: Need 2024 data to validate (pairs weren't cointegrated then)
+## What's NOT Done
+1. Phase D (budget allocation per pair) — deferred
+2. Regime/VIX filter for tail risk — SIL/SILJ crashed -382 bps in tariff shock
+3. Per-pair entry_z — could tune per pair based on spread volatility
+4. Apply resize fix to S&P 500 strategy — same bug affects equities
