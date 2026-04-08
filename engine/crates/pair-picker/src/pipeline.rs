@@ -101,15 +101,15 @@ impl PipelineConfig {
     pub fn metals() -> Self {
         Self {
             min_history_bars: 90,
-            max_validation_window: 150,  // shorter window — excludes supercycle, sees recent cointegration
-            min_r_squared: 0.20,         // looser — metals can have weaker linear fit
-            adf_pvalue_threshold: 0.20,  // very relaxed — OR/SAND at p=0.19, royalty pairs borderline
+            max_validation_window: 150, // shorter window — excludes supercycle, sees recent cointegration
+            min_r_squared: 0.20,        // looser — metals can have weaker linear fit
+            adf_pvalue_threshold: 0.20, // very relaxed — OR/SAND at p=0.19, royalty pairs borderline
             min_half_life: 1.0,
-            max_half_life: 60.0,         // metals revert slower
+            max_half_life: 60.0,          // metals revert slower
             structural_break_gate: false, // disabled — metals beta drifts seasonally
-            min_spread_crossings: 8.0,   // relaxed — slower oscillation
+            min_spread_crossings: 8.0,    // relaxed — slower oscillation
             etf_filter_enabled: true,
-            max_hold_cap: 5,             // shorter than S&P — metals trends persist
+            max_hold_cap: 5, // shorter than S&P — metals trends persist
         }
     }
 
@@ -120,12 +120,12 @@ impl PipelineConfig {
             min_history_bars: 20,
             max_validation_window: 252,
             min_r_squared: 0.0,
-            adf_pvalue_threshold: 1.0,  // everything passes
+            adf_pvalue_threshold: 1.0, // everything passes
             min_half_life: 0.0,
             max_half_life: 9999.0,
             structural_break_gate: false,
             min_spread_crossings: 0.0,
-            etf_filter_enabled: false,  // allow ETF-component pairs too
+            etf_filter_enabled: false, // allow ETF-component pairs too
             max_hold_cap: 10,
         }
     }
@@ -291,7 +291,12 @@ pub fn validate_pair_with_config(
             "R²={:.3} below minimum {:.2}",
             ols.r_squared, cfg.min_r_squared
         ));
-        debug!(pair = pair_id.as_str(), r_squared = format!("{:.4}", ols.r_squared).as_str(), threshold = cfg.min_r_squared, "REJECTED: low R²");
+        debug!(
+            pair = pair_id.as_str(),
+            r_squared = format!("{:.4}", ols.r_squared).as_str(),
+            threshold = cfg.min_r_squared,
+            "REJECTED: low R²"
+        );
     }
 
     // Step 4: Engle-Granger cointegration
@@ -335,7 +340,10 @@ pub fn validate_pair_with_config(
             }
         }
         None => {
-            debug!(pair = pair_id.as_str(), "ADF test failed — insufficient data or numerical issue");
+            debug!(
+                pair = pair_id.as_str(),
+                "ADF test failed — insufficient data or numerical issue"
+            );
             result.rejection_reasons.push("ADF test failed".into());
             return result;
         }
@@ -363,7 +371,10 @@ pub fn validate_pair_with_config(
             }
         }
         None => {
-            debug!(pair = pair_id.as_str(), "half-life estimation failed — spread not mean-reverting");
+            debug!(
+                pair = pair_id.as_str(),
+                "half-life estimation failed — spread not mean-reverting"
+            );
             result
                 .rejection_reasons
                 .push("Half-life estimation failed (not mean-reverting)".into());
@@ -562,8 +573,14 @@ pub fn validate_candidates_with_config(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mhc = MaxHoldConfig { max_hold_cap: cfg.max_hold_cap, ..MaxHoldConfig::default() };
-    results.iter().filter_map(|r| r.to_active_pair_with_config(&mhc)).collect()
+    let mhc = MaxHoldConfig {
+        max_hold_cap: cfg.max_hold_cap,
+        ..MaxHoldConfig::default()
+    };
+    results
+        .iter()
+        .filter_map(|r| r.to_active_pair_with_config(&mhc))
+        .collect()
 }
 
 /// Run the full pipeline: read candidates, validate, write results.
@@ -592,7 +609,12 @@ pub fn run_pipeline_from_candidates(
     output_path: &Path,
     provider: &dyn PriceProvider,
 ) -> Result<Vec<ValidationResult>, PipelineError> {
-    run_pipeline_from_candidates_with_config(candidates, output_path, provider, &PipelineConfig::default())
+    run_pipeline_from_candidates_with_config(
+        candidates,
+        output_path,
+        provider,
+        &PipelineConfig::default(),
+    )
 }
 
 /// Run pipeline with configurable thresholds.
@@ -640,8 +662,14 @@ pub fn run_pipeline_from_candidates_with_config(
     });
 
     // Build output
-    let mhc = MaxHoldConfig { max_hold_cap: cfg.max_hold_cap, ..MaxHoldConfig::default() };
-    let active_pairs: Vec<_> = results.iter().filter_map(|r| r.to_active_pair_with_config(&mhc)).collect();
+    let mhc = MaxHoldConfig {
+        max_hold_cap: cfg.max_hold_cap,
+        ..MaxHoldConfig::default()
+    };
+    let active_pairs: Vec<_> = results
+        .iter()
+        .filter_map(|r| r.to_active_pair_with_config(&mhc))
+        .collect();
 
     let output = ActivePairsFile {
         generated_at: Utc::now(),

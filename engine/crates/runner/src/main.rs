@@ -24,9 +24,9 @@ use alpaca::ExecutionMode;
 use clap::Parser;
 use openquant_core::config::ConfigFile;
 use openquant_core::pairs::engine::PairsEngine;
+use pair_picker::pipeline::PipelineConfig;
 use std::io::Write;
 use std::path::PathBuf;
-use pair_picker::pipeline::PipelineConfig;
 use tracing::{error, info, warn};
 
 // ── CLI ──────────────────────────────────────────────────────────────
@@ -217,33 +217,66 @@ async fn main() {
         Command::Live(a) => {
             let (config, candidates, pipeline) =
                 resolve_engine(a.engine, a.config, a.candidates, a.pipeline);
-            (config, a.trading_dir, a.data_dir, candidates, pipeline,
-             RunMode::Stream(ExecutionMode::Live))
+            (
+                config,
+                a.trading_dir,
+                a.data_dir,
+                candidates,
+                pipeline,
+                RunMode::Stream(ExecutionMode::Live),
+            )
         }
         Command::Paper(a) => {
             let (config, candidates, pipeline) =
                 resolve_engine(a.engine, a.config, a.candidates, a.pipeline);
-            (config, a.trading_dir, a.data_dir, candidates, pipeline,
-             RunMode::Stream(ExecutionMode::Paper))
+            (
+                config,
+                a.trading_dir,
+                a.data_dir,
+                candidates,
+                pipeline,
+                RunMode::Stream(ExecutionMode::Paper),
+            )
         }
         Command::Replay(a) => {
             let (config, candidates, pipeline) =
                 resolve_engine(a.engine, a.config, a.candidates, a.pipeline);
-            (config, a.trading_dir, a.data_dir, candidates, pipeline,
-             RunMode::Replay {
-                 start: a.start,
-                 end: a.end,
-                 bar_cache: a.bar_cache,
-             })
+            (
+                config,
+                a.trading_dir,
+                a.data_dir,
+                candidates,
+                pipeline,
+                RunMode::Replay {
+                    start: a.start,
+                    end: a.end,
+                    bar_cache: a.bar_cache,
+                },
+            )
         }
     };
 
-    run(config, trading_dir, data_dir, candidates, pipeline, run_mode).await;
+    run(
+        config,
+        trading_dir,
+        data_dir,
+        candidates,
+        pipeline,
+        run_mode,
+    )
+    .await;
 }
 
 // ── Unified run function ─────────────────────────────────────────────
 
-async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, candidates: Option<PathBuf>, pipeline_profile: String, run_mode: RunMode) {
+async fn run(
+    config: Option<PathBuf>,
+    trading_dir: PathBuf,
+    data_dir: PathBuf,
+    candidates: Option<PathBuf>,
+    pipeline_profile: String,
+    run_mode: RunMode,
+) {
     let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
 
     // ── Log mode ──
@@ -323,16 +356,22 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, c
                 price_end = %price_end,
                 "replay: generating fresh pairs from pair-picker"
             );
-            let active_pairs =
-                match pair_picker_service::generate_pairs_with_config(&alpaca, &trading_dir, price_end, 40, candidates.as_deref(), &pipeline_cfg)
-                    .await
-                {
-                    Ok(p) => p,
-                    Err(e) => {
-                        error!("pair-picker failed: {e}");
-                        std::process::exit(1);
-                    }
-                };
+            let active_pairs = match pair_picker_service::generate_pairs_with_config(
+                &alpaca,
+                &trading_dir,
+                price_end,
+                40,
+                candidates.as_deref(),
+                &pipeline_cfg,
+            )
+            .await
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("pair-picker failed: {e}");
+                    std::process::exit(1);
+                }
+            };
             // Write fresh pairs to active_pairs.json so paper/live can use them,
             // and so reload() works during weekly regen.
             if let Err(e) =
@@ -458,15 +497,7 @@ async fn run(config: Option<PathBuf>, trading_dir: PathBuf, data_dir: PathBuf, c
                 candidates: candidates.as_deref(),
                 pipeline_cfg: &pipeline_cfg,
             };
-            run_replay_bars(
-                &alpaca,
-                &mut pairs_engine,
-                symbols,
-                &start,
-                &end,
-                &ctx,
-            )
-            .await;
+            run_replay_bars(&alpaca, &mut pairs_engine, symbols, &start, &end, &ctx).await;
         }
     }
 }
@@ -694,7 +725,16 @@ async fn run_replay_bars(
         // Open positions in removed pairs get tightened stops for graceful exit.
         if (day - last_picker_run).num_days() >= 7 {
             info!(day = day_start.as_str(), "regenerating pairs (weekly)");
-            match pair_picker_service::generate_pairs_with_config(alpaca, ctx.trading_dir, day, 40, ctx.candidates, ctx.pipeline_cfg).await {
+            match pair_picker_service::generate_pairs_with_config(
+                alpaca,
+                ctx.trading_dir,
+                day,
+                40,
+                ctx.candidates,
+                ctx.pipeline_cfg,
+            )
+            .await
+            {
                 Ok(active_pairs) => {
                     // Write active_pairs.json so reload() can pick it up
                     let ap_path = ctx.trading_dir.join("active_pairs.json");
