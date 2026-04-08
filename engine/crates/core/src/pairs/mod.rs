@@ -721,13 +721,18 @@ impl PairState {
         self.pending_daily_spread = Some(spread); // always buffer latest spread
         self.bar_count += 1;
 
-        // Compute ET time for force_close and last_entry_hour checks
+        // Convert UTC timestamp to market-local time.
+        // All internal state (bar_day, last_entry_day, daily counters) uses raw
+        // UTC timestamps. Market-local time is ONLY used for:
+        //   - force_close_minute: EOD position close
+        //   - last_entry_hour: no entries after this hour
+        // The tz_offset_hours config says where the market lives (e.g., -4 = EDT).
         let tz_offset_ms: i64 = (trading.tz_offset_hours as i64) * 3600 * 1000;
         let local_ms = timestamp + tz_offset_ms;
         let secs_of_day = ((local_ms / 1000) % 86400 + 86400) % 86400;
-        let et_hour = (secs_of_day / 3600) as u32;
-        let et_min = ((secs_of_day % 3600) / 60) as u32;
-        let et_minutes = et_hour * 60 + et_min;
+        let market_hour = (secs_of_day / 3600) as u32;
+        let market_min = ((secs_of_day % 3600) / 60) as u32;
+        let market_minutes = market_hour * 60 + market_min;
 
         // Rolling z-score — only valid after enough daily observations
         let min_lookback = self.spread_stats.window();
@@ -856,14 +861,14 @@ impl PairState {
             let max_held = effective_max_hold > 0 && days_held >= effective_max_hold;
 
             // Exit condition: force close before end of day (no overnight holding)
-            let force_close = et_minutes >= trading.force_close_minute;
+            let force_close = market_minutes >= trading.force_close_minute;
             if force_close {
                 info!(
                     pair = format!("{}/{}", config.leg_a, config.leg_b).as_str(),
                     ts = timestamp,
-                    et_hour,
-                    et_min,
-                    et_minutes,
+                    market_hour,
+                    market_min,
+                    market_minutes,
                     force_close_minute = trading.force_close_minute,
                     "pairs: EOD FORCE CLOSE triggered"
                 );
@@ -1122,11 +1127,11 @@ impl PairState {
         }
 
         // Block entries after last_entry_hour (avoid overnight risk)
-        if et_hour >= trading.last_entry_hour {
+        if market_hour >= trading.last_entry_hour {
             debug!(
                 pair_a = config.leg_a.as_str(),
                 pair_b = config.leg_b.as_str(),
-                et_hour,
+                market_hour,
                 z = %format_args!("{z:.2}"),
                 "pairs: ENTRY BLOCKED — past last_entry_hour"
             );
