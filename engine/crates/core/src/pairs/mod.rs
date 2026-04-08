@@ -193,6 +193,12 @@ pub struct PairsTradingConfig {
     /// Prevents over-trading on volatile days. Default 4.
     #[serde(default = "default_max_daily_entries")]
     pub max_daily_entries: usize,
+    /// Trailing take-profit: when z reverts past this fraction of entry z,
+    /// tighten exit to best_z + buffer. E.g., 0.5 = after 50% reversion,
+    /// exit if z pulls back to the 50% mark instead of waiting for full exit_z.
+    /// 0.0 = disabled. Default 0.0.
+    #[serde(default)]
+    pub trailing_exit_pct: f64,
 }
 
 fn default_max_daily_entries() -> usize {
@@ -236,6 +242,7 @@ impl Default for PairsTradingConfig {
             intraday_confirm_bars: 30,
             intraday_entry_z: 0.0,
             max_daily_entries: 4,
+            trailing_exit_pct: 0.0,
         }
     }
 }
@@ -520,6 +527,12 @@ pub struct PairState {
     intraday_persist_side: i8, // -1 = below -entry_z, +1 = above +entry_z, 0 = within
     /// Calendar day of last entry (timestamp / 86_400_000). Prevents re-entry same day.
     last_entry_day: i64,
+    /// Best (closest to 0) exit_z seen during current trade.
+    /// Used for trailing take-profit: when z reverts past trailing_exit_pct
+    /// of entry, tighten exit to lock in gains.
+    best_exit_z: f64,
+    /// Entry z-score (frozen at entry). Used to compute reversion percentage.
+    entry_z_score: f64,
 }
 
 impl Default for PairState {
@@ -583,6 +596,8 @@ impl PairState {
             intraday_persist_count: 0,
             intraday_persist_side: 0,
             last_entry_day: 0,
+            best_exit_z: 0.0,
+            entry_z_score: 0.0,
         }
     }
 
@@ -817,6 +832,35 @@ impl PairState {
                 }
             };
 
+            // Track best (closest to 0) exit_z for trailing take-profit
+            let closer_to_zero = match self.position {
+                PairPosition::LongSpread => exit_z > self.best_exit_z,  // less negative = better
+                PairPosition::ShortSpread => exit_z < self.best_exit_z, // less positive = better
+                PairPosition::Flat => false,
+            };
+            if closer_to_zero {
+                self.best_exit_z = exit_z;
+            }
+
+            // Trailing take-profit: if z reverted past trailing_exit_pct of entry,
+            // tighten exit. E.g., entry at z=-4.0, pct=0.5 → trailing kicks in at z=-2.0.
+            // Once trailing is active, exit if z pulls back past best_z.
+            let trailing_exit = if trading.trailing_exit_pct > 0.0 {
+                let entry_abs = self.entry_z_score.abs();
+                let best_abs = self.best_exit_z.abs();
+                let reversion_pct = 1.0 - (best_abs / entry_abs);
+                if reversion_pct >= trading.trailing_exit_pct {
+                    // Trailing active: exit if z pulled back from best by > 50% of gains
+                    let pullback = (exit_z - self.best_exit_z).abs();
+                    let gains = (self.entry_z_score - self.best_exit_z).abs();
+                    pullback > gains * 0.5 // gave back >50% of peak reversion
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
             // Exit condition: spread reverted (against frozen entry-time baseline)
             let reverted = match self.position {
                 PairPosition::LongSpread => exit_z > -effective_exit_z,
@@ -878,7 +922,7 @@ impl PairState {
             let past_min_hold = days_held >= trading.min_hold_bars;
             let can_exit_reversion = reverted && past_min_hold;
 
-            if can_exit_reversion || stopped || drift_stopped || max_held || force_close {
+            if can_exit_reversion || trailing_exit || stopped || drift_stopped || max_held || force_close {
                 let reason = if stopped || drift_stopped {
                     SignalReason::StopLoss
                 } else if force_close || max_held {
@@ -892,6 +936,8 @@ impl PairState {
                     "stop_loss"
                 } else if drift_stopped {
                     "drift_stop"
+                } else if trailing_exit {
+                    "trailing_tp"
                 } else if force_close {
                     "eod_close"
                 } else if max_held {
@@ -1194,7 +1240,9 @@ impl PairState {
             self.last_entry_day = timestamp / 86_400_000;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
-            self.entry_beta = beta; // use Kalman-filtered beta if available
+            self.entry_beta = beta;
+            self.entry_z_score = z;
+            self.best_exit_z = z; // starts at entry, improves as z reverts
 
             // Beta-weighted sizing: use the SAME beta as entry_beta (Kalman if available).
             // This ensures open and close quantities match, preventing residual exposure.
@@ -1279,7 +1327,9 @@ impl PairState {
             self.last_entry_day = timestamp / 86_400_000;
             self.entry_price_a = price_a;
             self.entry_price_b = price_b;
-            self.entry_beta = beta; // use Kalman-filtered beta if available
+            self.entry_beta = beta;
+            self.entry_z_score = z;
+            self.best_exit_z = z;
 
             let qty_a = (trading.notional_per_leg / price_a).floor();
             let qty_b = (trading.notional_per_leg * beta.abs() / price_b).floor();
