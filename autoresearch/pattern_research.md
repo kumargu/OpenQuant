@@ -36,3 +36,8 @@ std shrank during the volatile period, making costs > profits.
 This is a tension: too similar = tiny spread, costs kill.
 Too different = spread trends, stops kill.
 The sweet spot is pairs with 15-30 bps average spread deviation.
+
+### RULE: Never trade same-company share classes (GOOG/GOOGL, BRK.A/BRK.B)
+These are near-arbitrage with 3-5 bps spread moves. Costs eat 100%.
+Looked good in Jan because of a fluke period of wider spread.
+REMOVED from all pair lists permanently.
