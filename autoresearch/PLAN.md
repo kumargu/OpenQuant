@@ -5,6 +5,13 @@ $1000-1400 per 2 weeks with $10K capital. Consistent, not lucky.
 
 ---
 
+## Autoresearch Mode
+- Run autonomously, don't stop
+- Commit after every major finding
+- Pause at milestones to check plan progress
+- No code changes in Phase 1 — only analysis scripts and findings
+- Log everything in pattern_research.md
+
 ## Phase 1: CHEAT (read-only, learn from bar cache)
 
 NO code changes. Watch bars, patterns, what the engine does vs should do.

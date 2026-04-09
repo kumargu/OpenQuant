@@ -97,3 +97,41 @@ At 10 bps cost, most of these pairs break even or lose.
 RULE: rotate pairs — don't stick with losers. A pair that loses one month
 may win the next. The portfolio diversification across 6-8 pairs provides
 consistency even when individual pairs fluctuate.
+
+### PHASE 1C: Kalman filter irrelevant for intraday
+30-bar rolling z-score absorbs beta differences. Simple ln(A)-ln(B) works
+as well as OLS-corrected spread. Kalman only matters for daily bars.
+
+### PHASE 1D: Slippage — limit orders mandatory
+Market orders: 8-12 bps (kills edge). Limit orders: 3-5 bps (preserves edge).
+Our trade sizes are 0.01-0.14% of per-minute volume — zero market impact.
+
+### PHASE 1E: entry_z=1.5 is optimal for DOLLAR P&L
+| entry_z | Trades/day | Avg bps | Win% | $/2wk |
+|---------|-----------|---------|------|-------|
+| 1.5 | 83 | +4.0 | 78% | $1,653 |
+| 2.0 | 67 | +4.4 | 73% | $1,475 |
+| 2.5 | 49 | +2.1 | 63% | $522 |
+
+Lower z = more trades × smaller edge = more total dollars.
+This is THEORETICAL max (unlimited concurrent, no daily limits).
+Real engine with constraints will capture 30-50% of this.
+
+### PHASE 1 COMPLETE — SUMMARY
+
+**What we know:**
+1. 8 winning pairs across 3 months: AAL/DAL, AAL/UAL, DPZ/MCD, F/GM,
+   DAL/UAL, HLT/MAR, DHI/LEN, KLAC/LRCX
+2. entry_z=1.5-2.0 is optimal (more trades > higher conviction)
+3. 5 bps cost (limit orders) is REQUIRED
+4. Kalman filter irrelevant for intraday
+5. No max_hold — let z decide exits
+6. Spread_std must be > 8 bps or costs eat edge
+7. NEVER trade same-company shares (GOOG/GOOGL)
+8. Airlines are the #1 sub-industry for pairs
+
+**Theoretical: $1,475-1,653/2wk**
+**Realistic with constraints: $500-800/2wk**
+**Gap to close in Phase 2+3: execution quality + pair rotation**
+
+READY FOR PHASE 2: Configure and validate on unseen data.
