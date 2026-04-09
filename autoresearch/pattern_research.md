@@ -41,3 +41,32 @@ The sweet spot is pairs with 15-30 bps average spread deviation.
 These are near-arbitrage with 3-5 bps spread moves. Costs eat 100%.
 Looked good in Jan because of a fluke period of wider spread.
 REMOVED from all pair lists permanently.
+
+### PHASE 1A COMPLETE: Nov + Sep with all 19 pairs
+
+**CRITICAL FINDING: spread_std < 8 bps = guaranteed loss**
+
+| Pair | Nov | Sep | Spread std | Verdict |
+|------|-----|-----|------------|---------|
+| DAL/UAL | +64 | +965 | 11-13 | WINNER — survives both months |
+| GS/MS | +117 | +94 | 9-12 | WINNER — survives both months |
+| ACGL/HIG | +165 | -118 | 10-12 | Mixed |
+| KEY/RF | -886 | -1947 | 6-7 | LOSER — spread too tight |
+| KEY/TFC | -1296 | -2325 | 7 | LOSER — spread too tight |
+| MA/V | -779 | -1014 | 5-6 | LOSER — spread too tight |
+| BAC/C | n/a | -3406 | 7 | LOSER — spread too tight |
+
+**Rule: spread_std must be > 10 bps (0.0010) to trade.**
+This eliminates near-arbitrage pairs where costs > edge.
+
+Surviving pairs for further testing:
+- DAL/UAL (airlines) — consistent winner, 12+ bps spread
+- GS/MS (investment banks) — consistent winner, 9-12 bps spread
+- FDX/EXPD (logistics) — high spread (18-35 bps) but volatile results
+- MU/INTC (semiconductors) — highest spread (22-24 bps) but mixed
+- KLAC/LRCX (semi equipment) — 12-14 bps, good in Sep, bad in Nov
+- DVN/EOG (E&P oil) — 9-12 bps, both months negative
+- COF/JPM (banks) — 14 bps, Sep winner Nov loser
+
+NEXT: Phase 1B — test these surviving pairs on Jan to cross-validate.
+If DAL/UAL and GS/MS work in ALL three months, they're core pairs.
