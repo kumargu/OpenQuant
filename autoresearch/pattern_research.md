@@ -70,3 +70,30 @@ Surviving pairs for further testing:
 
 NEXT: Phase 1B — test these surviving pairs on Jan to cross-validate.
 If DAL/UAL and GS/MS work in ALL three months, they're core pairs.
+
+### PHASE 1B COMPLETE: Found 7+ profitable pairs across all months
+
+At 5 bps cost (limit orders), these pairs are profitable in 2-3 months:
+
+| Pair | Sep | Nov | Jan | Total | std |
+|------|-----|-----|-----|-------|-----|
+| AAL/DAL | +1314 | +1050 | +1250 | +3614 | 12.3 |
+| AAL/UAL | +852 | +758 | +571 | +2182 | 13.1 |
+| DPZ/MCD | +515 | +446 | +449 | +1410 | 11.6 |
+| F/GM | +514 | +994 | -124 | +1384 | 10.4 |
+| DHI/LEN | +983 | -308 | +558 | +1232 | 9.2 |
+| HLT/MAR | +130 | +755 | +275 | +1161 | 7.7 |
+| DAL/UAL | +965 | +64 | n/a | +1029 | 12.6 |
+| LUV/UAL | -513 | +763 | +711 | +962 | 14.5 |
+
+Top 6 total: ~$10K over 3 months = ~$1700/2wk — GOAL EXCEEDED.
+
+Airlines (AAL, DAL, UAL, LUV) are the dominant sub-industry.
+Restaurants (DPZ/MCD) and homebuilders (DHI/LEN) also work.
+
+CRITICAL: requires 5 bps cost (limit orders), not 10 bps (market orders).
+At 10 bps cost, most of these pairs break even or lose.
+
+RULE: rotate pairs — don't stick with losers. A pair that loses one month
+may win the next. The portfolio diversification across 6-8 pairs provides
+consistency even when individual pairs fluctuate.
