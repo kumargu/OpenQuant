@@ -193,6 +193,26 @@ pub struct PairsTradingConfig {
     /// Prevents over-trading on volatile days. Default 4.
     #[serde(default = "default_max_daily_entries")]
     pub max_daily_entries: usize,
+    /// Intraday rolling z-score mode. When non-zero, the spread's rolling
+    /// mean and std are computed from a rolling window of this many
+    /// **intraday bars** (i.e. minutes, if bars are 1-min), and spread
+    /// observations are pushed on every bar rather than only at the daily
+    /// close.
+    ///
+    /// 0 = disabled (default) → daily mode: rolling stats sample once per
+    /// day at the daily close; warm-up takes `lookback` days. This matches
+    /// the classical pairs-trading regime used by the live engine.
+    ///
+    /// > 0 = intraday rolling mode: warm-up takes this many bars
+    /// (≈ minutes); entries are evaluated on every bar once warmed up
+    /// (no `is_new_day` gate, no `intraday_entries` persistence filter).
+    /// When set, `intraday_rolling_bars` overrides the window size that
+    /// would otherwise come from `lookback` or per-pair `lookback_bars`.
+    ///
+    /// This is the mode used by the autoresearch oracle to capture
+    /// intraday mean-reversion patterns on minute-bar data.
+    #[serde(default)]
+    pub intraday_rolling_bars: usize,
 }
 
 fn default_max_daily_entries() -> usize {
@@ -236,6 +256,7 @@ impl Default for PairsTradingConfig {
             intraday_confirm_bars: 30,
             intraday_entry_z: 0.0,
             max_daily_entries: 4,
+            intraday_rolling_bars: 0,
         }
     }
 }
@@ -540,10 +561,14 @@ impl PairState {
 
     /// Create a new PairState with the appropriate rolling window size.
     ///
-    /// Uses the pair's `lookback_bars` if set (> 0), otherwise falls back
-    /// to the global `lookback` from trading config.
+    /// Window precedence (highest to lowest):
+    ///   1. `trading.intraday_rolling_bars` — intraday rolling mode (minute window)
+    ///   2. `config.lookback_bars` — per-pair override (daily window)
+    ///   3. `trading.lookback` — global default (daily window)
     pub fn for_pair(config: &PairConfig, trading: &PairsTradingConfig) -> Self {
-        let window = if config.lookback_bars > 0 {
+        let window = if trading.intraday_rolling_bars > 0 {
+            trading.intraday_rolling_bars
+        } else if config.lookback_bars > 0 {
             config.lookback_bars
         } else {
             trading.lookback.max(1) // guard against misconfigured lookback=0
@@ -673,10 +698,19 @@ impl PairState {
         let is_new_day = self.last_bar_day > 0 && bar_day != self.last_bar_day;
 
         if is_new_day {
-            // Previous bar was the daily close — push its spread into rolling stats
-            if let Some(daily_spread) = self.pending_daily_spread.take() {
-                self.spread_stats.push(daily_spread);
-                self.spread_count += 1;
+            // Previous bar was the daily close — push its spread into rolling
+            // stats in DAILY mode. In INTRADAY rolling mode, spreads are
+            // pushed per-bar below, so we only increment the day counter here.
+            if trading.intraday_rolling_bars == 0 {
+                if let Some(daily_spread) = self.pending_daily_spread.take() {
+                    self.spread_stats.push(daily_spread);
+                    self.spread_count += 1;
+                    self.daily_bar_count += 1;
+                }
+            } else {
+                // Intraday mode: daily_bar_count still ticks once per
+                // calendar day so max_hold / min_hold (measured in days)
+                // keep working.
                 self.daily_bar_count += 1;
             }
             // Reset intraday persistence — bars from yesterday don't count toward today.
@@ -718,7 +752,25 @@ impl PairState {
             }
         }
         self.last_bar_day = bar_day; // safe: both legs have arrived at this point
-        self.pending_daily_spread = Some(spread); // always buffer latest spread
+
+        // ── Spread buffering: push previous, buffer current ──
+        // Both modes use a one-bar delay: the PREVIOUS bar's spread is pushed
+        // into rolling stats, and the CURRENT bar's spread is buffered to be
+        // pushed next time. This ensures z is computed against a window that
+        // does NOT include the current spread (standard convention).
+        //
+        // Daily mode: the push only happens on is_new_day (handled above). The
+        // buffer simply holds the most recent spread until the next day.
+        //
+        // Intraday rolling mode: the push happens on EVERY bar (here). The
+        // buffer holds the previous bar's spread until the next bar arrives.
+        if trading.intraday_rolling_bars > 0 {
+            if let Some(prev_spread) = self.pending_daily_spread.take() {
+                self.spread_stats.push(prev_spread);
+                self.spread_count += 1;
+            }
+        }
+        self.pending_daily_spread = Some(spread);
         self.bar_count += 1;
 
         // Convert UTC timestamp to market-local time.
@@ -1008,11 +1060,26 @@ impl PairState {
         }
 
         // ── Check entries (if flat) ──
-        // Default: entries fire only at daily close (when is_new_day triggers).
-        // With intraday_entries: also check on non-daily bars, but require
-        // z to persist above threshold for intraday_confirm_bars consecutive bars.
-        // This filters noise spikes (exp23 showed raw intraday = 114 churn trades).
-        if trading.intraday_entries && rolling_z_ready && !is_new_day {
+        // Three entry regimes, checked in this order:
+        //
+        //  1. `intraday_rolling_bars > 0` — intraday rolling mode. The rolling
+        //     stats are already computed from minute bars (see the push above),
+        //     so z is valid on every bar once warmed up. Entries fire on any
+        //     bar when |z| >= entry_z. No is_new_day gate, no persistence
+        //     filter (the minute-bar window is already the noise floor).
+        //
+        //  2. `intraday_entries = true` — classical daily-rolling z, but
+        //     allow entry evaluation on intraday bars. Requires z to persist
+        //     above threshold for `intraday_confirm_bars` bars to filter noise.
+        //
+        //  3. Default (neither) — entries only fire at the daily-close bar
+        //     (is_new_day), using daily-rolling stats.
+        if trading.intraday_rolling_bars > 0 {
+            if !rolling_z_ready {
+                return vec![];
+            }
+            // Fall through to the common entry logic below.
+        } else if trading.intraday_entries && rolling_z_ready && !is_new_day {
             // Intraday uses a higher z threshold to filter noise (default: entry_z)
             let intra_z = if trading.intraday_entry_z > 0.0 {
                 trading.intraday_entry_z
@@ -2258,5 +2325,155 @@ mod tests {
                 intent.priority_score
             );
         }
+    }
+
+    // ── Intraday rolling mode tests ──
+    //
+    // These verify the new `intraday_rolling_bars` feature:
+    //   1. warm-up completes in N bars (minutes), not N days
+    //   2. spread stats are populated every bar, not just at daily close
+    //   3. entries fire intraday once warmed up (no is_new_day gate)
+    //   4. daily mode (intraday_rolling_bars = 0) is unchanged
+
+    /// One minute in milliseconds — intraday tests step by this.
+    const MINUTE: i64 = 60_000;
+
+    fn intraday_trading(rolling_bars: usize) -> PairsTradingConfig {
+        PairsTradingConfig {
+            intraday_rolling_bars: rolling_bars,
+            min_hold_bars: 0,
+            // Force close very late so EOD doesn't interfere with these tests
+            force_close_minute: 23 * 60 + 59,
+            last_entry_hour: 23,
+            ..PairsTradingConfig::default()
+        }
+    }
+
+    #[test]
+    fn test_intraday_rolling_warmup_in_bars_not_days() {
+        // In intraday rolling mode with window=30, the rolling z becomes
+        // ready after 30 observed minute-bars. There is a one-bar delay
+        // because the first bar buffers without pushing (same pattern as
+        // daily mode), so feeding N bars produces spread_count = N-1.
+        let mut state = PairState::new();
+        let config = test_config();
+        let trading = intraday_trading(30);
+
+        // Feed 30 minute-bars — buffered-delayed, spread_count should be 29
+        let mut ts: i64 = DAY;
+        for i in 0..30 {
+            let a = if i % 2 == 0 { 99.5 } else { 100.5 };
+            let _ = state.on_price(&config.leg_a, a, &config, &trading, ts);
+            let _ = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+            ts += MINUTE;
+        }
+        assert_eq!(
+            state.spread_count, 29,
+            "spread_count should be N-1 after N bars (one-bar buffer delay)"
+        );
+
+        // Bar 31 pushes bar 30's buffered spread → count = 30 → warmed up
+        let _ = state.on_price(&config.leg_a, 99.5, &config, &trading, ts);
+        let _ = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+        assert_eq!(state.spread_count, 30);
+    }
+
+    #[test]
+    fn test_intraday_rolling_entry_fires_intraday() {
+        // In intraday rolling mode, once warmed up, entries should fire on
+        // any bar when |z| exceeds entry_z — NOT only on is_new_day.
+        //
+        // Uses a clean pair with beta=1.0 so log-spread math is easy.
+        // Warmup alternates leg_a between 99 and 101 giving mean≈0, std≈0.01.
+        // Then a moderate shock to a=97.5 produces z ≈ -2.5 — above entry_z=2.0
+        // but well below stop_z=4.0, so entry should fire (not be blocked).
+        let mut state = PairState::new();
+        let config = PairConfig {
+            leg_a: "GLD".into(),
+            leg_b: "SLV".into(),
+            alpha: 0.0,
+            beta: 1.0,
+            kappa: 0.0,
+            max_hold_bars: 0,
+            lookback_bars: 0,
+        };
+        let trading = intraday_trading(30);
+
+        // Warm up: 35 bars alternating a∈{99,101}, b=100 → spread alternates
+        // between ln(0.99)≈-0.01 and ln(1.01)≈+0.01. Mean≈0, std≈0.01.
+        let mut ts: i64 = DAY;
+        for i in 0..35 {
+            let a = if i % 2 == 0 { 99.0 } else { 101.0 };
+            let _ = state.on_price(&config.leg_a, a, &config, &trading, ts);
+            let _ = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+            ts += MINUTE;
+        }
+        assert!(
+            state.spread_count >= 30,
+            "should be warmed up after 35 bars, got {}",
+            state.spread_count
+        );
+
+        // Moderate shock: a=97.5, b=100 → spread = ln(0.975) ≈ -0.0253
+        // Against mean≈0, std≈0.01 → z ≈ -2.5 (above entry_z=2.0, below stop_z=4.0)
+        // Same day as the warmup → NOT is_new_day. Entry must fire anyway in
+        // intraday rolling mode.
+        let _ = state.on_price(&config.leg_a, 97.5, &config, &trading, ts);
+        let intents = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+        assert!(
+            !intents.is_empty(),
+            "intraday rolling mode should fire entry mid-day (no is_new_day gate)"
+        );
+        assert_eq!(state.position, PairPosition::LongSpread);
+    }
+
+    #[test]
+    fn test_intraday_rolling_window_size_overrides() {
+        // for_pair() should use intraday_rolling_bars as the window when set,
+        // ignoring the per-pair lookback_bars and the global lookback.
+        let config = PairConfig {
+            leg_a: "A".into(),
+            leg_b: "B".into(),
+            alpha: 0.0,
+            beta: 1.0,
+            kappa: 0.0,
+            max_hold_bars: 0,
+            lookback_bars: 60, // per-pair: should be ignored
+        };
+        let trading = PairsTradingConfig {
+            lookback: 120, // global: should be ignored
+            intraday_rolling_bars: 30,
+            ..PairsTradingConfig::default()
+        };
+        let state = PairState::for_pair(&config, &trading);
+        assert_eq!(
+            state.spread_stats.window(),
+            30,
+            "intraday_rolling_bars should take precedence over lookback_bars and lookback"
+        );
+    }
+
+    #[test]
+    fn test_daily_mode_unchanged_when_intraday_rolling_zero() {
+        // When intraday_rolling_bars=0 (default), behavior must match
+        // the original daily-rolling mode. spread_count only increments
+        // on new-day boundaries.
+        let mut state = PairState::new();
+        let config = test_config();
+        let trading = test_trading(); // default → intraday_rolling_bars = 0
+
+        // Feed 10 intraday bars on the SAME day — spread_count should stay 0
+        // (because daily mode only pushes on new-day)
+        let mut ts: i64 = DAY;
+        for i in 0..10 {
+            let a = if i % 2 == 0 { 99.5 } else { 100.5 };
+            let _ = state.on_price(&config.leg_a, a, &config, &trading, ts);
+            let _ = state.on_price(&config.leg_b, 100.0, &config, &trading, ts);
+            ts += MINUTE;
+        }
+        assert_eq!(
+            state.spread_count, 0,
+            "daily mode must not push on intraday bars"
+        );
     }
 }
