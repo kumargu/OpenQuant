@@ -97,7 +97,7 @@ impl AlpacaClient {
     // and lab all compute statistics on the same daily close prices.
     // See CLAUDE.md: "one data source for everything — 1-min IEX bars."
     const RTH_START_MINUTES: i64 = 13 * 60 + 30; // 13:30 UTC
-    const RTH_END_MINUTES: i64 = 20 * 60;        // 20:00 UTC
+    const RTH_END_MINUTES: i64 = 20 * 60; // 20:00 UTC
 
     /// Aggregate 1-min bars to daily RTH close (last tick per session day).
     /// Groups by (symbol, calendar date), filters to RTH, takes last close.
@@ -111,6 +111,10 @@ impl AlpacaClient {
             let day_map = by_symbol.entry(symbol.clone()).or_default();
             for bar in bars {
                 if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
+                    // NaN/zero guard — skip corrupt or missing prices
+                    if !bar.c.is_finite() || bar.c <= 0.0 {
+                        continue;
+                    }
                     let minutes = dt.hour() as i64 * 60 + dt.minute() as i64;
                     if minutes < Self::RTH_START_MINUTES || minutes >= Self::RTH_END_MINUTES {
                         continue;
@@ -175,7 +179,9 @@ impl AlpacaClient {
         let start_str = start.format("%Y-%m-%d").to_string();
         let end_str = end.format("%Y-%m-%d").to_string();
 
-        let raw = self.fetch_minute_bars_raw(symbols, &start_str, &end_str).await?;
+        let raw = self
+            .fetch_minute_bars_raw(symbols, &start_str, &end_str)
+            .await?;
         let aggregated = Self::aggregate_to_daily(&raw);
 
         // Adjust timestamp to 16:00 ET (market close) so the engine's

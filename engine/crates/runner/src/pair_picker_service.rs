@@ -34,8 +34,7 @@ pub async fn generate_pairs_with_config(
     let path = candidates_path
         .ok_or("--candidates is required: provide a lab-generated candidates JSON file")?;
 
-    let contents = std::fs::read_to_string(path)
-        .map_err(|e| format!("read candidates: {e}"))?;
+    let contents = std::fs::read_to_string(path).map_err(|e| format!("read candidates: {e}"))?;
     let file: pair_picker::types::PairCandidatesFile =
         serde_json::from_str(&contents).map_err(|e| format!("parse error: {e}"))?;
     info!(

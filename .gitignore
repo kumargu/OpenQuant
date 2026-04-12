@@ -56,3 +56,5 @@ data/walk_forward_results.json
 
 # Virtual environments
 .venv/
+data/bar_cache*/
+trading/*_candidates*.json

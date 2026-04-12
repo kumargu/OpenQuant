@@ -59,7 +59,7 @@ enum Command {
 enum Engine {
     /// S&P 500 equities — ADF cointegration, GICS sector pairs.
     Snp500,
-    /// Metals — curated structurally-similar pairs, force pipeline (bypasses ADF).
+    /// Metals — curated structurally-similar pairs, lab pipeline (structural gates relaxed).
     Metals,
     // Future: Bitcoin, etc.
 }
@@ -74,7 +74,7 @@ impl Engine {
 
     fn candidates_path(&self) -> Option<&'static str> {
         match self {
-            Engine::Snp500 => None, // uses stock_relationships.json / pair_candidates.json
+            Engine::Snp500 => None, // candidates must be provided via --candidates flag
             Engine::Metals => Some("trading/metals_pairs.json"),
         }
     }
@@ -82,7 +82,7 @@ impl Engine {
     fn pipeline(&self) -> &'static str {
         match self {
             Engine::Snp500 => "default",
-            Engine::Metals => "force",
+            Engine::Metals => "lab",
         }
     }
 }
@@ -328,7 +328,7 @@ async fn run(
             info!("using METALS pipeline thresholds");
             PipelineConfig::metals()
         }
-        "force" | "lab" => {
+        "lab" => {
             info!("using LAB pipeline — structural gates relaxed, scoring + ranking active");
             PipelineConfig::force()
         }
@@ -360,9 +360,7 @@ async fn run(
                 // Use the replay start month
                 start[..7].replace('-', "")
             }
-            RunMode::Stream(_) => {
-                chrono::Utc::now().format("%Y%m").to_string()
-            }
+            RunMode::Stream(_) => chrono::Utc::now().format("%Y%m").to_string(),
         };
         let monthly = trading_dir.join(format!("monthly_pairs_{yyyymm}.json"));
         let legacy = trading_dir.join("active_pairs.json");
