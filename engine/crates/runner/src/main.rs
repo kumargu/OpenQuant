@@ -80,8 +80,12 @@ impl Engine {
     }
 
     fn pipeline(&self) -> &'static str {
+        // All engines use "lab" pipeline — candidates come from quant-lab,
+        // structural hard gates are relaxed, scoring + ranking active.
+        // The "default" pipeline (strict ADF/R²/structural-break gates)
+        // rejects 100% of lab candidates and is not used in production.
         match self {
-            Engine::Snp500 => "default",
+            Engine::Snp500 => "lab",
             Engine::Metals => "lab",
         }
     }
