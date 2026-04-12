@@ -31,7 +31,7 @@ NOTEBOOK = ROOT / "autoresearch" / "NOTEBOOK.md"
 # EDITABLE CONSTANTS — the agent changes these, runs, reads metrics.
 # ============================================================================
 NAME          = "baseline_2026"
-CANDIDATES    = "trading/year2026_candidates_top100.json"
+CANDIDATES    = "pairs/year2026_candidates_top100.json"
 REPLAY_START  = "2026-01-02"
 REPLAY_END    = "2026-04-09"
 BAR_CACHE     = "data/bar_cache_2026"

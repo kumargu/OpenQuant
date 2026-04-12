@@ -75,7 +75,7 @@ impl Engine {
     fn candidates_path(&self) -> Option<&'static str> {
         match self {
             Engine::Snp500 => None, // candidates must be provided via --candidates flag
-            Engine::Metals => Some("trading/metals_pairs.json"),
+            Engine::Metals => Some("pairs/metals_pairs.json"),
         }
     }
 
@@ -106,7 +106,7 @@ struct StreamArgs {
     #[arg(long, default_value = "data")]
     data_dir: PathBuf,
 
-    #[arg(long, default_value = "trading")]
+    #[arg(long, default_value = "pairs")]
     trading_dir: PathBuf,
 
     /// Override pair candidates JSON (default: selected by --engine).
@@ -133,7 +133,7 @@ struct ReplayArgs {
     #[arg(long, default_value = "data")]
     data_dir: PathBuf,
 
-    #[arg(long, default_value = "trading")]
+    #[arg(long, default_value = "pairs")]
     trading_dir: PathBuf,
 
     /// Override pair candidates JSON (default: selected by --engine).
@@ -405,7 +405,7 @@ async fn run(
             if !pairs_path.exists() {
                 error!(
                     path = %pairs_path.display(),
-                    "no pairs file found — place a monthly_pairs_YYYYMM.json from quant-lab in trading/"
+                    "no pairs file found — place a monthly_pairs_YYYYMM.json from quant-lab in pairs/"
                 );
                 std::process::exit(1);
             }

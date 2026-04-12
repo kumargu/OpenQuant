@@ -477,7 +477,7 @@ asset_class = "disabled"
 # ---------------------------------------------------------------------------
 # Pairs Trading — the only section the runner uses
 # ---------------------------------------------------------------------------
-# Pairs sourced from trading/active_pairs.json (produced by pair-picker).
+# Pairs sourced from pairs/monthly_pairs_YYYYMM.json (produced by pair-picker).
 # Per-pair identity (legs, beta, half-life) comes from that file.
 # These are shared trading parameters.
 #

@@ -67,7 +67,7 @@ the canonical offline data path.
 │     ALPACA_DATA_URL=http://127.0.0.1:8787/v2/stocks/bars \        │
 │     openquant-runner replay \                                      │
 │       --engine snp500 --pipeline lab \                             │
-│       --candidates trading/monthly_pairs_YYYYMM.json \            │
+│       --candidates pairs/monthly_pairs_YYYYMM.json \            │
 │       --start YYYY-MM-DD --end YYYY-MM-DD                         │
 │                                                                    │
 │     Rust pair-picker validates + scores (structural quality)      │
