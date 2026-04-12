@@ -502,3 +502,19 @@ last_entry_hour = 23    # Effectively disabled for daily bars
 force_close_minute = 1440  # Disabled — exits are z-score or max_hold driven
 tz_offset_hours = -4    # EDT. Must match [data].timezone_offset_hours.
 cost_bps = 30.0         # Round-trip cost in bps — 30 bps for liquid large-cap pairs
+
+
+# ---------------------------------------------------------------------------
+# Pair-picker — controls the picker's selection cap
+# ---------------------------------------------------------------------------
+[pair_picker]
+
+# Max pairs the picker outputs per generation cycle. Historically hardcoded
+# to 40. Set higher (and relax --pipeline to "force") for candidate-pool
+# sweep experiments where quant-lab pre-ranks the universe.
+top_k = 40
+
+# When true, skip the picker's score-based sort and keep candidates in input
+# order. Use with a pre-ranked candidates file (e.g. from quant-lab) to
+# honor the input ranking instead of the Rust picker's structural score.
+preserve_input_order = false

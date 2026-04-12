@@ -1,70 +1,49 @@
-//! Pair-picker integration — generates pairs from Alpaca data using the pair-picker library.
+//! Pair-picker integration — validates lab-provided candidates using Alpaca
+//! daily bars and the pair-picker validation pipeline.
 //!
-//! Called from the runner at startup and periodically during replay to regenerate pairs
-//! using only data available at that point in time (no look-ahead bias).
+//! Lab discovers and ranks candidate pairs. This service validates them
+//! against structural quality gates (ADF, R², half-life, beta stability)
+//! using price data fetched from Alpaca (or a mock server via ALPACA_DATA_URL).
+//!
+//! Candidates are always provided via `--candidates <path>`. There is no
+//! built-in candidate discovery — that responsibility lives in quant-lab.
 
 use crate::alpaca::AlpacaClient;
 use openquant_core::pairs::PairConfig;
-use pair_picker::graph::RelationshipGraph;
 use pair_picker::pipeline::{validate_candidates_with_config, InMemoryPrices, PipelineConfig};
 use pair_picker::types::ActivePair;
 use std::path::Path;
 use tracing::info;
 
-/// Run pair-picker using Alpaca daily bars as the price source.
+/// Validate lab-provided candidates using Alpaca daily bars.
 ///
 /// `price_end_date`: daily bars are fetched up to (but not including) this date.
 /// For replay: set to the replay start date to prevent look-ahead bias.
 /// For live/paper: set to today.
 ///
-/// `candidates_override`: when set, load candidates from this path instead of
-/// the default `trading_dir/pair_candidates.json`. Used for alternative
-/// universes (e.g., metals).
+/// `candidates_path`: path to the candidates JSON file (from quant-lab).
+/// Required — the runner must always provide this via `--candidates`.
 pub async fn generate_pairs_with_config(
     alpaca: &AlpacaClient,
-    trading_dir: &Path,
+    _trading_dir: &Path,
     price_end_date: chrono::NaiveDate,
     top_k: usize,
-    candidates_override: Option<&Path>,
+    candidates_path: Option<&Path>,
     pipeline_cfg: &PipelineConfig,
 ) -> Result<Vec<ActivePair>, String> {
-    // Load candidates — override path takes priority over graph/default
-    let graph_path = trading_dir.join("stock_relationships.json");
-    let default_candidates_path = trading_dir.join("pair_candidates.json");
+    let path = candidates_path
+        .ok_or("--candidates is required: provide a lab-generated candidates JSON file")?;
 
-    let candidates = if let Some(override_path) = candidates_override {
-        let contents = std::fs::read_to_string(override_path)
-            .map_err(|e| format!("read candidates override: {e}"))?;
-        let file: pair_picker::types::PairCandidatesFile =
-            serde_json::from_str(&contents).map_err(|e| format!("parse error: {e}"))?;
-        info!(
-            candidates = file.pairs.len(),
-            path = %override_path.display(),
-            "loaded candidates from override path"
-        );
-        file.pairs
-    } else if graph_path.exists() {
-        let graph = RelationshipGraph::load(&graph_path)
-            .ok_or("Failed to load stock_relationships.json")?;
-        let c = graph.to_candidates();
-        info!(
-            candidates = c.len(),
-            "generated candidates from relationship graph"
-        );
-        c
-    } else if default_candidates_path.exists() {
-        let contents = std::fs::read_to_string(&default_candidates_path)
-            .map_err(|e| format!("read error: {e}"))?;
-        let file: pair_picker::types::PairCandidatesFile =
-            serde_json::from_str(&contents).map_err(|e| format!("parse error: {e}"))?;
-        info!(
-            candidates = file.pairs.len(),
-            "loaded candidates from pair_candidates.json"
-        );
-        file.pairs
-    } else {
-        return Err("No stock_relationships.json or pair_candidates.json found".into());
-    };
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("read candidates: {e}"))?;
+    let file: pair_picker::types::PairCandidatesFile =
+        serde_json::from_str(&contents).map_err(|e| format!("parse error: {e}"))?;
+    info!(
+        candidates = file.pairs.len(),
+        path = %path.display(),
+        "loaded candidates from lab"
+    );
+    let candidates = file.pairs;
 
     // Collect unique symbols
     let mut symbols: Vec<String> = candidates

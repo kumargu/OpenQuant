@@ -323,7 +323,7 @@ async fn run(
     };
 
     // ── Resolve pipeline config ──
-    let pipeline_cfg = match pipeline_profile.as_str() {
+    let mut pipeline_cfg = match pipeline_profile.as_str() {
         "metals" => {
             info!("using METALS pipeline thresholds");
             PipelineConfig::metals()
@@ -338,6 +338,12 @@ async fn run(
             std::process::exit(1);
         }
     };
+    // Overlay the preserve_input_order flag from TOML [pair_picker]. Defaults
+    // to false, so existing profiles are unchanged unless the user opts in.
+    pipeline_cfg.preserve_input_order = cfg_file.pair_picker.preserve_input_order;
+    if pipeline_cfg.preserve_input_order {
+        info!("pair-picker preserve_input_order=true (quant-lab rank preserved)");
+    }
 
     // ── Initialize pairs engine ──
     let mut ptc = cfg_file.pairs_trading.clone();
@@ -346,6 +352,8 @@ async fn run(
     let history_path = trading_dir.join("pair_trading_history.json");
 
     let active_pairs_path = trading_dir.join("active_pairs.json");
+    let picker_top_k = cfg_file.pair_picker.top_k;
+    info!(top_k = picker_top_k, "pair-picker top_k from config");
     let mut pairs_engine = match &run_mode {
         RunMode::Replay { start, .. } => {
             // Always generate pairs from pair-picker (no stale active_pairs.json).
@@ -360,7 +368,7 @@ async fn run(
                 &alpaca,
                 &trading_dir,
                 price_end,
-                40,
+                picker_top_k,
                 candidates.as_deref(),
                 &pipeline_cfg,
             )
@@ -496,6 +504,7 @@ async fn run(
                 cache: cache.as_ref(),
                 candidates: candidates.as_deref(),
                 pipeline_cfg: &pipeline_cfg,
+                picker_top_k,
             };
             run_replay_bars(&alpaca, &mut pairs_engine, symbols, &start, &end, &ctx).await;
         }
@@ -570,6 +579,7 @@ struct ReplayContext<'a> {
     cache: Option<&'a bar_cache::BarCache>,
     candidates: Option<&'a std::path::Path>,
     pipeline_cfg: &'a PipelineConfig,
+    picker_top_k: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -729,7 +739,7 @@ async fn run_replay_bars(
                 alpaca,
                 ctx.trading_dir,
                 day,
-                40,
+                ctx.picker_top_k,
                 ctx.candidates,
                 ctx.pipeline_cfg,
             )

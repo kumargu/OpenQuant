@@ -6,7 +6,14 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{error, info};
 
-const DATA_URL: &str = "https://data.alpaca.markets/v2/stocks/bars";
+const DATA_URL_DEFAULT: &str = "https://data.alpaca.markets/v2/stocks/bars";
+
+/// Resolve the market-data endpoint. Override with `ALPACA_DATA_URL` (used
+/// by offline replay against a local mock server that serves quant-data
+/// parquets). Defaults to Alpaca's production URL.
+fn data_url() -> String {
+    std::env::var("ALPACA_DATA_URL").unwrap_or_else(|_| DATA_URL_DEFAULT.to_string())
+}
 
 /// Alpaca execution mode — controls the trading API endpoint.
 /// Replay mode never calls place_order, so it doesn't need a variant here.
@@ -100,7 +107,7 @@ impl AlpacaClient {
             let symbols_param = chunk.join(",");
             let response = self
                 .http
-                .get(DATA_URL)
+                .get(&data_url())
                 .header("APCA-API-KEY-ID", &self.api_key)
                 .header("APCA-API-SECRET-KEY", &self.api_secret)
                 .query(&[
@@ -171,7 +178,7 @@ impl AlpacaClient {
             let symbols_param = chunk.join(",");
             let response = self
                 .http
-                .get(DATA_URL)
+                .get(&data_url())
                 .header("APCA-API-KEY-ID", &self.api_key)
                 .header("APCA-API-SECRET-KEY", &self.api_secret)
                 .query(&[
@@ -253,7 +260,7 @@ impl AlpacaClient {
 
                 let response = self
                     .http
-                    .get(DATA_URL)
+                    .get(&data_url())
                     .header("APCA-API-KEY-ID", &self.api_key)
                     .header("APCA-API-SECRET-KEY", &self.api_secret)
                     .query(&query)
@@ -334,7 +341,7 @@ impl AlpacaClient {
 
                 let response = self
                     .http
-                    .get(DATA_URL)
+                    .get(&data_url())
                     .header("APCA-API-KEY-ID", &self.api_key)
                     .header("APCA-API-SECRET-KEY", &self.api_secret)
                     .query(&query)

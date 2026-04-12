@@ -41,8 +41,33 @@ pub struct ConfigFile {
     pub regime: RegimeConfig,
     pub data: DataConfig,
     pub pairs_trading: PairsTradingConfig,
+    pub pair_picker: PairPickerConfig,
     pub asset_class: HashMap<String, SymbolOverrides>,
     pub symbol_overrides: HashMap<String, SymbolOverrides>,
+}
+
+/// Pair-picker config — controls how many pairs the picker selects per
+/// (re)generation cycle. Previously hardcoded to 40 in runner/main.rs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PairPickerConfig {
+    /// Max pairs to emit from one pair-picker run. The picker scores all
+    /// candidates, sorts by score descending, then truncates to this count.
+    pub top_k: usize,
+    /// When true, skip the picker's score-based sort and keep candidates in
+    /// input order. Used when the caller (quant-lab) already ranked the
+    /// candidates by realized P&L and doesn't want the picker's
+    /// structural-quality score to reorder them.
+    pub preserve_input_order: bool,
+}
+
+impl Default for PairPickerConfig {
+    fn default() -> Self {
+        Self {
+            top_k: 40,
+            preserve_input_order: false,
+        }
+    }
 }
 
 /// Metrics toggle (more fields later when we wire CloudWatch).
