@@ -355,30 +355,14 @@ async fn run(
 
     let history_path = trading_dir.join("pair_trading_history.json");
 
-    // Active pairs file: monthly_pairs_YYYYMM.json (lab provides one per month).
+    // Pairs file: monthly_pairs_YYYYMM.json (lab provides one per month).
     // Replay derives YYYYMM from the start date; live/paper uses the current month.
-    // Falls back to active_pairs.json for backward compatibility.
-    let active_pairs_path = {
+    let pairs_path = {
         let yyyymm = match &run_mode {
-            RunMode::Replay { start, .. } => {
-                // Use the replay start month
-                start[..7].replace('-', "")
-            }
+            RunMode::Replay { start, .. } => start[..7].replace('-', ""),
             RunMode::Stream(_) => chrono::Utc::now().format("%Y%m").to_string(),
         };
-        let monthly = trading_dir.join(format!("monthly_pairs_{yyyymm}.json"));
-        let legacy = trading_dir.join("active_pairs.json");
-        if monthly.exists() {
-            info!(path = %monthly.display(), "using monthly pairs file");
-            monthly
-        } else if legacy.exists() {
-            info!(path = %legacy.display(), "monthly_pairs not found, falling back to active_pairs.json");
-            legacy
-        } else {
-            // Neither exists yet — will be created by the picker in replay mode,
-            // or required to exist in live/paper mode.
-            monthly
-        }
+        trading_dir.join(format!("monthly_pairs_{yyyymm}.json"))
     };
     let picker_top_k = cfg_file.pair_picker.top_k;
     info!(top_k = picker_top_k, "pair-picker top_k from config");
@@ -409,26 +393,24 @@ async fn run(
                 }
             };
             // Write validated pairs so reload() works during weekly regen.
-            if let Err(e) =
-                pair_picker_service::write_active_pairs(&active_pairs, &active_pairs_path)
-            {
-                warn!(error = %e, path = %active_pairs_path.display(), "failed to write pairs file");
+            if let Err(e) = pair_picker_service::write_active_pairs(&active_pairs, &pairs_path) {
+                warn!(error = %e, path = %pairs_path.display(), "failed to write pairs file");
             }
             let configs = pair_picker_service::to_pair_configs(&active_pairs);
             let mut engine = PairsEngine::from_configs(configs, &history_path, ptc);
-            engine.set_active_pairs_path(active_pairs_path.clone());
+            engine.set_pairs_path(pairs_path.clone());
             engine
         }
         RunMode::Stream(_) => {
-            if !active_pairs_path.exists() {
+            if !pairs_path.exists() {
                 error!(
-                    path = %active_pairs_path.display(),
+                    path = %pairs_path.display(),
                     "no pairs file found — place a monthly_pairs_YYYYMM.json from quant-lab in trading/"
                 );
                 std::process::exit(1);
             }
-            info!(path = %active_pairs_path.display(), "loading pairs from file");
-            PairsEngine::from_active_pairs(&active_pairs_path, &history_path, vec![], ptc, false)
+            info!(path = %pairs_path.display(), "loading pairs from file");
+            PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![], ptc, false)
         }
     };
 
@@ -760,9 +742,10 @@ async fn run_replay_bars(
         // Weekly pair regeneration: re-run pair-picker every 7 days
         // using only data available at that point (no look-ahead).
         //
-        // Uses write-then-reload: pair-picker writes active_pairs.json,
-        // then engine.reload() merges new pairs in while preserving open positions.
-        // Open positions in removed pairs get tightened stops for graceful exit.
+        // Weekly pair regeneration: re-run pair-picker every 7 days
+        // using only data available at that point (no look-ahead).
+        // Writes monthly_pairs file, then engine.reload() merges new pairs
+        // in while preserving open positions.
         if (day - last_picker_run).num_days() >= 7 {
             info!(day = day_start.as_str(), "regenerating pairs (weekly)");
             match pair_picker_service::generate_pairs_with_config(
@@ -776,14 +759,14 @@ async fn run_replay_bars(
             .await
             {
                 Ok(active_pairs) => {
-                    // Write active_pairs.json so reload() can pick it up
-                    let ap_path = ctx.trading_dir.join("active_pairs.json");
-                    if let Err(e) = pair_picker_service::write_active_pairs(&active_pairs, &ap_path)
+                    let yyyymm = day.format("%Y%m").to_string();
+                    let pairs_file = ctx.trading_dir.join(format!("monthly_pairs_{yyyymm}.json"));
+                    if let Err(e) =
+                        pair_picker_service::write_active_pairs(&active_pairs, &pairs_file)
                     {
-                        warn!(error = e.as_str(), "failed to write active_pairs.json");
+                        warn!(error = e.as_str(), "failed to write monthly pairs file");
                     } else {
-                        // Ensure engine knows the path (from_configs leaves it None)
-                        engine.set_active_pairs_path(ap_path);
+                        engine.set_pairs_path(pairs_file);
                         let old_count = engine.pair_count();
                         let old_open = engine.open_position_count();
                         engine.reload();
