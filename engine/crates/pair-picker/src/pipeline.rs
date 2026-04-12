@@ -9,7 +9,7 @@
 //! 6. Composite scoring
 //!
 //! Reads `pair_candidates.json`, validates each pair against daily price data,
-//! writes `active_pairs.json` with passing pairs sorted by score.
+//! writes the validated pairs file with passing pairs sorted by score.
 
 use crate::etf_filter::is_etf_component_pair;
 // regime.rs removed — regime robustness will be built in quant-lab where

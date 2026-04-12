@@ -116,7 +116,7 @@ impl AlpacaClient {
                         continue;
                     }
                     let minutes = dt.hour() as i64 * 60 + dt.minute() as i64;
-                    if minutes < Self::RTH_START_MINUTES || minutes >= Self::RTH_END_MINUTES {
+                    if !(Self::RTH_START_MINUTES..Self::RTH_END_MINUTES).contains(&minutes) {
                         continue;
                     }
                     let date_key = dt.format("%Y-%m-%d").to_string();
@@ -239,7 +239,7 @@ impl AlpacaClient {
 
                 let response = self
                     .http
-                    .get(&data_url())
+                    .get(data_url())
                     .header("APCA-API-KEY-ID", &self.api_key)
                     .header("APCA-API-SECRET-KEY", &self.api_secret)
                     .query(&query)
@@ -320,7 +320,7 @@ impl AlpacaClient {
 
                 let response = self
                     .http
-                    .get(&data_url())
+                    .get(data_url())
                     .header("APCA-API-KEY-ID", &self.api_key)
                     .header("APCA-API-SECRET-KEY", &self.api_secret)
                     .query(&query)

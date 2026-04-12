@@ -203,14 +203,11 @@ pub struct PairsTradingConfig {
     /// day at the daily close; warm-up takes `lookback` days. This matches
     /// the classical pairs-trading regime used by the live engine.
     ///
-    /// > 0 = intraday rolling mode: warm-up takes this many bars
-    /// (≈ minutes); entries are evaluated on every bar once warmed up
+    /// `> 0` = intraday rolling mode: warm-up takes this many bars
+    /// (approx minutes); entries are evaluated on every bar once warmed up
     /// (no `is_new_day` gate, no `intraday_entries` persistence filter).
     /// When set, `intraday_rolling_bars` overrides the window size that
     /// would otherwise come from `lookback` or per-pair `lookback_bars`.
-    ///
-    /// This is the mode used by the autoresearch oracle to capture
-    /// intraday mean-reversion patterns on minute-bar data.
     #[serde(default)]
     pub intraday_rolling_bars: usize,
 }
@@ -764,11 +761,11 @@ impl PairState {
         //
         // Intraday rolling mode: the push happens on EVERY bar (here). The
         // buffer holds the previous bar's spread until the next bar arrives.
-        if trading.intraday_rolling_bars > 0 {
-            if let Some(prev_spread) = self.pending_daily_spread.take() {
-                self.spread_stats.push(prev_spread);
-                self.spread_count += 1;
-            }
+        if trading.intraday_rolling_bars > 0
+            && let Some(prev_spread) = self.pending_daily_spread.take()
+        {
+            self.spread_stats.push(prev_spread);
+            self.spread_count += 1;
         }
         self.pending_daily_spread = Some(spread);
         self.bar_count += 1;

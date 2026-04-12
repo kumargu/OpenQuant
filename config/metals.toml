@@ -174,7 +174,7 @@ market_close = "16:00"
 # Pairs Trading — metals-specific parameters
 # ---------------------------------------------------------------------------
 # Tuned via 29+ autoresearch experiments on 5 curated metals pairs.
-# Uses --metals flag which sets --pipeline force (bypasses pair-picker ADF).
+# Uses --metals flag which sets --pipeline lab (bypasses pair-picker ADF).
 # Pair selection is structural (same commodity + same business type),
 # not statistical (ADF cointegration rejects all profitable metals pairs).
 #

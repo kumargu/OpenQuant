@@ -510,7 +510,7 @@ cost_bps = 30.0         # Round-trip cost in bps — 30 bps for liquid large-cap
 [pair_picker]
 
 # Max pairs the picker outputs per generation cycle. Historically hardcoded
-# to 40. Set higher (and relax --pipeline to "force") for candidate-pool
+# to 40. Set higher (and relax --pipeline to the "lab" profile) for candidate-pool
 # sweep experiments where quant-lab pre-ranks the universe.
 top_k = 40
 

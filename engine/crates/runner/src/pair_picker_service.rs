@@ -91,7 +91,7 @@ pub fn write_active_pairs(pairs: &[ActivePair], path: &Path) -> Result<(), Strin
     };
     let json = serde_json::to_string_pretty(&file).map_err(|e| format!("serialize error: {e}"))?;
     std::fs::write(path, json).map_err(|e| format!("write error: {e}"))?;
-    info!(pairs = pairs.len(), path = %path.display(), "wrote active_pairs.json");
+    info!(pairs = pairs.len(), path = %path.display(), "wrote monthly pairs file");
     Ok(())
 }
 

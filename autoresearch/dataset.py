@@ -1,7 +1,7 @@
 """
 Reader utilities for the foundation dataset at ~/quant-data/bars/.
 
-Every downstream tool (oracle, pickers, eval) uses this module to load
+Every downstream tool (pair-picker, replay, eval) uses this module to load
 bars. Don't re-implement Parquet reading elsewhere. Keep the interface
 narrow and the implementation boring.
 
