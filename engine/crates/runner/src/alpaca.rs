@@ -140,15 +140,34 @@ impl AlpacaClient {
 
     /// Fetch daily bars by aggregating 1-min IEX bars to RTH daily close.
     /// Used by pair-picker — returns ordered close prices per symbol.
+    /// Fetches in 7-day chunks to keep response sizes manageable for both
+    /// the real Alpaca API (pagination limits) and the mock server.
     pub async fn fetch_daily_bars_range(
         &self,
         symbols: &[String],
         start: &str,
         end: &str,
     ) -> Result<HashMap<String, Vec<f64>>, String> {
-        let raw = self.fetch_minute_bars_raw(symbols, start, end).await?;
-        let aggregated = Self::aggregate_to_daily(&raw);
+        let start_date = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d")
+            .map_err(|e| format!("bad start date: {e}"))?;
+        let end_date = chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d")
+            .map_err(|e| format!("bad end date: {e}"))?;
 
+        let mut all_raw: HashMap<String, Vec<AlpacaBar>> = HashMap::new();
+        let mut chunk_start = start_date;
+        while chunk_start < end_date {
+            let chunk_end = (chunk_start + chrono::Duration::days(7)).min(end_date);
+            let s = chunk_start.format("%Y-%m-%d").to_string();
+            let e = chunk_end.format("%Y-%m-%d").to_string();
+
+            let raw = self.fetch_minute_bars_raw(symbols, &s, &e).await?;
+            for (sym, bars) in raw {
+                all_raw.entry(sym).or_default().extend(bars);
+            }
+            chunk_start = chunk_end;
+        }
+
+        let aggregated = Self::aggregate_to_daily(&all_raw);
         let result: HashMap<String, Vec<f64>> = aggregated
             .into_iter()
             .map(|(sym, bars)| {
