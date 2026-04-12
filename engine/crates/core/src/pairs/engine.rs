@@ -539,10 +539,10 @@ impl PairsEngine {
         info!(restored, "position reconciliation complete");
     }
 
-    /// Set the path to active_pairs.json for reload().
+    /// Set the path to the pairs file (monthly_pairs_YYYYMM.json) for reload().
     /// Needed when engine is created via from_configs() (replay) but
     /// later needs reload() after pair-picker writes a new file.
-    pub fn set_active_pairs_path(&mut self, path: PathBuf) {
+    pub fn set_pairs_path(&mut self, path: PathBuf) {
         self.active_pairs_path = Some(path);
     }
 

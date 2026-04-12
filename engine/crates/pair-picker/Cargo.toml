@@ -2,18 +2,11 @@
 name = "pair-picker"
 version = "0.1.0"
 edition = "2021"
-description = "Statistical validation binary for pairs trading candidate selection"
-
-[[bin]]
-name = "pair-picker"
-path = "src/main.rs"
+description = "Statistical validation library for pairs trading candidate selection"
 
 [lib]
 name = "pair_picker"
 path = "src/lib.rs"
-
-[features]
-test-support = []
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }

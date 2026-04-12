@@ -9,10 +9,11 @@
 //! 6. Composite scoring
 //!
 //! Reads `pair_candidates.json`, validates each pair against daily price data,
-//! writes `active_pairs.json` with passing pairs sorted by score.
+//! writes the validated pairs file with passing pairs sorted by score.
 
 use crate::etf_filter::is_etf_component_pair;
-use crate::regime::{compute_regime_robustness, RegimeAdjustedThresholds};
+// regime.rs removed — regime robustness will be built in quant-lab where
+// it has access to the full formation window and Python flexibility.
 use crate::scorer::{compute_score, MaxHoldConfig};
 use crate::stats::adf::adf_test;
 use crate::stats::beta_stability::check_beta_stability;
@@ -75,6 +76,11 @@ pub struct PipelineConfig {
     /// Max hold cap in days. Passed to MaxHoldConfig when building ActivePair.
     /// Lower = cut losses faster on slow-reverting pairs.
     pub max_hold_cap: usize,
+    /// When true, skip the score-based sort in `validate_candidates_with_config`
+    /// and preserve the input order. Used for experiments where the caller
+    /// (e.g. quant-lab) has already pre-ranked candidates by realized P&L and
+    /// doesn't want the Rust picker's structural-quality score to reorder them.
+    pub preserve_input_order: bool,
 }
 
 impl Default for PipelineConfig {
@@ -91,6 +97,7 @@ impl Default for PipelineConfig {
             min_spread_crossings: 12.0,
             etf_filter_enabled: true,
             max_hold_cap: 10,
+            preserve_input_order: false,
         }
     }
 }
@@ -110,6 +117,7 @@ impl PipelineConfig {
             min_spread_crossings: 8.0,    // relaxed — slower oscillation
             etf_filter_enabled: true,
             max_hold_cap: 5, // shorter than S&P — metals trends persist
+            preserve_input_order: false,
         }
     }
 
@@ -127,6 +135,7 @@ impl PipelineConfig {
             min_spread_crossings: 0.0,
             etf_filter_enabled: false, // allow ETF-component pairs too
             max_hold_cap: 10,
+            preserve_input_order: false,
         }
     }
 }
@@ -442,40 +451,11 @@ pub fn validate_pair_with_config(
         }
     }
 
-    // Step 7: Regime robustness — test cointegration across calm/volatile sub-periods
-    if let Some(beta) = result.beta {
-        let robustness = compute_regime_robustness(prices_a, prices_b, beta);
-        result.regime_robustness = Some(robustness.score);
-        debug!(
-            pair = pair_id.as_str(),
-            regime_robustness = format!("{:.3}", robustness.score).as_str(),
-            current_regime = ?robustness.current_regime,
-            sufficient_data = robustness.sufficient_data,
-            "regime robustness"
-        );
-
-        // Use regime-adjusted ADF threshold (p<0.01 in volatile vs p<0.05 in calm)
-        // Skip when pipeline config has a very relaxed ADF threshold (force mode)
-        if cfg.adf_pvalue_threshold < 0.50 {
-            let thresholds = RegimeAdjustedThresholds::from_regime(robustness.current_regime);
-            if let Some(p) = result.adf_pvalue {
-                if p > thresholds.adf_pvalue_threshold && result.is_cointegrated {
-                    result.is_cointegrated = false;
-                    result.rejection_reasons.push(format!(
-                        "Regime-tightened: ADF p={p:.4} > {:.2} (volatile regime threshold)",
-                        thresholds.adf_pvalue_threshold
-                    ));
-                }
-            }
-        }
-
-        if robustness.sufficient_data && robustness.score >= 0.0 && robustness.score < 0.3 {
-            result.rejection_reasons.push(format!(
-                "Regime-fragile: robustness={:.2} (cointegration breaks in volatile periods)",
-                robustness.score
-            ));
-        }
-    }
+    // Step 7: Regime robustness — deferred to quant-lab.
+    // Lab has access to the full formation window and can compute regime
+    // stability more thoroughly than a 150-bar Rust window. The field is
+    // kept in ActivePair for schema compatibility but always set to -1.0.
+    result.regime_robustness = Some(-1.0);
 
     // Step 8: Compute score and determine pass/fail
     result.score = compute_score(
@@ -567,11 +547,18 @@ pub fn validate_candidates_with_config(
         })
         .collect();
 
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if cfg.preserve_input_order {
+        info!(
+            "preserve_input_order=true — skipping score-based sort, \
+             keeping candidate order from input file"
+        );
+    } else {
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
     let mhc = MaxHoldConfig {
         max_hold_cap: cfg.max_hold_cap,

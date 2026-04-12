@@ -1,15 +1,16 @@
 """
-OpenQuant autoresearch experiment runner.
-Builds the engine (if Rust changed), runs a replay, extracts metrics.
+OpenQuant train.py — Karpathy autoresearch pattern.
 
-Usage: python train.py > run.log 2>&1
+The agent edits the EDITABLE CONSTANTS below, runs this script, reads
+the canonical `---` metrics block from stdout. One experiment per run.
 
-This is the equivalent of train.py in karpathy/autoresearch.
-The LLM modifies strategy code (config/pairs.toml, engine/crates/...),
-then runs this script to measure the result.
+  python train.py > run.log 2>&1
+  grep '^trades:' run.log
 
-The LLM CAN also modify this file — same as in autoresearch where
-the agent edits train.py. But prepare.py is always read-only.
+prepare.py is READ-ONLY — never edited by the agent.
+program.md is HUMAN-EDITED — the research brief.
+results.tsv is APPEND-ONLY — one row per experiment.
+NOTEBOOK.md is APPEND-ONLY — narrative log.
 """
 
 import os
@@ -17,184 +18,187 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime
+from pathlib import Path
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENGINE = os.path.join(ROOT, "engine")
-RUNNER = os.path.join(ENGINE, "target", "release", "openquant-runner")
+ROOT = Path(__file__).parent.parent
+ENGINE_DIR = ROOT / "engine"
+RUNNER = ENGINE_DIR / "target" / "release" / "openquant-runner"
+RESULTS_TSV = ROOT / "autoresearch" / "results.tsv"
+NOTEBOOK = ROOT / "autoresearch" / "NOTEBOOK.md"
 
-# Replay period — default is 1 year of history for robust results.
-# Override with env vars for faster iteration during development.
-REPLAY_START = os.environ.get("REPLAY_START", "2025-04-07")
-REPLAY_END = os.environ.get("REPLAY_END", "2026-03-28")
+# ============================================================================
+# EDITABLE CONSTANTS — the agent changes these, runs, reads metrics.
+# ============================================================================
+NAME          = "baseline_2026"
+CANDIDATES    = "pairs/year2026_candidates_top100.json"
+REPLAY_START  = "2026-01-02"
+REPLAY_END    = "2026-04-09"
+BAR_CACHE     = "data/bar_cache_2026"
 
-# Bar cache — dramatically speeds up repeated replays by caching Alpaca bars
-BAR_CACHE = os.path.join(ROOT, "data", "bar_cache")
+# Mock server URL — replay always uses parquet-backed mock (same data as lab).
+# Start with: python scripts/mock_alpaca.py --port 8787
+MOCK_URL      = "http://127.0.0.1:8787/v2/stocks/bars"
 
-# Engine mode — "metals" or "snp500" (default).
-# --engine is REQUIRED by the runner, so we must always set it.
-ENGINE = os.environ.get("ENGINE", "snp500")
-if ENGINE == "metals":
-    CONFIG = os.environ.get("CONFIG", os.path.join(ROOT, "config", "metals.toml"))
-    CANDIDATES = os.environ.get("CANDIDATES", os.path.join(ROOT, "trading", "metals_pairs.json"))
-    PIPELINE = os.environ.get("PIPELINE", "force")
-    BAR_CACHE = os.path.join(ROOT, "data", "bar_cache_metals")
-    if REPLAY_START == "2025-04-07":  # only override if not explicitly set
-        REPLAY_START = "2025-07-01"
-else:
-    CONFIG = os.environ.get("CONFIG", os.path.join(ROOT, "config", "pairs.toml"))
-    CANDIDATES = os.environ.get("CANDIDATES", "")
-    PIPELINE = os.environ.get("PIPELINE", "")
-
-# ---------------------------------------------------------------------------
-# Step 1: Build (if needed)
-# ---------------------------------------------------------------------------
-
-print("=== BUILD ===")
-t_build_start = time.time()
-
-result = subprocess.run(
-    ["cargo", "build", "--release", "-p", "openquant-runner"],
-    cwd=ENGINE,
-    capture_output=True,
-    text=True,
+# One-sentence prediction — written BEFORE running.
+HYPOTHESIS    = (
+    "Baseline: lab top-100 candidates through Rust picker (lab pipeline, "
+    "top_k=40) on Jan-Apr 2026 should reproduce +$3,399 / 73.7% win."
 )
+# ============================================================================
 
-build_time = time.time() - t_build_start
 
-if result.returncode != 0:
-    print("BUILD FAILED")
-    print(result.stderr[-3000:] if len(result.stderr) > 3000 else result.stderr)
-    print()
-    print("---")
-    print("avg_bps:      0.0")
-    print("trades:       0")
-    print("sharpe:       0.0")
-    print("win_rate:     0.0")
-    print("net_pnl_bps:  0.0")
-    print("max_dd_bps:   0.0")
-    print("build_secs:   %.1f" % build_time)
-    print("replay_secs:  0.0")
-    print("status:       build_failed")
-    sys.exit(1)
-
-print(f"Build OK ({build_time:.1f}s)")
-
-# ---------------------------------------------------------------------------
-# Step 2: Run replay
-# ---------------------------------------------------------------------------
-
-print(f"=== REPLAY ({REPLAY_START} to {REPLAY_END}) ===")
-t_replay_start = time.time()
-
-replay_log_path = os.path.join(ROOT, "autoresearch", "replay.log")
-
-with open(replay_log_path, "w") as log_file:
-    cmd = [RUNNER, "replay", "--engine", ENGINE, "--config", CONFIG,
-           "--start", REPLAY_START, "--end", REPLAY_END,
-           "--bar-cache", BAR_CACHE]
-    if CANDIDATES:
-        cmd += ["--candidates", CANDIDATES]
-    if PIPELINE:
-        cmd += ["--pipeline", PIPELINE]
-    print(f"CMD: {' '.join(cmd)}")
-    proc = subprocess.run(
-        cmd,
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=log_file,
+def build():
+    """Build the runner. Returns (ok, seconds)."""
+    t0 = time.time()
+    r = subprocess.run(
+        ["cargo", "build", "--release", "-p", "openquant-runner"],
+        cwd=ENGINE_DIR, capture_output=True, text=True,
     )
+    secs = time.time() - t0
+    if r.returncode != 0:
+        print("BUILD FAILED", file=sys.stderr)
+        print(r.stderr[-2000:], file=sys.stderr)
+    return r.returncode == 0, secs
 
-replay_time = time.time() - t_replay_start
-print(f"Replay finished ({replay_time:.1f}s, exit code {proc.returncode})")
 
-# ---------------------------------------------------------------------------
-# Step 3: Parse EXIT lines for metrics
-# ---------------------------------------------------------------------------
+def replay():
+    """Run the replay. Returns (log_path, seconds, exit_code)."""
+    log_path = ROOT / "autoresearch" / "replay.log"
+    t0 = time.time()
+    env = os.environ.copy()
+    env["ALPACA_DATA_URL"] = MOCK_URL
 
-print("=== METRICS ===")
+    cmd = [
+        str(RUNNER), "replay", "--engine", "snp500",
+        "--start", REPLAY_START, "--end", REPLAY_END,
+        "--candidates", CANDIDATES,
+        "--bar-cache", BAR_CACHE,
+    ]
+    print(f"CMD: {' '.join(cmd)}", file=sys.stderr)
+    with open(log_path, "w") as f:
+        subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=f, env=env)
+    return log_path, time.time() - t0
 
-exits = []
-try:
-    with open(replay_log_path) as f:
-        for line in f:
-            if "pairs: EXIT" in line and "net_bps=" in line:
-                m = re.search(r'net_bps="([^"]+)"', line)
-                if m:
-                    exits.append(float(m.group(1)))
-except FileNotFoundError:
-    pass
 
-if not exits:
-    print("No trades found in replay log.")
+def parse_trades(log_path):
+    """Parse EXIT lines from engine log. Returns list of (pair, bps, reason)."""
+    trades = []
+    try:
+        for line in open(log_path):
+            if "pairs: EXIT" not in line:
+                continue
+            mp = re.search(r'pair="([^"]+)"', line)
+            mb = re.search(r'net_bps="([^"]+)"', line)
+            mr = re.search(r'exit="([^"]+)"', line)
+            if mp and mb:
+                trades.append((
+                    mp.group(1),
+                    float(mb.group(1)),
+                    mr.group(1) if mr else "?",
+                ))
+    except FileNotFoundError:
+        pass
+    return trades
+
+
+def compute_metrics(trades):
+    """Compute metrics from trade list."""
+    if not trades:
+        return dict(trades=0, wins=0, win_rate=0, total_bps=0, avg_bps=0,
+                    sharpe=0, max_dd_bps=0, status="no_trades")
+    n = len(trades)
+    bps_list = [t[1] for t in trades]
+    wins = sum(1 for b in bps_list if b > 0)
+    total = sum(bps_list)
+    avg = total / n
+    if n > 1:
+        var = sum((b - avg) ** 2 for b in bps_list) / (n - 1)
+        sharpe = avg / (var ** 0.5) if var > 0 else 0
+    else:
+        sharpe = 0
+    cum = peak = dd = 0
+    for b in bps_list:
+        cum += b
+        peak = max(peak, cum)
+        dd = max(dd, peak - cum)
+    reasons = {}
+    for _, _, r in trades:
+        reasons[r] = reasons.get(r, 0) + 1
+    return dict(trades=n, wins=wins, win_rate=100 * wins / n, total_bps=total,
+                avg_bps=avg, sharpe=sharpe, max_dd_bps=-dd, status="ok",
+                reasons=reasons)
+
+
+def append_results_tsv(m, build_secs, replay_secs):
+    header = "name\tstart\tend\ttrades\twin_rate\ttotal_bps\tsharpe\thypothesis\n"
+    if not RESULTS_TSV.exists():
+        RESULTS_TSV.write_text(header)
+    row = (f"{NAME}\t{REPLAY_START}\t{REPLAY_END}\t{m['trades']}\t"
+           f"{m['win_rate']:.1f}\t{m['total_bps']:.0f}\t{m['sharpe']:.2f}\t"
+           f"{HYPOTHESIS}\n")
+    with open(RESULTS_TSV, "a") as f:
+        f.write(row)
+
+
+def append_notebook(m, build_secs, replay_secs):
+    if not NOTEBOOK.exists():
+        NOTEBOOK.write_text("# OpenQuant Autoresearch NOTEBOOK\n\nAppend-only experiment log.\n")
+    entry = f"""
+---
+
+## {NAME} ({datetime.now().isoformat(timespec='seconds')})
+
+- **candidates**: `{CANDIDATES}`
+- **window**: {REPLAY_START} → {REPLAY_END}
+- **hypothesis**: {HYPOTHESIS}
+- **trades**: {m['trades']} (W/L: {m['wins']}/{m['trades']-m['wins']}, {m['win_rate']:.1f}%)
+- **total P&L**: {m['total_bps']:+.0f} bps
+- **sharpe**: {m['sharpe']:.2f}
+- **max drawdown**: {m['max_dd_bps']:.0f} bps
+- **build**: {build_secs:.1f}s, replay: {replay_secs:.1f}s
+"""
+    with open(NOTEBOOK, "a") as f:
+        f.write(entry)
+
+
+def main():
+    print(f"=== {NAME} ===", file=sys.stderr)
+    print(f"hypothesis: {HYPOTHESIS}", file=sys.stderr)
+
+    ok, build_secs = build()
+    if not ok:
+        print("---")
+        print("status:       build_failed")
+        return
+
+    log_path, replay_secs = replay()
+    trades = parse_trades(log_path)
+    m = compute_metrics(trades)
+
+    # Append to results.tsv and NOTEBOOK.md
+    append_results_tsv(m, build_secs, replay_secs)
+    append_notebook(m, build_secs, replay_secs)
+
+    # Exit reasons
+    if "reasons" in m:
+        for r, c in sorted(m["reasons"].items()):
+            print(f"  {r}: {c}", file=sys.stderr)
+
+    # Canonical metrics footer — agents read this from run.log
     print()
     print("---")
-    print("avg_bps:      0.0")
-    print("trades:       0")
-    print("sharpe:       0.0")
-    print("win_rate:     0.0")
-    print("net_pnl_bps:  0.0")
-    print("max_dd_bps:   0.0")
-    print("build_secs:   %.1f" % build_time)
-    print("replay_secs:  %.1f" % replay_time)
-    print("status:       no_trades")
-    sys.exit(0)
+    print(f"trades:       {m['trades']}")
+    print(f"wins:         {m['wins']}")
+    print(f"win_rate:     {m['win_rate']:.1f}")
+    print(f"total_bps:    {m['total_bps']:.0f}")
+    print(f"avg_bps:      {m['avg_bps']:.1f}")
+    print(f"sharpe:       {m['sharpe']:.2f}")
+    print(f"max_dd_bps:   {m['max_dd_bps']:.0f}")
+    print(f"build_secs:   {build_secs:.1f}")
+    print(f"replay_secs:  {replay_secs:.1f}")
+    print(f"status:       {m['status']}")
 
-# Compute stats
-n = len(exits)
-wins = sum(1 for x in exits if x > 0)
-total_bps = sum(exits)
-avg_bps = total_bps / n
-win_rate = wins / n * 100
 
-# Sharpe — two-pass for numerical stability
-mean = avg_bps
-if n > 1:
-    variance = sum((x - mean) ** 2 for x in exits) / (n - 1)
-    std = variance ** 0.5
-    sharpe = mean / std if std > 0 else 0.0
-else:
-    sharpe = 0.0
-
-# Max drawdown — cumulative P&L peak-to-trough
-cumulative = 0.0
-peak = 0.0
-max_dd = 0.0
-for bps in exits:
-    cumulative += bps
-    if cumulative > peak:
-        peak = cumulative
-    dd = peak - cumulative
-    if dd > max_dd:
-        max_dd = dd
-
-# Count exit reasons
-exit_reasons = {}
-try:
-    with open(replay_log_path) as f:
-        for line in f:
-            if "pairs: EXIT" in line:
-                m = re.search(r'exit="([^"]+)"', line)
-                if m:
-                    reason = m.group(1)
-                    exit_reasons[reason] = exit_reasons.get(reason, 0) + 1
-except FileNotFoundError:
-    pass
-
-# ---------------------------------------------------------------------------
-# Print results (same format as autoresearch's val_bpb output)
-# ---------------------------------------------------------------------------
-
-print()
-for reason, count in sorted(exit_reasons.items()):
-    print(f"  {reason}: {count}")
-print()
-
-print("---")
-print(f"avg_bps:      {avg_bps:.1f}")
-print(f"trades:       {n}")
-print(f"sharpe:       {sharpe:.2f}")
-print(f"win_rate:     {win_rate:.1f}")
-print(f"net_pnl_bps:  {total_bps:.1f}")
-print(f"max_dd_bps:   {-max_dd:.1f}")
-print(f"build_secs:   {build_time:.1f}")
-print(f"replay_secs:  {replay_time:.1f}")
+if __name__ == "__main__":
+    main()

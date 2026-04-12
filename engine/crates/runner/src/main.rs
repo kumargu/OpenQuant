@@ -59,7 +59,7 @@ enum Command {
 enum Engine {
     /// S&P 500 equities — ADF cointegration, GICS sector pairs.
     Snp500,
-    /// Metals — curated structurally-similar pairs, force pipeline (bypasses ADF).
+    /// Metals — curated structurally-similar pairs, lab pipeline (structural gates relaxed).
     Metals,
     // Future: Bitcoin, etc.
 }
@@ -74,15 +74,19 @@ impl Engine {
 
     fn candidates_path(&self) -> Option<&'static str> {
         match self {
-            Engine::Snp500 => None, // uses stock_relationships.json / pair_candidates.json
-            Engine::Metals => Some("trading/metals_pairs.json"),
+            Engine::Snp500 => None, // candidates must be provided via --candidates flag
+            Engine::Metals => Some("pairs/metals_pairs.json"),
         }
     }
 
     fn pipeline(&self) -> &'static str {
+        // All engines use "lab" pipeline — candidates come from quant-lab,
+        // structural hard gates are relaxed, scoring + ranking active.
+        // The "default" pipeline (strict ADF/R²/structural-break gates)
+        // rejects 100% of lab candidates and is not used in production.
         match self {
-            Engine::Snp500 => "default",
-            Engine::Metals => "force",
+            Engine::Snp500 => "lab",
+            Engine::Metals => "lab",
         }
     }
 }
@@ -102,7 +106,7 @@ struct StreamArgs {
     #[arg(long, default_value = "data")]
     data_dir: PathBuf,
 
-    #[arg(long, default_value = "trading")]
+    #[arg(long, default_value = "pairs")]
     trading_dir: PathBuf,
 
     /// Override pair candidates JSON (default: selected by --engine).
@@ -129,7 +133,7 @@ struct ReplayArgs {
     #[arg(long, default_value = "data")]
     data_dir: PathBuf,
 
-    #[arg(long, default_value = "trading")]
+    #[arg(long, default_value = "pairs")]
     trading_dir: PathBuf,
 
     /// Override pair candidates JSON (default: selected by --engine).
@@ -323,13 +327,13 @@ async fn run(
     };
 
     // ── Resolve pipeline config ──
-    let pipeline_cfg = match pipeline_profile.as_str() {
+    let mut pipeline_cfg = match pipeline_profile.as_str() {
         "metals" => {
             info!("using METALS pipeline thresholds");
             PipelineConfig::metals()
         }
-        "force" => {
-            info!("using FORCE pipeline — all pairs pass validation");
+        "lab" => {
+            info!("using LAB pipeline — structural gates relaxed, scoring + ranking active");
             PipelineConfig::force()
         }
         "default" | "" => PipelineConfig::default(),
@@ -338,6 +342,12 @@ async fn run(
             std::process::exit(1);
         }
     };
+    // Overlay the preserve_input_order flag from TOML [pair_picker]. Defaults
+    // to false, so existing profiles are unchanged unless the user opts in.
+    pipeline_cfg.preserve_input_order = cfg_file.pair_picker.preserve_input_order;
+    if pipeline_cfg.preserve_input_order {
+        info!("pair-picker preserve_input_order=true (quant-lab rank preserved)");
+    }
 
     // ── Initialize pairs engine ──
     let mut ptc = cfg_file.pairs_trading.clone();
@@ -345,10 +355,20 @@ async fn run(
 
     let history_path = trading_dir.join("pair_trading_history.json");
 
-    let active_pairs_path = trading_dir.join("active_pairs.json");
+    // Pairs file: monthly_pairs_YYYYMM.json (lab provides one per month).
+    // Replay derives YYYYMM from the start date; live/paper uses the current month.
+    let pairs_path = {
+        let yyyymm = match &run_mode {
+            RunMode::Replay { start, .. } => start[..7].replace('-', ""),
+            RunMode::Stream(_) => chrono::Utc::now().format("%Y%m").to_string(),
+        };
+        trading_dir.join(format!("monthly_pairs_{yyyymm}.json"))
+    };
+    let picker_top_k = cfg_file.pair_picker.top_k;
+    info!(top_k = picker_top_k, "pair-picker top_k from config");
     let mut pairs_engine = match &run_mode {
         RunMode::Replay { start, .. } => {
-            // Always generate pairs from pair-picker (no stale active_pairs.json).
+            // Always generate pairs from pair-picker (no stale pairs file).
             // Uses only data available before the replay start date (no look-ahead).
             let price_end =
                 chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").expect("invalid start date");
@@ -360,7 +380,7 @@ async fn run(
                 &alpaca,
                 &trading_dir,
                 price_end,
-                40,
+                picker_top_k,
                 candidates.as_deref(),
                 &pipeline_cfg,
             )
@@ -372,25 +392,25 @@ async fn run(
                     std::process::exit(1);
                 }
             };
-            // Write fresh pairs to active_pairs.json so paper/live can use them,
-            // and so reload() works during weekly regen.
-            if let Err(e) =
-                pair_picker_service::write_active_pairs(&active_pairs, &active_pairs_path)
-            {
-                warn!(error = e.as_str(), "failed to write active_pairs.json");
+            // Write validated pairs so reload() works during weekly regen.
+            if let Err(e) = pair_picker_service::write_active_pairs(&active_pairs, &pairs_path) {
+                warn!(error = %e, path = %pairs_path.display(), "failed to write pairs file");
             }
             let configs = pair_picker_service::to_pair_configs(&active_pairs);
             let mut engine = PairsEngine::from_configs(configs, &history_path, ptc);
-            engine.set_active_pairs_path(active_pairs_path.clone());
+            engine.set_pairs_path(pairs_path.clone());
             engine
         }
         RunMode::Stream(_) => {
-            if !active_pairs_path.exists() {
-                error!("no active_pairs.json found — run pair-picker first");
+            if !pairs_path.exists() {
+                error!(
+                    path = %pairs_path.display(),
+                    "no pairs file found — place a monthly_pairs_YYYYMM.json from quant-lab in pairs/"
+                );
                 std::process::exit(1);
             }
-            info!(path = %active_pairs_path.display(), "loading active pairs from JSON");
-            PairsEngine::from_active_pairs(&active_pairs_path, &history_path, vec![], ptc, false)
+            info!(path = %pairs_path.display(), "loading pairs from file");
+            PairsEngine::from_active_pairs(&pairs_path, &history_path, vec![], ptc, false)
         }
     };
 
@@ -496,6 +516,7 @@ async fn run(
                 cache: cache.as_ref(),
                 candidates: candidates.as_deref(),
                 pipeline_cfg: &pipeline_cfg,
+                picker_top_k,
             };
             run_replay_bars(&alpaca, &mut pairs_engine, symbols, &start, &end, &ctx).await;
         }
@@ -570,6 +591,7 @@ struct ReplayContext<'a> {
     cache: Option<&'a bar_cache::BarCache>,
     candidates: Option<&'a std::path::Path>,
     pipeline_cfg: &'a PipelineConfig,
+    picker_top_k: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -720,30 +742,31 @@ async fn run_replay_bars(
         // Weekly pair regeneration: re-run pair-picker every 7 days
         // using only data available at that point (no look-ahead).
         //
-        // Uses write-then-reload: pair-picker writes active_pairs.json,
-        // then engine.reload() merges new pairs in while preserving open positions.
-        // Open positions in removed pairs get tightened stops for graceful exit.
+        // Weekly pair regeneration: re-run pair-picker every 7 days
+        // using only data available at that point (no look-ahead).
+        // Writes monthly_pairs file, then engine.reload() merges new pairs
+        // in while preserving open positions.
         if (day - last_picker_run).num_days() >= 7 {
             info!(day = day_start.as_str(), "regenerating pairs (weekly)");
             match pair_picker_service::generate_pairs_with_config(
                 alpaca,
                 ctx.trading_dir,
                 day,
-                40,
+                ctx.picker_top_k,
                 ctx.candidates,
                 ctx.pipeline_cfg,
             )
             .await
             {
                 Ok(active_pairs) => {
-                    // Write active_pairs.json so reload() can pick it up
-                    let ap_path = ctx.trading_dir.join("active_pairs.json");
-                    if let Err(e) = pair_picker_service::write_active_pairs(&active_pairs, &ap_path)
+                    let yyyymm = day.format("%Y%m").to_string();
+                    let pairs_file = ctx.trading_dir.join(format!("monthly_pairs_{yyyymm}.json"));
+                    if let Err(e) =
+                        pair_picker_service::write_active_pairs(&active_pairs, &pairs_file)
                     {
-                        warn!(error = e.as_str(), "failed to write active_pairs.json");
+                        warn!(error = e.as_str(), "failed to write monthly pairs file");
                     } else {
-                        // Ensure engine knows the path (from_configs leaves it None)
-                        engine.set_active_pairs_path(ap_path);
+                        engine.set_pairs_path(pairs_file);
                         let old_count = engine.pair_count();
                         let old_open = engine.open_position_count();
                         engine.reload();

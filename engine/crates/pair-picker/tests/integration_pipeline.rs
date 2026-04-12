@@ -3,7 +3,6 @@
 //! Tests the full flow: candidates → graph filter → validate → write active_pairs.json.
 //! Uses synthetic price data — no external dependencies.
 
-use pair_picker::lockfile;
 use pair_picker::pipeline::{self, InMemoryPrices, MAX_VALIDATION_WINDOW};
 use pair_picker::types::{ActivePairsFile, PairCandidate};
 use std::collections::HashMap;
@@ -202,44 +201,6 @@ fn test_etf_component_pair_rejected_before_validation() {
 
     assert!(!results[0].passed);
     assert!(results[0].etf_excluded, "should be ETF-excluded");
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Lock file lifecycle
-// ─────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_lock_file_prevents_second_run() {
-    let tmp = TempDir::new().unwrap();
-
-    // No lock → has_run_today returns false
-    assert!(
-        !lockfile::has_run_today(tmp.path()),
-        "should not have run yet"
-    );
-
-    // Create lock
-    lockfile::create_lock(tmp.path()).unwrap();
-
-    // Lock exists → has_run_today returns true
-    assert!(
-        lockfile::has_run_today(tmp.path()),
-        "should detect today's lock"
-    );
-}
-
-#[test]
-fn test_lock_file_cleanup() {
-    let tmp = TempDir::new().unwrap();
-
-    // Create production locks for old dates (not test mode — cleanup skips test locks)
-    lockfile::create_lock_for_date(tmp.path(), "20260101", false).unwrap();
-    lockfile::create_lock_for_date(tmp.path(), "20260102", false).unwrap();
-    lockfile::create_lock_for_date(tmp.path(), "20260103", false).unwrap();
-
-    // Cleanup keeps last 7 days from today
-    let removed = lockfile::cleanup_old_locks(tmp.path()).unwrap();
-    assert!(removed >= 3, "should remove old locks (removed {removed})");
 }
 
 // ─────────────────────────────────────────────────────────────────────

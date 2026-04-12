@@ -1,31 +1,15 @@
-//! Pair Picker — statistical validation for pairs trading candidates.
+//! Pair Picker — statistical validation library for pairs trading candidates.
 //!
-//! Standalone binary that reads candidate pairs, runs statistical validation
-//! (cointegration, half-life, beta stability, ETF exclusion), and writes
-//! `active_pairs.json` for the trading engine.
-//!
-//! ## Architecture
-//!
-//! - Runs as a separate binary, not linked into the trading engine
-//! - Intended to run daily (lock file ensures once-per-day)
-//! - All math in Rust (zero Python dependencies)
-//! - Pluggable price provider (in-memory for tests, API for production)
-//!
-//! ## Usage
-//!
-//! ```text
-//! pair-picker --candidates data/pair_candidates.json --output data/active_pairs.json
-//! pair-picker --check  # exit 0 if already run today, 1 if not
-//! ```
+//! Used by the runner's `pair_picker_service` to validate candidate pairs
+//! from quant-lab against structural quality gates (ADF cointegration,
+//! half-life, R², beta stability, ETF exclusion). Lab discovers pairs;
+//! this crate validates them. No standalone binary — all invocation goes
+//! through the runner.
 
 pub mod etf_filter;
-pub mod graph;
-pub mod lockfile;
 pub mod pipeline;
-pub mod regime;
 pub mod scorer;
 pub mod stats;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 pub mod test_utils;
-pub mod thompson;
 pub mod types;

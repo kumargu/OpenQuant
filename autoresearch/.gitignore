@@ -19,8 +19,7 @@ AGENTS.md
 # Experimental code/artifacts
 dev/
 
-# Autoresearch experiment artifacts
-results.tsv
+# Autoresearch experiment artifacts (keep results.tsv — it's append-only Karpathy output)
 run.log
 replay.log
 
