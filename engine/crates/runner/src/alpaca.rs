@@ -2,6 +2,7 @@
 //!
 //! Pure Rust, no Python. Reads API keys from .env file.
 
+use chrono::Timelike;
 use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{error, info};
@@ -91,65 +92,62 @@ impl AlpacaClient {
         Ok(Self::new(api_key, api_secret))
     }
 
-    /// Fetch daily bars for a list of symbols, last N days.
-    /// Fetch daily bars for explicit date range.
-    /// Used by pair-picker in replay mode to avoid look-ahead bias.
-    /// Returns (symbol, close_price) per bar — no timestamp adjustment (raw prices for stats).
-    pub async fn fetch_daily_bars_range(
-        &self,
-        symbols: &[String],
-        start: &str, // "2025-09-01"
-        end: &str,   // "2026-01-02"
-    ) -> Result<HashMap<String, Vec<f64>>, String> {
-        let mut by_symbol: HashMap<String, Vec<(i64, f64)>> = HashMap::new();
+    // ── RTH session filter (13:30–20:00 UTC ≈ 9:30–16:00 EDT) ──
+    // Must match quant-lab's aggregation so pair-picker, engine warmup,
+    // and lab all compute statistics on the same daily close prices.
+    // See CLAUDE.md: "one data source for everything — 1-min IEX bars."
+    const RTH_START_MINUTES: i64 = 13 * 60 + 30; // 13:30 UTC
+    const RTH_END_MINUTES: i64 = 20 * 60;        // 20:00 UTC
 
-        for chunk in symbols.chunks(50) {
-            let symbols_param = chunk.join(",");
-            let response = self
-                .http
-                .get(&data_url())
-                .header("APCA-API-KEY-ID", &self.api_key)
-                .header("APCA-API-SECRET-KEY", &self.api_secret)
-                .query(&[
-                    ("symbols", symbols_param.as_str()),
-                    ("timeframe", "1Day"),
-                    ("start", start),
-                    ("end", end),
-                    ("limit", "10000"),
-                    ("feed", "iex"),
-                ])
-                .send()
-                .await
-                .map_err(|e| format!("HTTP request failed: {e}"))?;
+    /// Aggregate 1-min bars to daily RTH close (last tick per session day).
+    /// Groups by (symbol, calendar date), filters to RTH, takes last close.
+    fn aggregate_to_daily(
+        raw: &HashMap<String, Vec<AlpacaBar>>,
+    ) -> HashMap<String, Vec<(i64, f64)>> {
+        let mut by_symbol: HashMap<String, std::collections::BTreeMap<String, (i64, f64)>> =
+            HashMap::new();
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(format!("Alpaca data API error {status}: {body}"));
-            }
-
-            let data: AlpacaBarsResponse = response
-                .json()
-                .await
-                .map_err(|e| format!("JSON parse failed: {e}"))?;
-
-            for (symbol, bars) in &data.bars {
-                for bar in bars {
-                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
-                        by_symbol
-                            .entry(symbol.clone())
-                            .or_default()
-                            .push((dt.timestamp_millis(), bar.c));
+        for (symbol, bars) in raw {
+            let day_map = by_symbol.entry(symbol.clone()).or_default();
+            for bar in bars {
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
+                    let minutes = dt.hour() as i64 * 60 + dt.minute() as i64;
+                    if minutes < Self::RTH_START_MINUTES || minutes >= Self::RTH_END_MINUTES {
+                        continue;
+                    }
+                    let date_key = dt.format("%Y-%m-%d").to_string();
+                    let ts_ms = dt.timestamp_millis();
+                    let entry = day_map.entry(date_key).or_insert((ts_ms, bar.c));
+                    if ts_ms >= entry.0 {
+                        *entry = (ts_ms, bar.c);
                     }
                 }
             }
         }
 
-        // Sort each symbol's bars by timestamp, return just close prices
-        let result: HashMap<String, Vec<f64>> = by_symbol
+        by_symbol
             .into_iter()
-            .map(|(sym, mut bars)| {
-                bars.sort_by_key(|(ts, _)| *ts);
+            .map(|(sym, days)| {
+                let bars: Vec<(i64, f64)> = days.into_values().collect();
+                (sym, bars)
+            })
+            .collect()
+    }
+
+    /// Fetch daily bars by aggregating 1-min IEX bars to RTH daily close.
+    /// Used by pair-picker — returns ordered close prices per symbol.
+    pub async fn fetch_daily_bars_range(
+        &self,
+        symbols: &[String],
+        start: &str,
+        end: &str,
+    ) -> Result<HashMap<String, Vec<f64>>, String> {
+        let raw = self.fetch_minute_bars_raw(symbols, start, end).await?;
+        let aggregated = Self::aggregate_to_daily(&raw);
+
+        let result: HashMap<String, Vec<f64>> = aggregated
+            .into_iter()
+            .map(|(sym, bars)| {
                 let prices: Vec<f64> = bars.into_iter().map(|(_, c)| c).collect();
                 (sym, prices)
             })
@@ -160,11 +158,13 @@ impl AlpacaClient {
             bars = result.values().map(|v| v.len()).sum::<usize>(),
             start,
             end,
-            "fetched daily bars range for pair-picker"
+            "fetched daily bars from 1-min (RTH aggregated) for pair-picker"
         );
         Ok(result)
     }
 
+    /// Fetch daily bars for engine warmup by aggregating 1-min IEX bars.
+    /// Returns (symbol, timestamp_ms, close) with timestamp at market close.
     pub async fn fetch_daily_bars(
         &self,
         symbols: &[String],
@@ -172,49 +172,22 @@ impl AlpacaClient {
     ) -> Result<Vec<(String, i64, f64)>, String> {
         let end = chrono::Utc::now();
         let start = end - chrono::Duration::days(lookback_days as i64);
-        let mut all_bars = Vec::new();
+        let start_str = start.format("%Y-%m-%d").to_string();
+        let end_str = end.format("%Y-%m-%d").to_string();
 
-        for chunk in symbols.chunks(50) {
-            let symbols_param = chunk.join(",");
-            let response = self
-                .http
-                .get(&data_url())
-                .header("APCA-API-KEY-ID", &self.api_key)
-                .header("APCA-API-SECRET-KEY", &self.api_secret)
-                .query(&[
-                    ("symbols", symbols_param.as_str()),
-                    ("timeframe", "1Day"),
-                    ("start", &start.format("%Y-%m-%d").to_string()),
-                    ("end", &end.format("%Y-%m-%d").to_string()),
-                    ("limit", "10000"),
-                    ("feed", "iex"),
-                ])
-                .send()
-                .await
-                .map_err(|e| format!("HTTP request failed: {e}"))?;
+        let raw = self.fetch_minute_bars_raw(symbols, &start_str, &end_str).await?;
+        let aggregated = Self::aggregate_to_daily(&raw);
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(format!("Alpaca data API error {status}: {body}"));
-            }
-
-            let data: AlpacaBarsResponse = response
-                .json()
-                .await
-                .map_err(|e| format!("JSON parse failed: {e}"))?;
-
-            // Alpaca 1Day bars use midnight ET as timestamp (e.g., 05:00 UTC for EST).
-            // Adjust to market close (16:00 ET = +16h) so the engine's
-            // is_daily_close check (et_minutes >= 950) recognizes them.
-            const MIDNIGHT_TO_CLOSE_MS: i64 = 16 * 3600 * 1000; // +16h
-            for (symbol, bars) in &data.bars {
-                for bar in bars {
-                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
-                        let close_ts = dt.timestamp_millis() + MIDNIGHT_TO_CLOSE_MS;
-                        all_bars.push((symbol.clone(), close_ts, bar.c));
-                    }
-                }
+        // Adjust timestamp to 16:00 ET (market close) so the engine's
+        // is_daily_close check recognizes warmup bars.
+        const CLOSE_HOUR_UTC: i64 = 20; // 16:00 ET (EDT) = 20:00 UTC
+        let mut all_bars: Vec<(String, i64, f64)> = Vec::new();
+        for (symbol, days) in &aggregated {
+            for &(ts_ms, close) in days {
+                // Snap timestamp to 20:00 UTC of that day
+                let day_start = ts_ms / 86_400_000 * 86_400_000;
+                let close_ts = day_start + CLOSE_HOUR_UTC * 3600 * 1000;
+                all_bars.push((symbol.clone(), close_ts, close));
             }
         }
 
@@ -222,7 +195,7 @@ impl AlpacaClient {
         info!(
             symbols = symbols.len(),
             bars = all_bars.len(),
-            "fetched daily bars"
+            "fetched daily bars from 1-min (RTH aggregated) for warmup"
         );
         Ok(all_bars)
     }

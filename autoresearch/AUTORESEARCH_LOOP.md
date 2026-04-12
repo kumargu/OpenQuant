@@ -30,10 +30,18 @@ another Python file, you're recreating the harness abstraction. Don't.
 
 ---
 
+## Data rule: 1-min IEX bars everywhere
+
+All daily close prices — in quant-lab, in the Rust pair-picker, in engine
+warmup, in autoresearch — are derived by aggregating 1-min Alpaca IEX bars
+to RTH session close (13:30–20:00 UTC). NEVER use Alpaca's `timeframe=1Day`
+endpoint. It produces different close prices (up to $2/bar divergence vs
+1-min aggregation) which causes β/ADF/R² disagreements between systems.
+
 ## The only things autoresearch talks to
 
 1. **Dataset** (read-only)
-   `~/quant-data/bars/v1_sp500_2025-2026_1min/*.parquet`
+   `~/quant-data/bars/v2_sp500_2025-2026_1min_adjusted/*.parquet`
    Accessed via the small `autoresearch/dataset.py` reader. Never written.
 
 2. **Oracle binary** (Rust)
