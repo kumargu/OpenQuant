@@ -328,8 +328,8 @@ async fn run(
             info!("using METALS pipeline thresholds");
             PipelineConfig::metals()
         }
-        "force" => {
-            info!("using FORCE pipeline — all pairs pass validation");
+        "force" | "lab" => {
+            info!("using LAB pipeline — structural gates relaxed, scoring + ranking active");
             PipelineConfig::force()
         }
         "default" | "" => PipelineConfig::default(),
