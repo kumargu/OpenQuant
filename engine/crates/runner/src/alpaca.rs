@@ -53,6 +53,10 @@ pub struct AlpacaBar {
     pub l: f64,
     pub c: f64,
     pub v: f64,
+    #[serde(default)]
+    pub n: Option<i64>,
+    #[serde(default)]
+    pub vw: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

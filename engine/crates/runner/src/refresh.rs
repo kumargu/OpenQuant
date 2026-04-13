@@ -171,12 +171,20 @@ fn write_parquet(path: &Path, cols: &BarColumns) -> Result<(), String> {
     )
     .map_err(|e| format!("batch: {e}"))?;
 
-    let file = std::fs::File::create(path).map_err(|e| format!("create: {e}"))?;
+    // Atomic write: write to .tmp, then rename. If we crash mid-write,
+    // the original parquet is untouched.
+    let tmp_path = path.with_extension("parquet.tmp");
+    let file = std::fs::File::create(&tmp_path).map_err(|e| format!("create tmp: {e}"))?;
+
+    let props = parquet::file::properties::WriterProperties::builder()
+        .set_compression(parquet::basic::Compression::SNAPPY)
+        .build();
     let mut writer =
-        ArrowWriter::try_new(file, schema, None).map_err(|e| format!("writer: {e}"))?;
+        ArrowWriter::try_new(file, schema, Some(props)).map_err(|e| format!("writer: {e}"))?;
     writer.write(&batch).map_err(|e| format!("write: {e}"))?;
     writer.close().map_err(|e| format!("close: {e}"))?;
 
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("rename: {e}"))?;
     Ok(())
 }
 
@@ -191,7 +199,8 @@ fn micros_to_hm(us: i64) -> (i64, i64) {
 /// Convert unix microseconds to a date string "YYYY-MM-DD".
 fn micros_to_date(us: i64) -> String {
     let secs = us / 1_000_000;
-    let dt = chrono::DateTime::from_timestamp(secs, 0).unwrap();
+    let dt =
+        chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
     dt.format("%Y-%m-%d").to_string()
 }
 
@@ -248,8 +257,8 @@ fn alpaca_bars_to_columns(bars: &[AlpacaBar]) -> BarColumns {
             low.push(bar.l);
             close.push(bar.c);
             volume.push(bar.v as i64);
-            trade_count.push(0i64); // Alpaca bars don't include trade_count
-            vwap.push(0.0); // Not available from REST bars
+            trade_count.push(bar.n.unwrap_or(0));
+            vwap.push(bar.vw.unwrap_or(0.0));
         }
     }
 
@@ -462,8 +471,12 @@ pub async fn refresh_all(
 }
 
 /// Resolve the quant-data bars directory.
+/// Override with `QUANT_DATA_BARS_DIR` env var.
 pub fn default_bars_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/gulshan".to_string());
+    if let Ok(dir) = std::env::var("QUANT_DATA_BARS_DIR") {
+        return PathBuf::from(dir);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join("quant-data/bars/v2_sp500_2025-2026_1min_adjusted")
 }
 
@@ -592,6 +605,8 @@ mod tests {
                 l: 99.0,
                 c: 100.5,
                 v: 1000.0,
+                n: Some(50),
+                vw: Some(100.3),
             },
             AlpacaBar {
                 t: "2026-04-07T13:31:00Z".to_string(),
@@ -600,6 +615,8 @@ mod tests {
                 l: 99.5,
                 c: 101.0,
                 v: 2000.0,
+                n: Some(75),
+                vw: Some(100.8),
             },
         ];
         let (ts, _o, _h, _l, c, v, _tc, _vw) = alpaca_bars_to_columns(&bars);
