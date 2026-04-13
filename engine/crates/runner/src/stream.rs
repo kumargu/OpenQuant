@@ -140,9 +140,26 @@ async fn run_stream(
 
     info!(symbols = symbols.len(), "subscribed to minute bars");
 
-    // Read messages forever — each bar is fed to the channel
-    while let Some(msg) = read.next().await {
-        let msg = msg.map_err(|e| format!("read error: {e}"))?;
+    // Read messages forever — each bar is fed to the channel.
+    // Timeout after 90s of silence: if no message (not even a ping) arrives
+    // in 90 seconds, assume the connection is dead and reconnect. Alpaca
+    // sends bars every minute for 65 symbols, so 90s of total silence
+    // is a strong signal the connection is zombie.
+    let read_timeout = tokio::time::Duration::from_secs(90);
+    loop {
+        let msg = match tokio::time::timeout(read_timeout, read.next()).await {
+            Ok(Some(msg)) => msg.map_err(|e| format!("read error: {e}"))?,
+            Ok(None) => {
+                // Stream ended normally
+                info!("stream ended (no more messages)");
+                return Ok(());
+            }
+            Err(_) => {
+                // Timeout — no message in 90s, connection is zombie
+                warn!("no message from stream in 90s — assuming dead connection");
+                return Err("read timeout (90s)".into());
+            }
+        };
 
         let text = match msg {
             Message::Text(t) => t.to_string(),
@@ -201,6 +218,5 @@ async fn run_stream(
             }
         }
     }
-
-    Ok(())
+    // loop never exits normally — only via return in timeout/error/end handlers
 }
