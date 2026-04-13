@@ -199,8 +199,7 @@ fn micros_to_hm(us: i64) -> (i64, i64) {
 /// Convert unix microseconds to a date string "YYYY-MM-DD".
 fn micros_to_date(us: i64) -> String {
     let secs = us / 1_000_000;
-    let dt =
-        chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
+    let dt = chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
     dt.format("%Y-%m-%d").to_string()
 }
 
