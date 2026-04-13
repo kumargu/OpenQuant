@@ -18,6 +18,7 @@ mod alpaca;
 mod bar_cache;
 mod earnings;
 mod pair_picker_service;
+pub mod refresh;
 mod stream;
 
 use alpaca::ExecutionMode;
@@ -310,6 +311,26 @@ async fn run(
             std::process::exit(1);
         }
     };
+
+    // ── Refresh quant-data before anything else ──
+    // Brings parquet bars up to today, checks contiguity, fixes gaps.
+    {
+        let bars_dir = refresh::default_bars_dir();
+        if bars_dir.exists() {
+            let target = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            info!(target = target.as_str(), "refreshing quant-data bars");
+            match refresh::refresh_all(&bars_dir, &target, &alpaca).await {
+                Ok(n) if n > 0 => info!(bars = n, "quant-data refreshed"),
+                Ok(_) => info!("quant-data already up to date"),
+                Err(e) => warn!(
+                    error = e.as_str(),
+                    "quant-data refresh failed — continuing with stale data"
+                ),
+            }
+        } else {
+            warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
+        }
+    }
 
     // ── Load config ──
     let cfg_file = match ConfigFile::load(&config_path) {
