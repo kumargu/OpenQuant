@@ -1,5 +1,28 @@
 # OpenQuant — Claude Instructions
 
+## System Architecture
+
+See `ARCHITECTURE.md` in `.claude/projects/` for the full diagram. Quick summary:
+
+```
+quant-data (1-min IEX parquets, immutable)
+    │                          │
+    ▼                          ▼
+quant-lab (Python)          OpenQuant (Rust)
+DISCOVERS pairs             VALIDATES + TRADES pairs
+  train.py scans 124K        pair-picker: ADF, R², HL, β
+  ranks by total_bps         scores top-40 by structural quality
+  exports top-100             PairsEngine trades on 1-min bars
+    │                            │
+    └── monthly_pairs_YYYYMM.json ──┘
+```
+
+- **Data**: all daily closes from 1-min IEX bars (13:30-20:00 UTC). Never `timeframe=1Day`.
+- **Lab discovers, Rust validates**: lab ranks by realized bps → Rust filters structural quality. Both needed.
+- **Replay**: mock server (`scripts/mock_alpaca.py`) serves parquets. `--pipeline lab` for lab candidates.
+- **Live/paper**: real Alpaca 1-min websocket. Reads `monthly_pairs_YYYYMM.json` from `pairs/`.
+- **Baseline**: 3 windows, 124 trades, 73.4% win, +$10,249. Weekly: 7/8 weeks profitable.
+
 ## After creating any PR
 
 1. Start a `/loop 5m` to monitor the PR for review comments
