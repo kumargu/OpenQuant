@@ -1,7 +1,7 @@
 """
-Build the foundation dataset: 1-min OHLCV bars for S&P 500 2025-2026.
+Build the foundation dataset: 1-min OHLCV bars for S&P 500 2024-2026.
 
-Output: ~/quant-data/bars/v1_sp500_2025-2026_1min/
+Output: ~/quant-data/bars/v3_sp500_2024-2026_1min_adjusted/
   AAL.parquet, AAPL.parquet, ... (one file per symbol)
   MANIFEST.json (fetch metadata)
   FAILED.json   (symbols that failed to fetch, if any)
@@ -38,15 +38,15 @@ from dotenv import load_dotenv
 # ── Paths / constants ──
 REPO = Path(__file__).parent.parent
 DATA_DIR = Path.home() / "quant-data"
-DATASET_NAME = "v2_sp500_2025-2026_1min_adjusted"
+DATASET_NAME = "v3_sp500_2024-2026_1min_adjusted"
 BARS_DIR = DATA_DIR / "bars" / DATASET_NAME
 MANIFEST_PATH = BARS_DIR / "MANIFEST.json"
 FAILED_PATH = BARS_DIR / "FAILED.json"
 FULFILLED_PATH = BARS_DIR / "fulfilled.json"
 
 # Date range — we store "everything" and filter at read time
-START_DATE = date(2025, 1, 1)
-END_DATE = date(2026, 4, 10)  # today; the script records actual end time in MANIFEST
+START_DATE = date(2024, 1, 1)
+END_DATE = date.today()  # dynamic; the script records actual end time in MANIFEST
 
 # Symbol source
 SECTORS_JSON = REPO / "data" / "sp500_sectors.json"

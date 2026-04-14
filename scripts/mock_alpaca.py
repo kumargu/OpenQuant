@@ -9,7 +9,7 @@ Endpoint: GET /v2/stocks/bars
 Query:    symbols=A,B,C  timeframe=1Day|1Min  start=YYYY-MM-DD  end=YYYY-MM-DD[TZ]
 Response: {"bars": {"SYM": [{"t": "...", "o":..., "h":..., "l":..., "c":..., "v":...}]}, "next_page_token": null}
 
-Data source: ~/quant-data/bars/v2_sp500_2025-2026_1min_adjusted/{SYMBOL}.parquet
+Data source: ~/quant-data/bars/v3_sp500_2024-2026_1min_adjusted/{SYMBOL}.parquet
 Each parquet holds 1-min OHLCV bars with UTC timestamps.
 
 For 1Min requests we return the raw 1-min bars filtered by [start, end).
@@ -34,7 +34,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pyarrow.parquet as pq
 
-BARS_DIR = Path.home() / "quant-data/bars/v2_sp500_2025-2026_1min_adjusted"
+BARS_DIR = Path.home() / "quant-data/bars/v3_sp500_2024-2026_1min_adjusted"
 
 
 def _parse_dt(s: str) -> datetime:

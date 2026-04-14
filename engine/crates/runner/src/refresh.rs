@@ -606,7 +606,7 @@ pub fn default_bars_dir() -> PathBuf {
         return PathBuf::from(dir);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("quant-data/bars/v2_sp500_2025-2026_1min_adjusted")
+    PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
 }
 
 #[cfg(test)]
