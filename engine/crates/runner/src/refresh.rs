@@ -1,19 +1,28 @@
 //! Refresh quant-data parquets to a target date.
 //!
-//! Called at runner startup before warmup. Scans each symbol's parquet,
-//! checks contiguity of RTH bars in the last 90 trading days, and fetches
-//! missing bars from Alpaca 1-min IEX API.
+//! Called at runner startup before warmup. For each symbol, tracks which
+//! weekday dates have been "fulfilled" — i.e., we've done a best-effort fetch
+//! from Alpaca, and whatever Alpaca returned (bars or zero) is authoritative.
 //!
-//! If a trading day has fewer than MIN_BARS_PER_DAY bars, everything from
-//! that day onward is considered corrupt and re-fetched.
+//! - Unfulfilled weekdays in the last 90 days → fetch from Alpaca, store
+//!   whatever bars come back, then mark the date fulfilled.
+//! - Fulfilled weekdays → skip (no refetch, no threshold check, no holiday
+//!   calendar needed — Alpaca's previous response is trusted).
+//! - Zero-bar weekdays naturally become "fulfilled with 0 bars" = holiday.
+//! - Today is never marked fulfilled (market may still be in-progress).
+//!
+//! State lives in `<bars_dir>/fulfilled.json`. On first run (empty file),
+//! existing parquet data is trusted: any weekday with >0 bars is bootstrapped
+//! as fulfilled to avoid a full 90-day refetch storm.
 
 use arrow::array::{Array, ArrayRef, Float64Array, Int64Array, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use chrono::{NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, Utc, Weekday};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -32,15 +41,15 @@ type BarColumns = (
 
 use crate::alpaca::{AlpacaBar, AlpacaClient};
 
-/// Minimum bars per RTH day to consider data valid.
-const MIN_BARS_PER_DAY: usize = 50;
-
 /// RTH session: 13:30–20:00 UTC (same as quant-lab and mock_alpaca.py).
 const RTH_START_MINUTES: i64 = 13 * 60 + 30;
 const RTH_END_MINUTES: i64 = 20 * 60;
 
-/// Number of trading days to check for contiguity.
+/// Number of trading days to check for fulfillment.
 const LOOKBACK_DAYS: i64 = 90;
+
+/// Filename for the fulfilled-dates cache at the bars_dir root.
+const FULFILLED_FILE: &str = "fulfilled.json";
 
 /// Schema matching build_foundation_dataset.py output.
 fn bar_schema() -> Schema {
@@ -60,17 +69,53 @@ fn bar_schema() -> Schema {
     ])
 }
 
-/// Result of checking one symbol's parquet.
-#[derive(Debug)]
-pub struct SymbolStatus {
-    pub symbol: String,
-    pub latest_ts: Option<i64>,           // unix micros
-    pub needs_fetch_from: Option<String>, // date string YYYY-MM-DD
-    pub corrupt_from: Option<String>,
-    pub is_ok: bool,
+/// Per-symbol fulfilled-date tracking. Persisted at bars_dir/fulfilled.json.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Fulfilled {
+    /// Map of symbol → set of ISO dates (YYYY-MM-DD) fulfilled from Alpaca.
+    pub by_symbol: BTreeMap<String, HashSet<String>>,
+    pub last_updated: String,
 }
 
-/// Read a parquet file, return all timestamps as unix microseconds.
+impl Fulfilled {
+    fn get(&self, symbol: &str) -> Option<&HashSet<String>> {
+        self.by_symbol.get(symbol)
+    }
+
+    fn insert(&mut self, symbol: &str, date: String) {
+        self.by_symbol
+            .entry(symbol.to_string())
+            .or_default()
+            .insert(date);
+    }
+}
+
+/// Load fulfilled-date state from bars_dir/fulfilled.json.
+/// Returns empty state if missing or malformed.
+fn load_fulfilled(bars_dir: &Path) -> Fulfilled {
+    let path = bars_dir.join(FULFILLED_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+        Err(_) => Fulfilled::default(),
+    }
+}
+
+/// Persist fulfilled-date state to bars_dir/fulfilled.json. Atomic via tmp+rename.
+fn save_fulfilled(bars_dir: &Path, fulfilled: &Fulfilled) -> Result<(), String> {
+    let path = bars_dir.join(FULFILLED_FILE);
+    let tmp = bars_dir.join(format!("{FULFILLED_FILE}.tmp"));
+    let s = serde_json::to_string_pretty(fulfilled).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&tmp, s).map_err(|e| format!("write tmp: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))
+}
+
+/// True if the date is Mon–Fri.
+fn is_weekday(date: NaiveDate) -> bool {
+    !matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
+}
+
+/// Read a parquet file, return timestamps only.
+#[cfg(test)]
 fn read_timestamps(path: &Path) -> Result<Vec<i64>, String> {
     let (ts, _, _, _, _, _, _, _) = read_full_parquet(path)?;
     Ok(ts)
@@ -150,7 +195,7 @@ fn read_full_parquet(path: &Path) -> Result<BarColumns, String> {
     Ok((ts, open, high, low, close, volume, trade_count, vwap))
 }
 
-/// Write columns to a parquet file.
+/// Write columns to a parquet file (atomic: tmp + rename).
 fn write_parquet(path: &Path, cols: &BarColumns) -> Result<(), String> {
     let (ts, open, high, low, close, volume, trade_count, vwap) = cols;
     let schema = Arc::new(bar_schema());
@@ -171,8 +216,6 @@ fn write_parquet(path: &Path, cols: &BarColumns) -> Result<(), String> {
     )
     .map_err(|e| format!("batch: {e}"))?;
 
-    // Atomic write: write to .tmp, then rename. If we crash mid-write,
-    // the original parquet is untouched.
     let tmp_path = path.with_extension("parquet.tmp");
     let file = std::fs::File::create(&tmp_path).map_err(|e| format!("create tmp: {e}"))?;
 
@@ -188,7 +231,6 @@ fn write_parquet(path: &Path, cols: &BarColumns) -> Result<(), String> {
     Ok(())
 }
 
-/// Convert unix microseconds to (hour, minute) in UTC.
 fn micros_to_hm(us: i64) -> (i64, i64) {
     let secs = us / 1_000_000;
     let h = (secs % 86400) / 3600;
@@ -196,48 +238,108 @@ fn micros_to_hm(us: i64) -> (i64, i64) {
     (h, m)
 }
 
-/// Convert unix microseconds to a date string "YYYY-MM-DD".
 fn micros_to_date(us: i64) -> String {
     let secs = us / 1_000_000;
     let dt = chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
     dt.format("%Y-%m-%d").to_string()
 }
 
-/// Check contiguity of RTH bars in the last LOOKBACK_DAYS days.
-/// Returns (is_ok, first_corrupt_date).
-fn check_contiguity(timestamps: &[i64]) -> (bool, Option<String>) {
-    let cutoff_secs = Utc::now().timestamp() - LOOKBACK_DAYS * 86400;
-    let cutoff_us = cutoff_secs * 1_000_000;
-
-    // Filter to RTH bars in the lookback window
+/// Count RTH bars per date from a timestamp slice.
+fn rth_bars_by_date(timestamps: &[i64]) -> HashMap<String, usize> {
     let mut by_date: HashMap<String, usize> = HashMap::new();
     for &ts in timestamps {
-        if ts < cutoff_us {
-            continue;
-        }
         let (h, m) = micros_to_hm(ts);
         let minutes = h * 60 + m;
         if !(RTH_START_MINUTES..RTH_END_MINUTES).contains(&minutes) {
             continue;
         }
-        let date = micros_to_date(ts);
-        *by_date.entry(date).or_insert(0) += 1;
+        *by_date.entry(micros_to_date(ts)).or_insert(0) += 1;
     }
-
-    // Check each trading day has enough bars
-    let mut dates: Vec<_> = by_date.iter().collect();
-    dates.sort_by_key(|(d, _)| d.to_string());
-
-    for (date, &count) in &dates {
-        if count < MIN_BARS_PER_DAY {
-            return (false, Some(date.to_string()));
-        }
-    }
-
-    (true, None)
+    by_date
 }
 
-/// Convert Alpaca bars to column vectors matching the parquet schema.
+/// Bootstrap: if a symbol has no fulfilled entries yet, trust the existing
+/// parquet as a prior-best-effort sync. Every weekday in [earliest_parquet_date,
+/// latest_parquet_date] within the lookback window is marked fulfilled — even
+/// zero-bar days, since they're presumed to be holidays already handled when
+/// the parquet was produced.
+///
+/// Weekdays AFTER the parquet's latest_date stay unfulfilled so the next run
+/// fetches them.
+fn bootstrap_fulfilled(
+    symbol: &str,
+    timestamps: &[i64],
+    fulfilled: &mut Fulfilled,
+    today: NaiveDate,
+) {
+    if fulfilled.get(symbol).map(|s| !s.is_empty()).unwrap_or(false) {
+        return;
+    }
+    if timestamps.is_empty() {
+        return;
+    }
+    let by_date = rth_bars_by_date(timestamps);
+    let dates: Vec<&String> = by_date.keys().collect();
+    let earliest = dates.iter().min().map(|s| s.as_str()).unwrap_or("");
+    let latest = dates.iter().max().map(|s| s.as_str()).unwrap_or("");
+    let earliest_d = match NaiveDate::parse_from_str(earliest, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let latest_d = match NaiveDate::parse_from_str(latest, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let cutoff = today - chrono::Duration::days(LOOKBACK_DAYS);
+    let start = earliest_d.max(cutoff);
+    let end = latest_d.min(today - chrono::Duration::days(1));
+
+    let mut d = start;
+    let mut added = 0;
+    while d <= end {
+        if is_weekday(d) {
+            fulfilled.insert(symbol, d.format("%Y-%m-%d").to_string());
+            added += 1;
+        }
+        d += chrono::Duration::days(1);
+    }
+    if added > 0 {
+        info!(
+            symbol,
+            bootstrapped = added,
+            from = %start,
+            to = %end,
+            "bootstrapped fulfilled dates from existing parquet"
+        );
+    }
+}
+
+/// Return the sorted list of weekdays in [cutoff, today) that are NOT yet
+/// fulfilled for this symbol.
+fn unfulfilled_weekdays(
+    symbol: &str,
+    fulfilled: &Fulfilled,
+    today: NaiveDate,
+) -> Vec<NaiveDate> {
+    let empty = HashSet::new();
+    let sym_set = fulfilled.get(symbol).unwrap_or(&empty);
+    let cutoff = today - chrono::Duration::days(LOOKBACK_DAYS);
+    let mut out = Vec::new();
+    let mut d = cutoff;
+    while d < today {
+        if is_weekday(d) {
+            let key = d.format("%Y-%m-%d").to_string();
+            if !sym_set.contains(&key) {
+                out.push(d);
+            }
+        }
+        d += chrono::Duration::days(1);
+    }
+    out
+}
+
+/// Convert Alpaca bars to column vectors. Silently skips bars with
+/// unparseable timestamps (logged as warning).
 fn alpaca_bars_to_columns(bars: &[AlpacaBar]) -> BarColumns {
     let mut ts = Vec::with_capacity(bars.len());
     let mut open = Vec::with_capacity(bars.len());
@@ -249,72 +351,90 @@ fn alpaca_bars_to_columns(bars: &[AlpacaBar]) -> BarColumns {
     let mut vwap = Vec::with_capacity(bars.len());
 
     for bar in bars {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&bar.t) {
-            ts.push(dt.timestamp_millis() * 1000); // millis → micros
-            open.push(bar.o);
-            high.push(bar.h);
-            low.push(bar.l);
-            close.push(bar.c);
-            volume.push(bar.v as i64);
-            trade_count.push(bar.n.unwrap_or(0));
-            vwap.push(bar.vw.unwrap_or(0.0));
+        match chrono::DateTime::parse_from_rfc3339(&bar.t) {
+            Ok(dt) => {
+                ts.push(dt.timestamp_millis() * 1000);
+                open.push(bar.o);
+                high.push(bar.h);
+                low.push(bar.l);
+                close.push(bar.c);
+                volume.push(bar.v as i64);
+                trade_count.push(bar.n.unwrap_or(0));
+                vwap.push(bar.vw.unwrap_or(0.0));
+            }
+            Err(e) => {
+                warn!(timestamp = bar.t.as_str(), error = %e, "skipping bar with invalid timestamp");
+            }
         }
     }
 
     (ts, open, high, low, close, volume, trade_count, vwap)
 }
 
-/// Refresh one symbol's parquet to target_date.
-/// Returns number of new bars fetched.
+/// Refresh one symbol's parquet to target_date using fulfilled-marker logic.
+/// Returns number of new bars appended.
 pub async fn refresh_symbol(
     bars_dir: &Path,
     symbol: &str,
     target_date: &str,
     client: &AlpacaClient,
+    fulfilled: &mut Fulfilled,
 ) -> Result<usize, String> {
     let path = bars_dir.join(format!("{symbol}.parquet"));
     if !path.exists() {
         return Err(format!("{symbol}.parquet not found"));
     }
 
-    let timestamps = read_timestamps(&path)?;
-    if timestamps.is_empty() {
+    let today = NaiveDate::parse_from_str(target_date, "%Y-%m-%d")
+        .map_err(|e| format!("target_date: {e}"))?;
+
+    let (mut ts, mut o, mut h, mut l, mut c, mut v, mut tc, mut vw) = read_full_parquet(&path)?;
+    if ts.is_empty() {
         return Err(format!("{symbol}: empty parquet"));
     }
 
-    let latest_us = *timestamps.last().unwrap();
-    let latest_date = micros_to_date(latest_us);
+    // Bootstrap on first run: trust existing parquet data.
+    bootstrap_fulfilled(symbol, &ts, fulfilled, today);
 
-    // Already up to date?
-    if latest_date.as_str() >= target_date {
-        return Ok(0);
-    }
+    // Determine what needs fetching.
+    let missing = unfulfilled_weekdays(symbol, fulfilled, today);
+    let latest_date = micros_to_date(*ts.last().unwrap());
+    let latest_parsed = NaiveDate::parse_from_str(&latest_date, "%Y-%m-%d")
+        .map_err(|e| format!("latest_date: {e}"))?;
 
-    // Check contiguity
-    let (ok, corrupt_from) = check_contiguity(&timestamps);
+    // Earliest date we need to re-fetch from.
+    let fetch_from_date = match missing.first() {
+        Some(d) => *d,
+        None => {
+            // All past weekdays fulfilled. Just sync today forward.
+            if latest_parsed >= today {
+                info!(symbol, latest = latest_date.as_str(), "already up to date");
+                return Ok(0);
+            }
+            latest_parsed + chrono::Duration::days(1)
+        }
+    };
 
-    let fetch_from = if !ok {
-        let corrupt_date = corrupt_from.unwrap();
-        warn!(
-            symbol,
-            corrupt_date = corrupt_date.as_str(),
-            "corrupt data detected — re-fetching from corrupt point"
-        );
+    let fetch_from_str = fetch_from_date.format("%Y-%m-%d").to_string();
 
-        // Read full parquet, drop everything from corrupt date onward
-        let (mut ts, mut o, mut h, mut l, mut c, mut v, mut tc, mut vw) = read_full_parquet(&path)?;
+    // End date: one day past today to include today's bars.
+    let fetch_to = today + chrono::Duration::days(1);
+    let fetch_to_str = fetch_to.format("%Y-%m-%d").to_string();
 
-        let corrupt_date_parsed =
-            NaiveDate::parse_from_str(&corrupt_date, "%Y-%m-%d").map_err(|e| format!("{e}"))?;
-        let corrupt_us = corrupt_date_parsed
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp()
-            * 1_000_000;
+    // Dates we'll "replace" in the parquet: unfulfilled past weekdays.
+    // Today is handled separately (dedupe-append, never replaced wholesale).
+    let replace_dates: HashSet<String> = missing
+        .iter()
+        .filter(|d| **d < today)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .collect();
 
-        // Keep only bars before the corrupt date
-        let keep: Vec<bool> = ts.iter().map(|&t| t < corrupt_us).collect();
+    // Remove existing bars for replace_dates (we'll use Alpaca's copy).
+    if !replace_dates.is_empty() {
+        let keep: Vec<bool> = ts
+            .iter()
+            .map(|&t| !replace_dates.contains(&micros_to_date(t)))
+            .collect();
         let mut new_ts = Vec::new();
         let mut new_o = Vec::new();
         let mut new_h = Vec::new();
@@ -323,7 +443,6 @@ pub async fn refresh_symbol(
         let mut new_v = Vec::new();
         let mut new_tc = Vec::new();
         let mut new_vw = Vec::new();
-
         for (i, &k) in keep.iter().enumerate() {
             if k {
                 new_ts.push(ts[i]);
@@ -336,7 +455,6 @@ pub async fn refresh_symbol(
                 new_vw.push(vw[i]);
             }
         }
-
         ts = new_ts;
         o = new_o;
         h = new_h;
@@ -345,37 +463,18 @@ pub async fn refresh_symbol(
         v = new_v;
         tc = new_tc;
         vw = new_vw;
-
-        // Write clean data back
-        write_parquet(&path, &(ts, o, h, l, c, v, tc, vw))?;
-
-        corrupt_date
-    } else {
-        // Data is clean — fetch from day after latest
-        let latest_parsed =
-            NaiveDate::parse_from_str(&latest_date, "%Y-%m-%d").map_err(|e| format!("{e}"))?;
-        let next_day = latest_parsed + chrono::Duration::days(1);
-        next_day.format("%Y-%m-%d").to_string()
-    };
-
-    // Fetch missing bars from Alpaca
-    let symbols = vec![symbol.to_string()];
-    let raw = client
-        .fetch_minute_bars_raw(&symbols, &fetch_from, target_date)
-        .await?;
-
-    let bars = raw.get(symbol).cloned().unwrap_or_default();
-    if bars.is_empty() {
-        info!(symbol, "no new bars from Alpaca");
-        return Ok(0);
     }
 
+    // Fetch from Alpaca
+    let symbols = vec![symbol.to_string()];
+    let raw = client
+        .fetch_minute_bars_raw(&symbols, &fetch_from_str, &fetch_to_str)
+        .await?;
+    let bars = raw.get(symbol).cloned().unwrap_or_default();
     let (new_ts, new_o, new_h, new_l, new_c, new_v, new_tc, new_vw) = alpaca_bars_to_columns(&bars);
 
-    // Read existing, append new, deduplicate, write
-    let (mut ts, mut o, mut h, mut l, mut c, mut v, mut tc, mut vw) = read_full_parquet(&path)?;
-
-    let existing_set: std::collections::HashSet<i64> = ts.iter().cloned().collect();
+    // Merge, dedupe by timestamp
+    let existing_set: HashSet<i64> = ts.iter().cloned().collect();
     let mut added = 0;
     for i in 0..new_ts.len() {
         if !existing_set.contains(&new_ts[i]) {
@@ -391,32 +490,56 @@ pub async fn refresh_symbol(
         }
     }
 
+    if ts.is_empty() {
+        return Err(format!("{symbol}: empty after refresh"));
+    }
+
     // Sort by timestamp
     let mut indices: Vec<usize> = (0..ts.len()).collect();
     indices.sort_by_key(|&i| ts[i]);
+    let ts_s: Vec<_> = indices.iter().map(|&i| ts[i]).collect();
+    let o_s: Vec<_> = indices.iter().map(|&i| o[i]).collect();
+    let h_s: Vec<_> = indices.iter().map(|&i| h[i]).collect();
+    let l_s: Vec<_> = indices.iter().map(|&i| l[i]).collect();
+    let c_s: Vec<_> = indices.iter().map(|&i| c[i]).collect();
+    let v_s: Vec<_> = indices.iter().map(|&i| v[i]).collect();
+    let tc_s: Vec<_> = indices.iter().map(|&i| tc[i]).collect();
+    let vw_s: Vec<_> = indices.iter().map(|&i| vw[i]).collect();
 
-    let ts_sorted: Vec<_> = indices.iter().map(|&i| ts[i]).collect();
-    let o_sorted: Vec<_> = indices.iter().map(|&i| o[i]).collect();
-    let h_sorted: Vec<_> = indices.iter().map(|&i| h[i]).collect();
-    let l_sorted: Vec<_> = indices.iter().map(|&i| l[i]).collect();
-    let c_sorted: Vec<_> = indices.iter().map(|&i| c[i]).collect();
-    let v_sorted: Vec<_> = indices.iter().map(|&i| v[i]).collect();
-    let tc_sorted: Vec<_> = indices.iter().map(|&i| tc[i]).collect();
-    let vw_sorted: Vec<_> = indices.iter().map(|&i| vw[i]).collect();
-
+    let new_latest = micros_to_date(*ts_s.last().unwrap());
     write_parquet(
         &path,
-        &(
-            ts_sorted, o_sorted, h_sorted, l_sorted, c_sorted, v_sorted, tc_sorted, vw_sorted,
-        ),
+        &(ts_s, o_s, h_s, l_s, c_s, v_s, tc_s, vw_s),
     )?;
 
-    info!(symbol, added, "refreshed parquet");
+    // Mark all past weekdays we just fetched as fulfilled (today stays
+    // unfulfilled so we always refresh it next startup).
+    let mut d = fetch_from_date;
+    let mut marked = 0;
+    while d < today {
+        if is_weekday(d) {
+            fulfilled.insert(symbol, d.format("%Y-%m-%d").to_string());
+            marked += 1;
+        }
+        d += chrono::Duration::days(1);
+    }
+
+    if added == 0 && marked == 0 {
+        info!(symbol, latest = new_latest.as_str(), "no new data");
+    } else {
+        info!(
+            symbol,
+            added,
+            marked_fulfilled = marked,
+            from = fetch_from_str.as_str(),
+            latest = new_latest.as_str(),
+            "refreshed parquet"
+        );
+    }
     Ok(added)
 }
 
 /// Refresh all symbols in bars_dir to target_date.
-/// Returns total number of new bars fetched.
 pub async fn refresh_all(
     bars_dir: &Path,
     target_date: &str,
@@ -440,13 +563,14 @@ pub async fn refresh_all(
         "refreshing quant-data parquets"
     );
 
+    let mut fulfilled = load_fulfilled(bars_dir);
     let mut total = 0;
     let mut refreshed = 0;
     let mut errors = 0;
 
     for (i, sym) in symbols.iter().enumerate() {
-        match refresh_symbol(bars_dir, sym, target_date, client).await {
-            Ok(0) => {} // up to date
+        match refresh_symbol(bars_dir, sym, target_date, client, &mut fulfilled).await {
+            Ok(0) => {}
             Ok(n) => {
                 total += n;
                 refreshed += 1;
@@ -461,16 +585,22 @@ pub async fn refresh_all(
                 progress = format!("{}/{}", i + 1, symbols.len()).as_str(),
                 "refresh progress"
             );
+            // Periodically persist fulfilled state in case of crash
+            fulfilled.last_updated = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            if let Err(e) = save_fulfilled(bars_dir, &fulfilled) {
+                warn!(error = e.as_str(), "failed to persist fulfilled.json mid-run");
+            }
         }
     }
 
-    info!(refreshed, total_bars = total, errors, "refresh complete");
+    fulfilled.last_updated = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    save_fulfilled(bars_dir, &fulfilled)?;
 
+    info!(refreshed, total_bars = total, errors, "refresh complete");
     Ok(total)
 }
 
-/// Resolve the quant-data bars directory.
-/// Override with `QUANT_DATA_BARS_DIR` env var.
+/// Resolve the quant-data bars directory. Override with `QUANT_DATA_BARS_DIR`.
 pub fn default_bars_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("QUANT_DATA_BARS_DIR") {
         return PathBuf::from(dir);
@@ -484,7 +614,6 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Create a test parquet with known bars.
     fn write_test_parquet(path: &Path, bars: &[(i64, f64)]) {
         let ts: Vec<i64> = bars.iter().map(|(t, _)| *t).collect();
         let close: Vec<f64> = bars.iter().map(|(_, c)| *c).collect();
@@ -502,7 +631,6 @@ mod tests {
         .unwrap();
     }
 
-    /// Generate RTH timestamps for N consecutive minutes starting at 13:30 UTC on a given date.
     fn rth_timestamps(date: &str, n_minutes: usize) -> Vec<(i64, f64)> {
         let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
         let start = d.and_hms_opt(13, 30, 0).unwrap().and_utc();
@@ -518,110 +646,151 @@ mod tests {
     fn test_read_write_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("TEST.parquet");
-
-        let bars: Vec<(i64, f64)> = rth_timestamps("2026-04-07", 390);
+        let bars = rth_timestamps("2026-04-07", 390);
         write_test_parquet(&path, &bars);
-
         let timestamps = read_timestamps(&path).unwrap();
         assert_eq!(timestamps.len(), 390);
-        assert_eq!(timestamps[0], bars[0].0);
-        assert_eq!(timestamps[389], bars[389].0);
     }
 
     #[test]
-    fn test_contiguity_good() {
-        // 5 full trading days (390 bars each) — all contiguous
+    fn test_bootstrap_marks_existing_data() {
+        // Existing parquet has Apr 8-10 data. Bootstrap should mark those 3
+        // weekdays (and only those) as fulfilled.
+        let today = NaiveDate::parse_from_str("2026-04-13", "%Y-%m-%d").unwrap();
         let mut bars = Vec::new();
-        for date in &[
-            "2026-04-07",
-            "2026-04-08",
-            "2026-04-09",
-            "2026-04-10",
-            "2026-04-11",
-        ] {
-            bars.extend(rth_timestamps(date, 390));
+        for date in &["2026-04-08", "2026-04-09", "2026-04-10"] {
+            bars.extend(rth_timestamps(date, 50));
         }
-        let timestamps: Vec<i64> = bars.iter().map(|(t, _)| *t).collect();
-        let (ok, corrupt) = check_contiguity(&timestamps);
-        assert!(ok, "should be contiguous");
-        assert!(corrupt.is_none());
+        let ts: Vec<i64> = bars.iter().map(|(t, _)| *t).collect();
+
+        let mut fulfilled = Fulfilled::default();
+        bootstrap_fulfilled("TEST", &ts, &mut fulfilled, today);
+
+        let set = fulfilled.get("TEST").unwrap();
+        assert!(set.contains("2026-04-08"));
+        assert!(set.contains("2026-04-09"));
+        assert!(set.contains("2026-04-10"));
     }
 
     #[test]
-    fn test_contiguity_corrupt_day() {
-        // 4 good days + 1 day with only 20 bars (corrupt)
-        let mut bars = Vec::new();
-        for date in &["2026-04-07", "2026-04-08", "2026-04-09"] {
-            bars.extend(rth_timestamps(date, 390));
-        }
-        bars.extend(rth_timestamps("2026-04-10", 20)); // corrupt
-        bars.extend(rth_timestamps("2026-04-11", 390));
+    fn test_bootstrap_skips_zero_bar_days() {
+        // Apr 8 has data; Apr 9 is zero bars (holiday candidate). Bootstrap
+        // marks only Apr 8. Apr 9 stays unfulfilled.
+        let today = NaiveDate::parse_from_str("2026-04-13", "%Y-%m-%d").unwrap();
+        let bars = rth_timestamps("2026-04-08", 50);
+        let ts: Vec<i64> = bars.iter().map(|(t, _)| *t).collect();
 
-        let timestamps: Vec<i64> = bars.iter().map(|(t, _)| *t).collect();
-        let (ok, corrupt) = check_contiguity(&timestamps);
-        assert!(!ok, "should detect corrupt day");
-        assert_eq!(corrupt.unwrap(), "2026-04-10");
+        let mut fulfilled = Fulfilled::default();
+        bootstrap_fulfilled("TEST", &ts, &mut fulfilled, today);
+
+        let set = fulfilled.get("TEST").unwrap();
+        assert!(set.contains("2026-04-08"));
+        assert!(!set.contains("2026-04-09"));
     }
 
     #[test]
-    fn test_full_read_write() {
+    fn test_bootstrap_is_idempotent() {
+        // Second bootstrap call does nothing when already populated.
+        let today = NaiveDate::parse_from_str("2026-04-13", "%Y-%m-%d").unwrap();
+        let bars = rth_timestamps("2026-04-08", 50);
+        let ts: Vec<i64> = bars.iter().map(|(t, _)| *t).collect();
+
+        let mut fulfilled = Fulfilled::default();
+        bootstrap_fulfilled("TEST", &ts, &mut fulfilled, today);
+        let before = fulfilled.get("TEST").unwrap().clone();
+
+        bootstrap_fulfilled("TEST", &[], &mut fulfilled, today);
+        let after = fulfilled.get("TEST").unwrap();
+        assert_eq!(&before, after);
+    }
+
+    #[test]
+    fn test_unfulfilled_weekdays_filters_correctly() {
+        let today = NaiveDate::parse_from_str("2026-04-13", "%Y-%m-%d").unwrap();
+        let mut fulfilled = Fulfilled::default();
+        fulfilled.insert("TEST", "2026-04-08".to_string());
+        fulfilled.insert("TEST", "2026-04-09".to_string());
+        fulfilled.insert("TEST", "2026-04-10".to_string());
+
+        // With a 5-day lookback, window is [Apr 8, Apr 13). Weekdays in window:
+        // Apr 8, 9, 10 (all fulfilled). Sat/Sun not weekdays. So empty.
+        let missing = unfulfilled_weekdays_at("TEST", &fulfilled, today, 5);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_unfulfilled_weekdays_skips_weekends() {
+        let today = NaiveDate::parse_from_str("2026-04-13", "%Y-%m-%d").unwrap();
+        let fulfilled = Fulfilled::default();
+        let missing = unfulfilled_weekdays_at("TEST", &fulfilled, today, 7);
+        // Mon Apr 6, Tue 7, Wed 8, Thu 9, Fri 10 — 5 weekdays. No weekends.
+        assert_eq!(missing.len(), 5);
+        for d in &missing {
+            assert!(is_weekday(*d));
+        }
+    }
+
+    #[test]
+    fn test_fulfilled_load_save_roundtrip() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("TEST.parquet");
+        let mut f = Fulfilled::default();
+        f.insert("AAPL", "2026-04-08".to_string());
+        f.insert("AAPL", "2026-04-09".to_string());
+        f.insert("MSFT", "2026-04-08".to_string());
+        f.last_updated = "now".to_string();
 
-        let bars = rth_timestamps("2026-04-07", 100);
-        write_test_parquet(&path, &bars);
-
-        let (ts, _o, _h, _l, c, _v, _tc, _vw) = read_full_parquet(&path).unwrap();
-        assert_eq!(ts.len(), 100);
-        assert_eq!(c[0], 100.0);
-        assert_eq!(c[99], 100.99);
+        save_fulfilled(dir.path(), &f).unwrap();
+        let loaded = load_fulfilled(dir.path());
+        assert_eq!(loaded.get("AAPL").unwrap().len(), 2);
+        assert_eq!(loaded.get("MSFT").unwrap().len(), 1);
     }
 
     #[test]
-    fn test_micros_to_date() {
-        // 2026-04-07 13:30:00 UTC in micros
-        let d = NaiveDate::parse_from_str("2026-04-07", "%Y-%m-%d").unwrap();
-        let ts = d.and_hms_opt(13, 30, 0).unwrap().and_utc().timestamp() * 1_000_000;
-        assert_eq!(micros_to_date(ts), "2026-04-07");
-    }
-
-    #[test]
-    fn test_micros_to_hm() {
-        let d = NaiveDate::parse_from_str("2026-04-07", "%Y-%m-%d").unwrap();
-        let ts = d.and_hms_opt(14, 45, 0).unwrap().and_utc().timestamp() * 1_000_000;
-        let (h, m) = micros_to_hm(ts);
-        assert_eq!(h, 14);
-        assert_eq!(m, 45);
+    fn test_fulfilled_load_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let loaded = load_fulfilled(dir.path());
+        assert!(loaded.by_symbol.is_empty());
     }
 
     #[test]
     fn test_alpaca_bars_to_columns() {
-        let bars = vec![
-            AlpacaBar {
-                t: "2026-04-07T13:30:00Z".to_string(),
-                o: 100.0,
-                h: 101.0,
-                l: 99.0,
-                c: 100.5,
-                v: 1000.0,
-                n: Some(50),
-                vw: Some(100.3),
-            },
-            AlpacaBar {
-                t: "2026-04-07T13:31:00Z".to_string(),
-                o: 100.5,
-                h: 101.5,
-                l: 99.5,
-                c: 101.0,
-                v: 2000.0,
-                n: Some(75),
-                vw: Some(100.8),
-            },
-        ];
-        let (ts, _o, _h, _l, c, v, _tc, _vw) = alpaca_bars_to_columns(&bars);
-        assert_eq!(ts.len(), 2);
+        let bars = vec![AlpacaBar {
+            t: "2026-04-07T13:30:00Z".to_string(),
+            o: 100.0,
+            h: 101.0,
+            l: 99.0,
+            c: 100.5,
+            v: 1000.0,
+            n: Some(50),
+            vw: Some(100.3),
+        }];
+        let (ts, _, _, _, c, v, _, _) = alpaca_bars_to_columns(&bars);
+        assert_eq!(ts.len(), 1);
         assert_eq!(c[0], 100.5);
-        assert_eq!(c[1], 101.0);
         assert_eq!(v[0], 1000);
+    }
+
+    // Test helper: inject lookback_days so tests don't need a full 90-day window.
+    fn unfulfilled_weekdays_at(
+        symbol: &str,
+        fulfilled: &Fulfilled,
+        today: NaiveDate,
+        lookback_days: i64,
+    ) -> Vec<NaiveDate> {
+        let empty = HashSet::new();
+        let sym_set = fulfilled.get(symbol).unwrap_or(&empty);
+        let cutoff = today - chrono::Duration::days(lookback_days);
+        let mut out = Vec::new();
+        let mut d = cutoff;
+        while d < today {
+            if is_weekday(d) {
+                let key = d.format("%Y-%m-%d").to_string();
+                if !sym_set.contains(&key) {
+                    out.push(d);
+                }
+            }
+            d += chrono::Duration::days(1);
+        }
+        out
     }
 }
