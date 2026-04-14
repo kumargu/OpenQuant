@@ -1,19 +1,21 @@
 //! Refresh quant-data parquets to a target date.
 //!
-//! Called at runner startup before warmup. For each symbol, tracks which
-//! weekday dates have been "fulfilled" — i.e., we've done a best-effort fetch
-//! from Alpaca, and whatever Alpaca returned (bars or zero) is authoritative.
+//! Called at runner startup before warmup. Per symbol, the rule is dead simple:
 //!
-//! - Unfulfilled weekdays in the last 90 days → fetch from Alpaca, store
-//!   whatever bars come back, then mark the date fulfilled.
-//! - Fulfilled weekdays → skip (no refetch, no threshold check, no holiday
-//!   calendar needed — Alpaca's previous response is trusted).
-//! - Zero-bar weekdays naturally become "fulfilled with 0 bars" = holiday.
-//! - Today is never marked fulfilled (market may still be in-progress).
+//! 1. Find the latest fulfilled date `F` from `fulfilled.json`.
+//! 2. Fetch `[F+1, today+1)` from Alpaca in one call.
+//! 3. Drop any existing parquet rows in `[F+1, today)` — they're partial/stale.
+//! 4. Append Alpaca's bars (deduped against today's existing bars from the
+//!    websocket).
+//! 5. Mark every weekday in `[F+1, today)` fulfilled. Today is never marked
+//!    (session may still be in progress); it'll be marked tomorrow.
 //!
-//! State lives in `<bars_dir>/fulfilled.json`. On first run (empty file),
-//! existing parquet data is trusted: any weekday with >0 bars is bootstrapped
-//! as fulfilled to avoid a full 90-day refetch storm.
+//! Zero-bar weekdays inside the range still get marked fulfilled — Alpaca was
+//! asked, returned nothing, that's authoritative (holiday).
+//!
+//! State lives in `<bars_dir>/fulfilled.json`. On first run (empty file), the
+//! bootstrap step trusts the existing parquet's date range as fulfilled so we
+//! don't refetch the whole 90-day window.
 
 use arrow::array::{Array, ArrayRef, Float64Array, Int64Array, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -314,28 +316,13 @@ fn bootstrap_fulfilled(
     }
 }
 
-/// Return the sorted list of weekdays in [cutoff, today) that are NOT yet
-/// fulfilled for this symbol.
-fn unfulfilled_weekdays(
-    symbol: &str,
-    fulfilled: &Fulfilled,
-    today: NaiveDate,
-) -> Vec<NaiveDate> {
-    let empty = HashSet::new();
-    let sym_set = fulfilled.get(symbol).unwrap_or(&empty);
-    let cutoff = today - chrono::Duration::days(LOOKBACK_DAYS);
-    let mut out = Vec::new();
-    let mut d = cutoff;
-    while d < today {
-        if is_weekday(d) {
-            let key = d.format("%Y-%m-%d").to_string();
-            if !sym_set.contains(&key) {
-                out.push(d);
-            }
-        }
-        d += chrono::Duration::days(1);
-    }
-    out
+/// Find the latest fulfilled date for a symbol, or None if it has none.
+fn latest_fulfilled(symbol: &str, fulfilled: &Fulfilled) -> Option<NaiveDate> {
+    fulfilled
+        .get(symbol)?
+        .iter()
+        .filter_map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .max()
 }
 
 /// Convert Alpaca bars to column vectors. Silently skips bars with
@@ -371,8 +358,10 @@ fn alpaca_bars_to_columns(bars: &[AlpacaBar]) -> BarColumns {
     (ts, open, high, low, close, volume, trade_count, vwap)
 }
 
-/// Refresh one symbol's parquet to target_date using fulfilled-marker logic.
-/// Returns number of new bars appended.
+/// Refresh one symbol's parquet to today using the simple latest-fulfilled rule:
+/// fetch `[F+1, today+1)` from Alpaca, replace any existing rows in `[F+1, today)`
+/// with Alpaca's copy, dedupe-merge today's bars (websocket may have written
+/// some), then mark every weekday in `[F+1, today)` fulfilled.
 pub async fn refresh_symbol(
     bars_dir: &Path,
     symbol: &str,
@@ -384,7 +373,6 @@ pub async fn refresh_symbol(
     if !path.exists() {
         return Err(format!("{symbol}.parquet not found"));
     }
-
     let today = NaiveDate::parse_from_str(target_date, "%Y-%m-%d")
         .map_err(|e| format!("target_date: {e}"))?;
 
@@ -396,84 +384,57 @@ pub async fn refresh_symbol(
     // Bootstrap on first run: trust existing parquet data.
     bootstrap_fulfilled(symbol, &ts, fulfilled, today);
 
-    // Determine what needs fetching.
-    let missing = unfulfilled_weekdays(symbol, fulfilled, today);
-    let latest_date = micros_to_date(*ts.last().unwrap());
-    let latest_parsed = NaiveDate::parse_from_str(&latest_date, "%Y-%m-%d")
-        .map_err(|e| format!("latest_date: {e}"))?;
+    // F = latest fulfilled date. Fall back to a 90-day-ago floor if none exists
+    // (fresh symbol with no parquet history we trust).
+    let f = latest_fulfilled(symbol, fulfilled)
+        .unwrap_or(today - chrono::Duration::days(LOOKBACK_DAYS));
+    let fetch_from = f + chrono::Duration::days(1);
 
-    // Earliest date we need to re-fetch from.
-    let fetch_from_date = match missing.first() {
-        Some(d) => *d,
-        None => {
-            // All past weekdays fulfilled. Just sync today forward.
-            if latest_parsed >= today {
-                info!(symbol, latest = latest_date.as_str(), "already up to date");
-                return Ok(0);
-            }
-            latest_parsed + chrono::Duration::days(1)
-        }
-    };
-
-    let fetch_from_str = fetch_from_date.format("%Y-%m-%d").to_string();
-
-    // End date: one day past today to include today's bars.
-    let fetch_to = today + chrono::Duration::days(1);
-    let fetch_to_str = fetch_to.format("%Y-%m-%d").to_string();
-
-    // Dates we'll "replace" in the parquet: unfulfilled past weekdays.
-    // Today is handled separately (dedupe-append, never replaced wholesale).
-    let replace_dates: HashSet<String> = missing
-        .iter()
-        .filter(|d| **d < today)
-        .map(|d| d.format("%Y-%m-%d").to_string())
-        .collect();
-
-    // Remove existing bars for replace_dates (we'll use Alpaca's copy).
-    if !replace_dates.is_empty() {
-        let keep: Vec<bool> = ts
-            .iter()
-            .map(|&t| !replace_dates.contains(&micros_to_date(t)))
-            .collect();
-        let mut new_ts = Vec::new();
-        let mut new_o = Vec::new();
-        let mut new_h = Vec::new();
-        let mut new_l = Vec::new();
-        let mut new_c = Vec::new();
-        let mut new_v = Vec::new();
-        let mut new_tc = Vec::new();
-        let mut new_vw = Vec::new();
-        for (i, &k) in keep.iter().enumerate() {
-            if k {
-                new_ts.push(ts[i]);
-                new_o.push(o[i]);
-                new_h.push(h[i]);
-                new_l.push(l[i]);
-                new_c.push(c[i]);
-                new_v.push(v[i]);
-                new_tc.push(tc[i]);
-                new_vw.push(vw[i]);
-            }
-        }
-        ts = new_ts;
-        o = new_o;
-        h = new_h;
-        l = new_l;
-        c = new_c;
-        v = new_v;
-        tc = new_tc;
-        vw = new_vw;
+    if fetch_from > today {
+        info!(symbol, latest_fulfilled = %f, "already up to date");
+        return Ok(0);
     }
 
-    // Fetch from Alpaca
-    let symbols = vec![symbol.to_string()];
+    let fetch_from_str = fetch_from.format("%Y-%m-%d").to_string();
+    let fetch_to_str = (today + chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    // Drop any existing rows in [fetch_from, today). Today's bars survive — they
+    // may have come from the websocket and will be deduped against Alpaca below.
+    let drop_from_us = fetch_from
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_micros();
+    let today_us = today
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_micros();
+
+    let keep_idx: Vec<usize> = (0..ts.len())
+        .filter(|&i| ts[i] < drop_from_us || ts[i] >= today_us)
+        .collect();
+    if keep_idx.len() < ts.len() {
+        ts = keep_idx.iter().map(|&i| ts[i]).collect();
+        o = keep_idx.iter().map(|&i| o[i]).collect();
+        h = keep_idx.iter().map(|&i| h[i]).collect();
+        l = keep_idx.iter().map(|&i| l[i]).collect();
+        c = keep_idx.iter().map(|&i| c[i]).collect();
+        v = keep_idx.iter().map(|&i| v[i]).collect();
+        tc = keep_idx.iter().map(|&i| tc[i]).collect();
+        vw = keep_idx.iter().map(|&i| vw[i]).collect();
+    }
+
+    // Fetch [fetch_from, today+1) from Alpaca in one call.
     let raw = client
-        .fetch_minute_bars_raw(&symbols, &fetch_from_str, &fetch_to_str)
+        .fetch_minute_bars_raw(&[symbol.to_string()], &fetch_from_str, &fetch_to_str)
         .await?;
     let bars = raw.get(symbol).cloned().unwrap_or_default();
     let (new_ts, new_o, new_h, new_l, new_c, new_v, new_tc, new_vw) = alpaca_bars_to_columns(&bars);
 
-    // Merge, dedupe by timestamp
+    // Dedupe-merge: only today's existing bars can collide.
     let existing_set: HashSet<i64> = ts.iter().cloned().collect();
     let mut added = 0;
     for i in 0..new_ts.len() {
@@ -494,7 +455,7 @@ pub async fn refresh_symbol(
         return Err(format!("{symbol}: empty after refresh"));
     }
 
-    // Sort by timestamp
+    // Sort by timestamp.
     let mut indices: Vec<usize> = (0..ts.len()).collect();
     indices.sort_by_key(|&i| ts[i]);
     let ts_s: Vec<_> = indices.iter().map(|&i| ts[i]).collect();
@@ -507,14 +468,11 @@ pub async fn refresh_symbol(
     let vw_s: Vec<_> = indices.iter().map(|&i| vw[i]).collect();
 
     let new_latest = micros_to_date(*ts_s.last().unwrap());
-    write_parquet(
-        &path,
-        &(ts_s, o_s, h_s, l_s, c_s, v_s, tc_s, vw_s),
-    )?;
+    write_parquet(&path, &(ts_s, o_s, h_s, l_s, c_s, v_s, tc_s, vw_s))?;
 
-    // Mark all past weekdays we just fetched as fulfilled (today stays
-    // unfulfilled so we always refresh it next startup).
-    let mut d = fetch_from_date;
+    // Mark every weekday in [fetch_from, today) as fulfilled. Today stays
+    // unfulfilled — it'll be marked by tomorrow's run.
+    let mut d = fetch_from;
     let mut marked = 0;
     while d < today {
         if is_weekday(d) {
@@ -705,29 +663,19 @@ mod tests {
     }
 
     #[test]
-    fn test_unfulfilled_weekdays_filters_correctly() {
-        let today = NaiveDate::parse_from_str("2026-04-13", "%Y-%m-%d").unwrap();
-        let mut fulfilled = Fulfilled::default();
-        fulfilled.insert("TEST", "2026-04-08".to_string());
-        fulfilled.insert("TEST", "2026-04-09".to_string());
-        fulfilled.insert("TEST", "2026-04-10".to_string());
-
-        // With a 5-day lookback, window is [Apr 8, Apr 13). Weekdays in window:
-        // Apr 8, 9, 10 (all fulfilled). Sat/Sun not weekdays. So empty.
-        let missing = unfulfilled_weekdays_at("TEST", &fulfilled, today, 5);
-        assert!(missing.is_empty());
+    fn test_latest_fulfilled_returns_max() {
+        let mut f = Fulfilled::default();
+        f.insert("TEST", "2026-04-08".to_string());
+        f.insert("TEST", "2026-04-10".to_string());
+        f.insert("TEST", "2026-04-09".to_string());
+        let got = latest_fulfilled("TEST", &f).unwrap();
+        assert_eq!(got, NaiveDate::parse_from_str("2026-04-10", "%Y-%m-%d").unwrap());
     }
 
     #[test]
-    fn test_unfulfilled_weekdays_skips_weekends() {
-        let today = NaiveDate::parse_from_str("2026-04-13", "%Y-%m-%d").unwrap();
-        let fulfilled = Fulfilled::default();
-        let missing = unfulfilled_weekdays_at("TEST", &fulfilled, today, 7);
-        // Mon Apr 6, Tue 7, Wed 8, Thu 9, Fri 10 — 5 weekdays. No weekends.
-        assert_eq!(missing.len(), 5);
-        for d in &missing {
-            assert!(is_weekday(*d));
-        }
+    fn test_latest_fulfilled_none_for_unknown_symbol() {
+        let f = Fulfilled::default();
+        assert!(latest_fulfilled("NOPE", &f).is_none());
     }
 
     #[test]
@@ -770,27 +718,4 @@ mod tests {
         assert_eq!(v[0], 1000);
     }
 
-    // Test helper: inject lookback_days so tests don't need a full 90-day window.
-    fn unfulfilled_weekdays_at(
-        symbol: &str,
-        fulfilled: &Fulfilled,
-        today: NaiveDate,
-        lookback_days: i64,
-    ) -> Vec<NaiveDate> {
-        let empty = HashSet::new();
-        let sym_set = fulfilled.get(symbol).unwrap_or(&empty);
-        let cutoff = today - chrono::Duration::days(lookback_days);
-        let mut out = Vec::new();
-        let mut d = cutoff;
-        while d < today {
-            if is_weekday(d) {
-                let key = d.format("%Y-%m-%d").to_string();
-                if !sym_set.contains(&key) {
-                    out.push(d);
-                }
-            }
-            d += chrono::Duration::days(1);
-        }
-        out
-    }
 }
