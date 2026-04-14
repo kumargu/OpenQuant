@@ -161,6 +161,33 @@ struct ReplayArgs {
 
 const DEFAULT_CONFIG: &str = "config/pairs.toml";
 
+/// Extract the unique symbols (leg_a/leg_b) from a candidates JSON file.
+///
+/// Used to narrow the refresh pass in live/paper mode — the engine only reads bars
+/// for symbols that appear in the candidate pairs, so refreshing the rest is waste.
+/// Returns `None` on read/parse failure so the caller can fall back to a full refresh.
+fn load_symbols_from_candidates(path: &std::path::Path) -> Option<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Pair {
+        leg_a: String,
+        leg_b: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct File {
+        pairs: Vec<Pair>,
+    }
+    let content = std::fs::read_to_string(path).ok()?;
+    let file: File = serde_json::from_str(&content).ok()?;
+    let mut symbols: Vec<String> = file
+        .pairs
+        .into_iter()
+        .flat_map(|p| [p.leg_a, p.leg_b])
+        .collect();
+    symbols.sort();
+    symbols.dedup();
+    Some(symbols)
+}
+
 /// Resolve engine-specific defaults for config, candidates, and pipeline.
 /// Explicit CLI flags always override engine defaults.
 fn resolve_engine(
@@ -312,14 +339,22 @@ async fn run(
         }
     };
 
-    // ── Refresh quant-data before anything else ──
-    // Brings parquet bars up to today, checks contiguity, fixes gaps.
-    {
+    // ── Refresh quant-data (live/paper only) ──
+    // Replay reads static historical parquets — refresh would fetch [today, today+1)
+    // which returns zero bars for every symbol and wastes ~4 minutes of startup.
+    // Live/paper needs fresh bars, but only for symbols in the active candidates file;
+    // refreshing the other ~436 symbols in a 501-symbol universe is dead work.
+    if matches!(run_mode, RunMode::Stream(_)) {
         let bars_dir = refresh::default_bars_dir();
         if bars_dir.exists() {
+            let filter = candidates.as_deref().and_then(load_symbols_from_candidates);
             let target = chrono::Utc::now().format("%Y-%m-%d").to_string();
-            info!(target = target.as_str(), "refreshing quant-data bars");
-            match refresh::refresh_all(&bars_dir, &target, &alpaca).await {
+            info!(
+                target = target.as_str(),
+                filter_count = filter.as_ref().map(Vec::len).unwrap_or(0),
+                "refreshing quant-data bars"
+            );
+            match refresh::refresh_all(&bars_dir, &target, &alpaca, filter.as_deref()).await {
                 Ok(n) if n > 0 => info!(bars = n, "quant-data refreshed"),
                 Ok(_) => info!("quant-data already up to date"),
                 Err(e) => warn!(
@@ -330,6 +365,8 @@ async fn run(
         } else {
             warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
         }
+    } else {
+        info!("replay mode: skipping quant-data refresh (parquets are static)");
     }
 
     // ── Load config ──

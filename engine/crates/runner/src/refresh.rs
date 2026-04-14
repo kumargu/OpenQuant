@@ -274,7 +274,11 @@ fn bootstrap_fulfilled(
     fulfilled: &mut Fulfilled,
     today: NaiveDate,
 ) {
-    if fulfilled.get(symbol).map(|s| !s.is_empty()).unwrap_or(false) {
+    if fulfilled
+        .get(symbol)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
         return;
     }
     if timestamps.is_empty() {
@@ -497,23 +501,40 @@ pub async fn refresh_symbol(
     Ok(added)
 }
 
-/// Refresh all symbols in bars_dir to target_date.
+/// Refresh symbols in bars_dir to target_date.
+///
+/// When `filter` is `Some`, only symbols listed there (that also exist as parquets)
+/// are refreshed. When `None`, every parquet in `bars_dir` is refreshed. In live/paper
+/// mode the engine only reads bars for active-pair symbols, so filtering cuts ~4 min
+/// of startup work on a 501-symbol universe.
 pub async fn refresh_all(
     bars_dir: &Path,
     target_date: &str,
     client: &AlpacaClient,
+    filter: Option<&[String]>,
 ) -> Result<usize, String> {
-    let mut symbols: Vec<String> = Vec::new();
+    let mut available: Vec<String> = Vec::new();
     for entry in std::fs::read_dir(bars_dir).map_err(|e| format!("read dir: {e}"))? {
         let entry = entry.map_err(|e| format!("entry: {e}"))?;
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "parquet") {
             if let Some(stem) = path.file_stem() {
-                symbols.push(stem.to_string_lossy().to_string());
+                available.push(stem.to_string_lossy().to_string());
             }
         }
     }
-    symbols.sort();
+    available.sort();
+
+    let symbols: Vec<String> = match filter {
+        Some(wanted) => {
+            let want: std::collections::HashSet<&str> = wanted.iter().map(String::as_str).collect();
+            available
+                .into_iter()
+                .filter(|s| want.contains(s.as_str()))
+                .collect()
+        }
+        None => available,
+    };
 
     info!(
         symbols = symbols.len(),
@@ -546,7 +567,10 @@ pub async fn refresh_all(
             // Periodically persist fulfilled state in case of crash
             fulfilled.last_updated = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
             if let Err(e) = save_fulfilled(bars_dir, &fulfilled) {
-                warn!(error = e.as_str(), "failed to persist fulfilled.json mid-run");
+                warn!(
+                    error = e.as_str(),
+                    "failed to persist fulfilled.json mid-run"
+                );
             }
         }
     }
@@ -669,7 +693,10 @@ mod tests {
         f.insert("TEST", "2026-04-10".to_string());
         f.insert("TEST", "2026-04-09".to_string());
         let got = latest_fulfilled("TEST", &f).unwrap();
-        assert_eq!(got, NaiveDate::parse_from_str("2026-04-10", "%Y-%m-%d").unwrap());
+        assert_eq!(
+            got,
+            NaiveDate::parse_from_str("2026-04-10", "%Y-%m-%d").unwrap()
+        );
     }
 
     #[test]
@@ -717,5 +744,4 @@ mod tests {
         assert_eq!(c[0], 100.5);
         assert_eq!(v[0], 1000);
     }
-
 }
