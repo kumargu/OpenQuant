@@ -27,7 +27,7 @@ import os
 import sys
 import time
 import traceback
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -42,6 +42,7 @@ DATASET_NAME = "v2_sp500_2025-2026_1min_adjusted"
 BARS_DIR = DATA_DIR / "bars" / DATASET_NAME
 MANIFEST_PATH = BARS_DIR / "MANIFEST.json"
 FAILED_PATH = BARS_DIR / "FAILED.json"
+FULFILLED_PATH = BARS_DIR / "fulfilled.json"
 
 # Date range — we store "everything" and filter at read time
 START_DATE = date(2025, 1, 1)
@@ -112,6 +113,47 @@ def fetch_one(client, symbol: str, start: date, end: date) -> pa.Table:
 
 def write_parquet(table: pa.Table, path: Path) -> None:
     pq.write_table(table, path, compression="snappy")
+
+
+def write_fulfilled(bars_dir: Path, symbols: List[str]) -> None:
+    """Write fulfilled.json consumed by engine/crates/runner/src/refresh.rs.
+
+    For each symbol, marks every weekday in [earliest_bar_date, latest_bar_date]
+    as fulfilled — including zero-bar weekdays in that range, which are presumed
+    holidays Alpaca already resolved. Today is never marked (session may still
+    be in progress). Format: {by_symbol: {SYM: [dates]}, last_updated: iso}.
+    """
+    today = datetime.now(timezone.utc).date()
+    by_symbol: dict[str, list[str]] = {}
+
+    for sym in symbols:
+        path = bars_dir / f"{sym}.parquet"
+        if not path.exists():
+            continue
+        try:
+            col = pq.read_table(path, columns=["timestamp"]).column("timestamp")
+            if len(col) == 0:
+                continue
+            first = col[0].as_py().date()
+            last = col[-1].as_py().date()
+        except Exception:
+            continue
+
+        dates: list[str] = []
+        d = first
+        while d <= last:
+            if d.weekday() < 5 and d < today:  # Mon–Fri, strictly before today
+                dates.append(d.isoformat())
+            d += timedelta(days=1)
+        if dates:
+            by_symbol[sym] = dates
+
+    payload = {
+        "by_symbol": by_symbol,
+        "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    with open(FULFILLED_PATH, "w") as f:
+        json.dump(payload, f, indent=2)
 
 
 def fetch_all(limit: Optional[int] = None, symbols_override: Optional[List[str]] = None) -> None:
@@ -207,6 +249,10 @@ def fetch_all(limit: Optional[int] = None, symbols_override: Optional[List[str]]
     if failed:
         with open(FAILED_PATH, "w") as f:
             json.dump(failed, f, indent=2)
+
+    # Write fulfilled.json so the Rust runner's refresh.rs skips re-bootstrapping.
+    write_fulfilled(BARS_DIR, list(bar_counts.keys()))
+    print(f"Fulfilled: {FULFILLED_PATH}", file=sys.stderr)
 
     elapsed = time.time() - t0
     print(
