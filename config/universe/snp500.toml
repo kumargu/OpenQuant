@@ -1,0 +1,35 @@
+# S&P 500 Universe Configuration for Stat-Arb Engine
+# See design doc: https://github.com/kumargu/OpenQuant/issues/249
+
+[universe]
+source = "quant-lab"
+rebalance_cadence = "monthly"      # Universe membership rebalanced monthly
+membership_freeze_days = 5          # Lock membership 5 days before month-end
+size = 100                          # Top-N names by ADV
+
+[liquidity]
+min_adv_20d_usd = 50_000_000       # $50M/day floor
+max_pct_adv_per_trade = 0.01       # 1% of ADV per order
+
+[sector]
+min_names_per_sector = 3            # At least 3 names per sector
+max_sector_weight = 0.25            # No sector > 25% of universe
+
+[missing_data]
+max_missing_bars_pct = 0.05         # Drop name if > 5% bars missing in fit window
+corporate_action_handling = "split_adjust"  # Adjust for splits, drop on delist
+
+[factor_model]
+correlation_window_days = 252       # Window for correlation matrix
+residual_window_days = 60           # Window for per-name residual regression
+factor_count = 15                   # K eigenportfolios (Avellaneda-Lee default)
+refit_cadence = "weekly"            # How often to refit factor model
+
+[signal]
+entry_threshold = 1.25              # Open position when |s-score| > threshold
+exit_threshold = 0.75               # Close position when |s-score| < threshold
+max_half_life_days = 30             # Reject residuals with HL > 30 days
+
+[execution]
+execution_model = "t_plus_1"        # Signals on close, execute next session
+slippage_bps = 5                    # Assumed slippage per leg
