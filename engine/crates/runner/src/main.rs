@@ -481,6 +481,45 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         }
     };
 
+    // Refresh quant-data before warmup. Without this, the basket path reads
+    // potentially-stale parquets, and the validator fits OU on outdated prices
+    // — the same failure mode the pairs path fixes at main.rs refresh block.
+    // Filter refresh to only the universe's symbols (avoid refreshing unrelated SP500 names).
+    if bars_dir.exists() {
+        let filter = match basket_picker::load_universe(&universe_path) {
+            Ok(u) => {
+                let mut syms: Vec<String> = u
+                    .sectors
+                    .values()
+                    .flat_map(|s| s.members.iter().cloned())
+                    .collect();
+                syms.sort();
+                syms.dedup();
+                Some(syms)
+            }
+            Err(e) => {
+                error!(error = %e, "failed to load universe for refresh filter");
+                std::process::exit(1);
+            }
+        };
+        let target = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        info!(
+            target = target.as_str(),
+            filter_count = filter.as_ref().map(Vec::len).unwrap_or(0),
+            "refreshing quant-data bars (basket universe)"
+        );
+        match refresh::refresh_all(&bars_dir, &target, &alpaca, filter.as_deref()).await {
+            Ok(n) if n > 0 => info!(bars = n, "quant-data refreshed"),
+            Ok(_) => info!("quant-data already up to date"),
+            Err(e) => warn!(
+                error = e.as_str(),
+                "quant-data refresh failed — continuing with possibly stale data"
+            ),
+        }
+    } else {
+        warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
+    }
+
     // Portfolio config: use sensible defaults for now. Capital & leverage can
     // be surfaced to CLI/config in a follow-up; defaults match baseline config.
     let portfolio_config = basket_engine::PortfolioConfig::default();

@@ -16,17 +16,17 @@
 //!      orders on paper/live Alpaca.
 //!
 //! Three execution modes:
-//!   - `Noop`:  log intents, place no orders. Use this for the first sessions
-//!              to verify engine behavior before any capital moves.
+//!   - `Noop`: log intents, place no orders. Use this for the first sessions
+//!     to verify engine behavior before any capital moves.
 //!   - `Paper`: paper-api.alpaca.markets (paper money).
-//!   - `Live`:  api.alpaca.markets (real money). Gated behind explicit opt-in.
+//!   - `Live`: api.alpaca.markets (real money). Gated behind explicit opt-in.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use basket_engine::{
-    aggregate_positions, basket_to_legs, diff_to_orders, BasketEngine, DailyBar, OrderIntent,
-    PortfolioConfig, PositionIntent, Side,
+    aggregate_positions, diff_to_orders, BasketEngine, DailyBar, OrderIntent, PortfolioConfig,
+    PositionIntent, Side,
 };
 use basket_picker::{load_universe, validate, ValidatorConfig};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
@@ -143,15 +143,34 @@ pub async fn run_basket_live(
     let mut engine = BasketEngine::new(&fits);
     info!(baskets = engine.num_baskets(), "basket engine initialized");
 
-    // 2. Subscribe to all universe symbols over WebSocket.
+    // 2. Seed current_notionals from Alpaca positions (startup reconciliation).
+    //    Without this, a restart with live open positions would trigger
+    //    target-minus-zero deltas, flooding Alpaca with duplicate orders.
+    //    Noop skips this (no Alpaca account needed for shadow mode).
+    let mut current_notionals = match execution.alpaca_mode() {
+        None => {
+            info!("noop mode — skipping startup position reconciliation");
+            HashMap::new()
+        }
+        Some(mode) => seed_current_notionals_from_alpaca(alpaca, mode).await,
+    };
+
+    // 3. Subscribe to all universe symbols over WebSocket.
     let mut bar_rx = stream::start_bar_stream(&alpaca.api_key, &alpaca.api_secret, &symbols).await;
     info!("subscribed to Alpaca 1-min bar stream");
 
-    // 3. Bar loop: buffer per (symbol, date) → last RTH bar. Trigger engine at session close.
+    // 4. Bar loop: buffer per (symbol, date) → last RTH bar.
+    //    Engine is triggered by a wall-clock timer (not by `symbols[0]`'s 19:59 bar
+    //    arrival) so that no single symbol becoming a data source-of-failure can
+    //    silently skip an entire session.
     let mut day_closes: HashMap<NaiveDate, HashMap<String, f64>> = HashMap::new();
     let mut processed_sessions: std::collections::HashSet<NaiveDate> = Default::default();
-    let mut current_notionals: HashMap<String, f64> = HashMap::new();
 
+    // Grace period after session close before firing the engine. Lets late-arriving
+    // 19:59 bars land in the buffer.
+    const CLOSE_GRACE_MIN: u32 = 2;
+
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
@@ -174,19 +193,27 @@ pub async fn run_basket_live(
                         .or_default()
                         .insert(bar.symbol.clone(), bar.close);
                 }
-
-                // Trigger engine at session close. The 19:59 bar is the last RTH bar;
-                // its close becomes the daily close for the session.
-                if minute == SESSION_CLOSE_MIN - 1
-                    && bar.symbol == symbols[0]
-                    && !processed_sessions.contains(&date)
-                {
-                    processed_sessions.insert(date);
-                    let closes_for_day = day_closes.remove(&date).unwrap_or_default();
+            }
+            _ = tick.tick() => {
+                // Wall-clock trigger: if we are past session close + grace for a
+                // given date and haven't processed it yet, fire now — regardless
+                // of which symbols' 19:59 bars landed.
+                let now = Utc::now();
+                let today = now.date_naive();
+                let minute_now = now.hour() * 60 + now.minute();
+                let past_close = minute_now >= SESSION_CLOSE_MIN + CLOSE_GRACE_MIN;
+                if past_close && !processed_sessions.contains(&today) {
+                    let closes_for_day = day_closes.remove(&today).unwrap_or_default();
+                    if closes_for_day.is_empty() {
+                        // Weekend / holiday / blackout — mark processed to avoid busy-looping.
+                        processed_sessions.insert(today);
+                        continue;
+                    }
+                    processed_sessions.insert(today);
                     process_session_close(
                         &mut engine,
                         alpaca,
-                        date,
+                        today,
                         &closes_for_day,
                         &portfolio_config,
                         &mut current_notionals,
@@ -202,6 +229,37 @@ pub async fn run_basket_live(
         }
     }
     Ok(())
+}
+
+/// Fetch open positions from Alpaca and express them as signed notional per symbol.
+/// Used on startup so `diff_to_orders` computes correct deltas from the engine's target.
+async fn seed_current_notionals_from_alpaca(
+    alpaca: &AlpacaClient,
+    mode: ExecutionMode,
+) -> HashMap<String, f64> {
+    match alpaca.get_positions(mode).await {
+        Ok(positions) => {
+            let notionals: HashMap<String, f64> = positions
+                .into_iter()
+                .map(|(sym, (qty, avg_entry))| (sym, qty * avg_entry))
+                .collect();
+            info!(
+                n_positions = notionals.len(),
+                "seeded current_notionals from Alpaca open positions"
+            );
+            notionals
+        }
+        Err(e) => {
+            // Fail closed: if we can't read positions, we can't safely diff. Warn loudly
+            // and return empty so the operator notices in the first session's logs.
+            warn!(
+                error = %e,
+                "failed to fetch Alpaca positions on startup — current_notionals empty; \
+                 first session will emit target-minus-zero deltas and may double-size"
+            );
+            HashMap::new()
+        }
+    }
 }
 
 /// Run the engine for one session close and dispatch orders.
@@ -292,9 +350,6 @@ async fn process_session_close(
     // After dispatching, adopt target notionals as current (ignoring reject/partial-fill
     // edge cases — reconciliation lives in a separate follow-up).
     *current_notionals = target_notionals;
-
-    // Also warn if any basket was held with legs that can't be modeled (diagnostic only).
-    let _ = basket_to_legs; // silence unused-import warning in smaller builds
 }
 
 fn log_intent(intent: &PositionIntent) {
