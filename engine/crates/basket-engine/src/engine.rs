@@ -85,24 +85,42 @@ impl BasketEngine {
 
     /// Process a batch of daily bars and return position intents.
     ///
-    /// Bars should be aligned (same date) for all symbols.
+    /// All bars must have the same date. Returns empty if bars have mixed dates.
     pub fn on_bars(&mut self, bars: &[DailyBar]) -> Vec<PositionIntent> {
+        if bars.is_empty() {
+            return vec![];
+        }
+
+        // Validate all bars have the same date
+        let date = bars[0].date;
+        for bar in &bars[1..] {
+            if bar.date != date {
+                tracing::warn!(
+                    expected = %date,
+                    found = %bar.date,
+                    symbol = %bar.symbol,
+                    "mixed_dates_in_bars"
+                );
+                return vec![];
+            }
+        }
+
         // Build price map from bars
         let mut prices: HashMap<&str, f64> = HashMap::new();
-        let mut date = None;
         for bar in bars {
             prices.insert(&bar.symbol, bar.close);
-            date = Some(bar.date);
         }
-        let date = match date {
-            Some(d) => d,
-            None => return vec![],
-        };
 
         let mut intents = Vec::new();
 
         for (basket_id, params) in &self.params {
-            let state = self.states.get_mut(basket_id).unwrap();
+            let state = match self.states.get_mut(basket_id) {
+                Some(s) => s,
+                None => {
+                    tracing::error!(basket_id = %basket_id, "missing_basket_state");
+                    continue;
+                }
+            };
 
             // Get target and peer prices
             let target_price = match prices.get(params.target.as_str()) {
@@ -505,5 +523,38 @@ mod tests {
         let loaded_state = loaded.get_state("chips:AMD").unwrap();
         assert_eq!(orig_state.position, loaded_state.position);
         assert_eq!(orig_state.entry_date, loaded_state.entry_date);
+    }
+
+    #[test]
+    fn test_mixed_dates_rejected() {
+        let fit = make_test_fit();
+        let mut engine = BasketEngine::new(&[fit]);
+
+        // Bars with different dates should be rejected
+        let bars = vec![
+            DailyBar {
+                symbol: "AMD".to_string(),
+                date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(),
+                close: 90.0,
+            },
+            DailyBar {
+                symbol: "NVDA".to_string(),
+                date: NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(), // Different date!
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".to_string(),
+                date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(),
+                close: 100.0,
+            },
+        ];
+
+        let intents = engine.on_bars(&bars);
+        assert!(intents.is_empty(), "mixed dates should return no intents");
+        assert_eq!(
+            engine.get_state("chips:AMD").unwrap().position,
+            0,
+            "state should remain flat"
+        );
     }
 }
