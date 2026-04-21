@@ -16,6 +16,7 @@
 
 mod alpaca;
 mod bar_cache;
+mod basket_runner;
 mod earnings;
 mod pair_picker_service;
 pub mod refresh;
@@ -56,12 +57,16 @@ enum Command {
 /// Usage:
 ///   openquant-runner paper --engine snp500
 ///   openquant-runner replay --engine metals --start 2025-07-01 --end 2026-03-28
+///   openquant-runner replay --engine basket --universe config/basket_universe_v1.toml --start 2024-07-01 --end 2026-04-13
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Engine {
     /// S&P 500 equities — ADF cointegration, GICS sector pairs.
     Snp500,
     /// Metals — curated structurally-similar pairs, lab pipeline (structural gates relaxed).
     Metals,
+    /// Basket spread strategy — OU/Bertram symmetric state machine.
+    /// Requires --universe flag pointing to a basket_universe_v1 TOML file.
+    Basket,
     // Future: Bitcoin, etc.
 }
 
@@ -70,6 +75,7 @@ impl Engine {
         match self {
             Engine::Snp500 => "config/pairs.toml",
             Engine::Metals => "config/metals.toml",
+            Engine::Basket => "config/basket.toml", // Not used; basket uses universe TOML
         }
     }
 
@@ -77,6 +83,7 @@ impl Engine {
         match self {
             Engine::Snp500 => None, // candidates must be provided via --candidates flag
             Engine::Metals => Some("pairs/metals_pairs.json"),
+            Engine::Basket => None, // basket uses --universe flag instead
         }
     }
 
@@ -88,7 +95,12 @@ impl Engine {
         match self {
             Engine::Snp500 => "lab",
             Engine::Metals => "lab",
+            Engine::Basket => "basket", // basket has its own validation
         }
+    }
+
+    fn is_basket(&self) -> bool {
+        matches!(self, Engine::Basket)
     }
 }
 
@@ -157,6 +169,10 @@ struct ReplayArgs {
     /// bars are written to cache for future runs.
     #[arg(long)]
     bar_cache: Option<PathBuf>,
+
+    /// Basket universe TOML file. Required when --engine basket.
+    #[arg(long)]
+    universe: Option<PathBuf>,
 }
 
 const DEFAULT_CONFIG: &str = "config/pairs.toml";
@@ -271,6 +287,68 @@ async fn main() {
             )
         }
         Command::Replay(a) => {
+            // Handle basket engine separately — different architecture
+            if a.engine.is_basket() {
+                let universe_path = match &a.universe {
+                    Some(p) => p.clone(),
+                    None => {
+                        error!("--universe is required when --engine basket");
+                        std::process::exit(1);
+                    }
+                };
+
+                let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+
+                let portfolio_config = basket_engine::PortfolioConfig::default();
+                let cost_bps = 5.0; // TODO: read from universe TOML
+
+                info!(
+                    universe = %universe_path.display(),
+                    start = a.start.as_str(),
+                    end = a.end.as_str(),
+                    "========== BASKET REPLAY MODE =========="
+                );
+
+                match basket_runner::run_basket_replay(
+                    &alpaca,
+                    &universe_path,
+                    &a.start,
+                    &a.end,
+                    &portfolio_config,
+                    cost_bps,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        info!(
+                            total_bars = result.total_bars,
+                            total_intents = result.total_intents,
+                            trading_days = result.daily_pnl.len(),
+                            "========== BASKET REPLAY END =========="
+                        );
+
+                        // Write P&L CSV
+                        let csv_path = a.data_dir.join("basket_daily_pnl.csv");
+                        if let Err(e) = basket_runner::write_pnl_csv(&result.daily_pnl, &csv_path) {
+                            error!(error = %e, "failed to write P&L CSV");
+                        } else {
+                            info!(path = %csv_path.display(), "wrote daily P&L CSV");
+                        }
+                    }
+                    Err(e) => {
+                        error!(error = %e, "basket replay failed");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+
             let (config, candidates, pipeline) =
                 resolve_engine(a.engine, a.config, a.candidates, a.pipeline);
             (
