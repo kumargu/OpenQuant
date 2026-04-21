@@ -710,8 +710,14 @@ traded_targets = ["AMD"]
 
         let merged = &per_day_baskets[&date];
         assert_eq!(merged.len(), 2, "both MOH and UNH should survive merge");
-        assert!((merged["MOH"] - 0.32).abs() < 1e-12, "MOH retains 2025-12-31 value");
-        assert!((merged["UNH"] - 0.11).abs() < 1e-12, "UNH takes 2026-01-31 value (overwritten)");
+        assert!(
+            (merged["MOH"] - 0.32).abs() < 1e-12,
+            "MOH retains 2025-12-31 value"
+        );
+        assert!(
+            (merged["UNH"] - 0.11).abs() < 1e-12,
+            "UNH takes 2026-01-31 value (overwritten)"
+        );
     }
 
     #[test]
