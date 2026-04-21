@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/core", "crates/pybridge", "crates/journal", "crates/metrics", "crates/pair-picker", "crates/runner"]
+members = ["crates/core", "crates/pybridge", "crates/journal", "crates/metrics", "crates/pair-picker", "crates/basket-picker", "crates/runner"]
 resolver = "2"
