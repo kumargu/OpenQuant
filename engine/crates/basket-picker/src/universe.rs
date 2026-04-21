@@ -138,11 +138,52 @@ pub fn load_universe_from_str(content: &str) -> Result<Universe, String> {
     let fit_date = NaiveDate::parse_from_str(&raw.version.frozen_at, "%Y-%m-%d")
         .map_err(|e| format!("invalid frozen_at date: {}", e))?;
 
-    // Build candidates from sectors
+    // Semantic validation and candidate building
     let mut candidates = Vec::new();
     for (sector_name, sector) in &raw.sectors {
+        // Check for duplicate members
+        let mut seen_members = std::collections::HashSet::new();
+        for m in &sector.members {
+            if !seen_members.insert(m) {
+                return Err(format!(
+                    "sector '{}': duplicate member '{}'",
+                    sector_name, m
+                ));
+            }
+        }
+
+        // Check for duplicate traded_targets
+        let mut seen_targets = std::collections::HashSet::new();
+        for t in &sector.traded_targets {
+            if !seen_targets.insert(t) {
+                return Err(format!(
+                    "sector '{}': duplicate traded_target '{}'",
+                    sector_name, t
+                ));
+            }
+        }
+
+        // Check traded_targets ⊆ members
         for target in &sector.traded_targets {
-            // Members are all symbols in the sector except the target
+            if !sector.members.contains(target) {
+                return Err(format!(
+                    "sector '{}': traded_target '{}' not in members",
+                    sector_name, target
+                ));
+            }
+
+            // Peers = members excluding target; need at least 2
+            let peer_count = sector.members.iter().filter(|m| *m != target).count();
+            if peer_count < 2 {
+                return Err(format!(
+                    "sector '{}': target '{}' has only {} peer(s), need >= 2",
+                    sector_name, target, peer_count
+                ));
+            }
+        }
+
+        // Build candidates
+        for target in &sector.traded_targets {
             let members: Vec<String> = sector
                 .members
                 .iter()
@@ -231,6 +272,96 @@ hl_trade_gate = false
             .iter()
             .find(|c| c.target == "AMD")
             .unwrap();
-        assert_eq!(amd_basket.id(), "chips:AMD");
+        // ID format: {sector}:{target}:{fit_date}:{members_hash}
+        let id = amd_basket.id();
+        assert!(id.starts_with("chips:AMD:2026-04-20:"));
+        assert_eq!(id.len(), "chips:AMD:2026-04-20:".len() + 8); // 8-char hex hash
+    }
+
+    #[test]
+    fn test_reject_traded_target_not_in_members() {
+        let toml = r#"
+[version]
+schema = "basket_universe"
+version = "v1"
+frozen_at = "2026-04-20"
+
+[strategy]
+method = "basket_spread_ou_bertram"
+spread_formula = "log(target) - mean(log(peers))"
+threshold_method = "bertram_symmetric"
+threshold_clip_min = 0.15
+threshold_clip_max = 2.5
+residual_window_days = 60
+forward_window_days = 60
+refit_cadence = "quarterly"
+cost_bps_assumed = 5.0
+leverage_assumed = 4.0
+sizing = "equal_weight_across_baskets"
+
+[sectors.chips]
+members = ["NVDA", "AMD"]
+traded_targets = ["INTC"]
+"#;
+        let err = load_universe_from_str(toml).unwrap_err();
+        assert!(err.contains("traded_target 'INTC' not in members"));
+    }
+
+    #[test]
+    fn test_reject_duplicate_members() {
+        let toml = r#"
+[version]
+schema = "basket_universe"
+version = "v1"
+frozen_at = "2026-04-20"
+
+[strategy]
+method = "basket_spread_ou_bertram"
+spread_formula = "log(target) - mean(log(peers))"
+threshold_method = "bertram_symmetric"
+threshold_clip_min = 0.15
+threshold_clip_max = 2.5
+residual_window_days = 60
+forward_window_days = 60
+refit_cadence = "quarterly"
+cost_bps_assumed = 5.0
+leverage_assumed = 4.0
+sizing = "equal_weight_across_baskets"
+
+[sectors.chips]
+members = ["NVDA", "AMD", "NVDA"]
+traded_targets = ["AMD"]
+"#;
+        let err = load_universe_from_str(toml).unwrap_err();
+        assert!(err.contains("duplicate member 'NVDA'"));
+    }
+
+    #[test]
+    fn test_reject_insufficient_peers() {
+        let toml = r#"
+[version]
+schema = "basket_universe"
+version = "v1"
+frozen_at = "2026-04-20"
+
+[strategy]
+method = "basket_spread_ou_bertram"
+spread_formula = "log(target) - mean(log(peers))"
+threshold_method = "bertram_symmetric"
+threshold_clip_min = 0.15
+threshold_clip_max = 2.5
+residual_window_days = 60
+forward_window_days = 60
+refit_cadence = "quarterly"
+cost_bps_assumed = 5.0
+leverage_assumed = 4.0
+sizing = "equal_weight_across_baskets"
+
+[sectors.chips]
+members = ["NVDA", "AMD"]
+traded_targets = ["AMD"]
+"#;
+        let err = load_universe_from_str(toml).unwrap_err();
+        assert!(err.contains("has only 1 peer(s), need >= 2"));
     }
 }
