@@ -206,25 +206,44 @@ pub fn run_basket_replay(universe_path: &Path, bars_dir: &Path) -> Result<Replay
         panel.insert(fd_str.to_string(), day_map);
     }
 
-    // 5. Dedupe: ISO fit_date strings sort chronologically; later entries win per calendar day
+    // 5. Dedupe: per-basket merge (matches pandas groupby().last() column-wise semantics).
+    //    For each (date, basket) pair, keep the latest fit_date's value.
+    //    ISO fit_date strings sort chronologically via BTreeMap iteration order,
+    //    so later fit_dates overwrite earlier ones at the basket-level granularity.
+    //    A basket dropped from a later panel (e.g., OU fit failed) retains its value
+    //    from the earlier panel — matching Python's last-non-NaN behavior.
     let mut per_day_baskets: BTreeMap<NaiveDate, HashMap<String, f64>> = BTreeMap::new();
     for day_map in panel.values() {
         for (date, baskets) in day_map {
-            per_day_baskets.insert(*date, baskets.clone());
+            let entry = per_day_baskets.entry(*date).or_default();
+            for (basket_id, pnl) in baskets {
+                entry.insert(basket_id.clone(), *pnl);
+            }
         }
     }
 
-    // 6. Portfolio: daily = mean(basket_pnl) × leverage
+    // 6. Portfolio divisor: total universe size (matches Python's len(full.columns)).
+    //    Python uses fillna(0.0).mean(axis=1), which divides by total columns — i.e.,
+    //    missing baskets on a given day contribute 0 but still count in the denominator.
+    //    Using active count would over-weight days with fewer live baskets.
+    let universe_size: usize = per_day_baskets
+        .values()
+        .flat_map(|b| b.keys().cloned())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    info!(universe_size = universe_size, "portfolio divisor");
+
+    // 7. Portfolio: daily = sum(basket_pnl) / universe_size × leverage
     let daily_pnl: Vec<(NaiveDate, f64)> = per_day_baskets
         .iter()
         .filter(|(_, b)| !b.is_empty())
         .map(|(d, baskets)| {
-            let mean = baskets.values().sum::<f64>() / baskets.len() as f64;
-            (*d, mean * leverage)
+            let sum = baskets.values().sum::<f64>();
+            (*d, sum / universe_size as f64 * leverage)
         })
         .collect();
 
-    // 7. Portfolio stats
+    // 8. Portfolio stats
     let returns: Vec<f64> = daily_pnl.iter().map(|(_, p)| *p).collect();
     let stats = portfolio_stats(&returns);
 
@@ -476,7 +495,12 @@ fn compute_spread(aligned: &[(NaiveDate, f64, Vec<f64>)]) -> Vec<(NaiveDate, f64
 /// Loop (matches Python exactly):
 ///   for each bar: record pnl = pos * dspread (dspread[0] = 0)
 ///                 evaluate new_pos from z-score
-///                 if changed: pnl -= cost/2, update pos
+///                 if changed: pnl -= (cost/2) * |Δpos|, update pos
+///
+/// The cost charge must be proportional to |Δpos| to match Python's
+/// `-(cost/2) * np.abs(np.diff(pos, prepend=0))`:
+///   - entry 0 → ±1: |Δ|=1, charge cost/2
+///   - flip +1 → -1 (or -1 → +1): |Δ|=2, charge cost (full round-trip)
 fn simulate_symmetric_bertram(
     fwd: &[(NaiveDate, f64)],
     mu: f64,
@@ -509,7 +533,8 @@ fn simulate_symmetric_bertram(
         };
 
         if new_pos != pos {
-            pnl -= cost / 2.0;
+            let delta = (new_pos - pos).unsigned_abs() as f64;
+            pnl -= (cost / 2.0) * delta;
             n_trades += 1;
             pos = new_pos;
         }
@@ -641,6 +666,90 @@ traded_targets = ["AMD"]
         assert!((s.daily_mean - 0.01).abs() < 1e-15);
         // std effectively 0 (floating point noise) → sharpe is numerically ill-defined
         assert!(s.daily_std < 1e-15);
+    }
+
+    #[test]
+    fn test_dedupe_preserves_basket_from_earlier_fit_date() {
+        // Regression test for issue #263: when a later fit_date drops a basket
+        // (e.g., OU fit fails), the earlier fit_date's value for that basket
+        // must be preserved. pandas groupby().last() does this column-wise;
+        // Rust must match that semantics.
+        use std::collections::BTreeMap;
+
+        let date = NaiveDate::from_ymd_opt(2026, 2, 6).unwrap();
+
+        // Simulate panel state: two fit_dates, later one missing one basket
+        let mut panel: BTreeMap<String, BTreeMap<NaiveDate, HashMap<String, f64>>> =
+            BTreeMap::new();
+
+        // Earlier fit_date (2025-12-31): has MOH, UNH
+        let mut early = BTreeMap::new();
+        let mut early_day = HashMap::new();
+        early_day.insert("MOH".to_string(), 0.32);
+        early_day.insert("UNH".to_string(), 0.09);
+        early.insert(date, early_day);
+        panel.insert("2025-12-31".to_string(), early);
+
+        // Later fit_date (2026-01-31): only UNH (MOH dropped — simulating OU fit failure)
+        let mut late = BTreeMap::new();
+        let mut late_day = HashMap::new();
+        late_day.insert("UNH".to_string(), 0.11);
+        late.insert(date, late_day);
+        panel.insert("2026-01-31".to_string(), late);
+
+        // Apply the per-basket merge dedupe
+        let mut per_day_baskets: BTreeMap<NaiveDate, HashMap<String, f64>> = BTreeMap::new();
+        for day_map in panel.values() {
+            for (d, baskets) in day_map {
+                let entry = per_day_baskets.entry(*d).or_default();
+                for (basket_id, pnl) in baskets {
+                    entry.insert(basket_id.clone(), *pnl);
+                }
+            }
+        }
+
+        let merged = &per_day_baskets[&date];
+        assert_eq!(merged.len(), 2, "both MOH and UNH should survive merge");
+        assert!((merged["MOH"] - 0.32).abs() < 1e-12, "MOH retains 2025-12-31 value");
+        assert!((merged["UNH"] - 0.11).abs() < 1e-12, "UNH takes 2026-01-31 value (overwritten)");
+    }
+
+    #[test]
+    fn test_simulate_cost_scales_with_position_delta() {
+        // Regression test for issue #263 second bug: cost must scale with |Δpos|.
+        // A flip +1 → -1 has |Δ|=2, so charges full cost (cost/2 * 2 = cost).
+        // An entry 0 → ±1 has |Δ|=1, so charges cost/2.
+        // Python: `-(cost/2) * np.abs(np.diff(pos, prepend=0))`.
+        let cost = 0.001_f64;
+
+        // Case 1: entry 0 → +1 (z < -k triggers long entry). Cost = cost/2.
+        let fwd1 = vec![
+            (NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(), -10.0), // z far below -k
+        ];
+        let (pnl1, _) = simulate_symmetric_bertram(&fwd1, 0.0, 1.0, 1.0, cost);
+        // On bar 0: dsp=0, pos=0 → pnl=0; then new_pos=+1, charge cost/2
+        assert!(
+            (pnl1[0].1 - (-cost / 2.0)).abs() < 1e-12,
+            "entry should charge cost/2; got {}",
+            pnl1[0].1
+        );
+
+        // Case 2: flip +1 → -1. Total cost for the flip bar = cost (cost/2 * |Δ|=2).
+        let fwd2 = vec![
+            (NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(), -10.0), // enter long
+            (NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(), 10.0),  // flip to short
+        ];
+        let (pnl2, _) = simulate_symmetric_bertram(&fwd2, 0.0, 1.0, 1.0, cost);
+        // Bar 0: entry long, pnl = -cost/2
+        assert!((pnl2[0].1 - (-cost / 2.0)).abs() < 1e-12);
+        // Bar 1: holding long, spread goes from -10 to +10 (dsp=20), pnl = 1*20 - cost (flip)
+        let expected = 1.0 * 20.0 - cost;
+        assert!(
+            (pnl2[1].1 - expected).abs() < 1e-12,
+            "flip should charge full cost; got {} expected {}",
+            pnl2[1].1,
+            expected
+        );
     }
 
     #[test]
