@@ -173,6 +173,19 @@ struct ReplayArgs {
     /// Basket universe TOML file. Required when --engine basket.
     #[arg(long)]
     universe: Option<PathBuf>,
+
+    /// Directory containing per-symbol 1-min parquets. Required when --engine basket.
+    /// Defaults to $QUANT_DATA_DIR if set, else /Users/$USER/quant-data/bars/v3_sp500_2024-2026_1min_adjusted
+    #[arg(long)]
+    bars_dir: Option<PathBuf>,
+
+    /// quant-lab baseline.json for parity comparison (optional).
+    #[arg(long)]
+    baseline: Option<PathBuf>,
+
+    /// Output TSV for basket replay metrics (default: data/basket_parity.tsv).
+    #[arg(long)]
+    tsv_out: Option<PathBuf>,
 }
 
 const DEFAULT_CONFIG: &str = "config/pairs.toml";
@@ -287,7 +300,8 @@ async fn main() {
             )
         }
         Command::Replay(a) => {
-            // Handle basket engine separately — different architecture
+            // Basket replay uses walk-forward semantics (matches quant-lab backtest).
+            // Reads per-symbol parquets directly; no Alpaca API calls.
             if a.engine.is_basket() {
                 let universe_path = match &a.universe {
                     Some(p) => p.clone(),
@@ -297,48 +311,60 @@ async fn main() {
                     }
                 };
 
-                let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("{e}");
-                        std::process::exit(1);
-                    }
-                };
+                let bars_dir = a.bars_dir.clone().unwrap_or_else(|| {
+                    std::env::var("QUANT_DATA_DIR")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| {
+                            let home = std::env::var("HOME").unwrap_or_default();
+                            PathBuf::from(home)
+                                .join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
+                        })
+                });
 
-                let portfolio_config = basket_engine::PortfolioConfig::default();
-                let cost_bps = 5.0; // TODO: read from universe TOML
+                let tsv_out = a
+                    .tsv_out
+                    .clone()
+                    .unwrap_or_else(|| a.data_dir.join("basket_parity.tsv"));
 
                 info!(
                     universe = %universe_path.display(),
-                    start = a.start.as_str(),
-                    end = a.end.as_str(),
-                    "========== BASKET REPLAY MODE =========="
+                    bars_dir = %bars_dir.display(),
+                    "========== BASKET WALK-FORWARD REPLAY =========="
                 );
 
-                match basket_runner::run_basket_replay(
-                    &alpaca,
-                    &universe_path,
-                    &a.start,
-                    &a.end,
-                    &portfolio_config,
-                    cost_bps,
-                )
-                .await
-                {
+                match basket_runner::run_basket_replay(&universe_path, &bars_dir) {
                     Ok(result) => {
-                        info!(
-                            total_bars = result.total_bars,
-                            total_intents = result.total_intents,
-                            trading_days = result.daily_pnl.len(),
-                            "========== BASKET REPLAY END =========="
-                        );
-
-                        // Write P&L CSV
-                        let csv_path = a.data_dir.join("basket_daily_pnl.csv");
-                        if let Err(e) = basket_runner::write_pnl_csv(&result.daily_pnl, &csv_path) {
-                            error!(error = %e, "failed to write P&L CSV");
+                        // Write TSV
+                        if let Err(e) = basket_runner::write_tsv(
+                            &tsv_out,
+                            &result.stats,
+                            &result.runs,
+                            &result.daily_pnl,
+                        ) {
+                            error!(error = %e, "failed to write TSV");
                         } else {
-                            info!(path = %csv_path.display(), "wrote daily P&L CSV");
+                            info!(path = %tsv_out.display(), rows = result.runs.len(), "wrote TSV");
+                        }
+
+                        // Compare to baseline if provided
+                        if let Some(baseline_path) = &a.baseline {
+                            match std::fs::read_to_string(baseline_path)
+                                .map_err(|e| e.to_string())
+                                .and_then(|s| {
+                                    serde_json::from_str::<basket_runner::BaselineJson>(&s)
+                                        .map_err(|e| e.to_string())
+                                }) {
+                                Ok(bj) => {
+                                    let pass = basket_runner::print_parity_comparison(
+                                        &result.stats,
+                                        &bj.stats,
+                                    );
+                                    if !pass {
+                                        warn!("parity check FAILED — see comparison above");
+                                    }
+                                }
+                                Err(e) => warn!(error = %e, "failed to load baseline"),
+                            }
                         }
                     }
                     Err(e) => {
