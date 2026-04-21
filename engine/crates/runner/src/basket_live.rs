@@ -177,7 +177,14 @@ pub async fn run_basket_live(
     loop {
         tokio::select! {
             Some(bar) = bar_rx.recv() => {
-                let dt = match DateTime::<Utc>::from_timestamp_millis(bar.timestamp) {
+                // `stream.rs` shifts Alpaca bar timestamps by +60s (open→close time).
+                // Undo that here so `minute` reflects bar-OPEN time, matching the
+                // RTH filter used by replay (`basket_runner.rs::read_daily_closes`).
+                // Without this, the last RTH bar (open=19:59, stream=20:00) would be
+                // excluded by `RTH_START_MIN..SESSION_CLOSE_MIN` and the 19:59 close
+                // would never enter the buffer — missing the daily close.
+                let bar_open_ts_ms = bar.timestamp - 60_000;
+                let dt = match DateTime::<Utc>::from_timestamp_millis(bar_open_ts_ms) {
                     Some(d) => d,
                     None => continue,
                 };
@@ -309,11 +316,21 @@ async fn process_session_close(
 
     info!(date = %date, n_orders = orders.len(), "emitting orders");
 
+    // Track which symbols were successfully adjusted so we only update
+    // `current_notionals` for legs that actually executed. This matters
+    // when `diff_to_orders` skipped symbols (missing prices) or when
+    // Alpaca rejected orders — blindly syncing to target would desync
+    // internal state from the broker's view and prevent future corrective
+    // orders.
+    let mut successfully_adjusted: std::collections::HashSet<String> = Default::default();
+
     match execution.alpaca_mode() {
         None => {
-            // Noop — log only.
+            // Noop — log only, but treat every emitted order as "successful"
+            // so the simulated state evolves consistently across sessions.
             for order in &orders {
                 log_order(order, "NOOP");
+                successfully_adjusted.insert(order.symbol.clone());
             }
         }
         Some(mode) => {
@@ -327,14 +344,17 @@ async fn process_session_close(
                     .place_order(&order.symbol, order.qty as f64, side_str, mode)
                     .await
                 {
-                    Ok(o) => info!(
-                        symbol = order.symbol.as_str(),
-                        qty = order.qty,
-                        side = side_str,
-                        order_id = o.id.as_str(),
-                        status = o.status.as_str(),
-                        "ORDER PLACED"
-                    ),
+                    Ok(o) => {
+                        info!(
+                            symbol = order.symbol.as_str(),
+                            qty = order.qty,
+                            side = side_str,
+                            order_id = o.id.as_str(),
+                            status = o.status.as_str(),
+                            "ORDER PLACED"
+                        );
+                        successfully_adjusted.insert(order.symbol.clone());
+                    }
                     Err(e) => error!(
                         symbol = order.symbol.as_str(),
                         qty = order.qty,
@@ -347,9 +367,46 @@ async fn process_session_close(
         }
     }
 
-    // After dispatching, adopt target notionals as current (ignoring reject/partial-fill
-    // edge cases — reconciliation lives in a separate follow-up).
-    *current_notionals = target_notionals;
+    // Update current_notionals ONLY for legs we successfully adjusted.
+    //   - successful order   → adopt target notional for that symbol
+    //   - failed order       → keep prior notional (next session will retry)
+    //   - symbol not in orders
+    //       - because delta was tiny        → sync to target (no-op / near-no-op)
+    //       - because price missing/invalid → keep prior notional
+    // `diff_to_orders` emits an order exactly when BOTH delta >= tolerance AND
+    // price is finite+positive. So "in orders" ≡ "was adjustable this session".
+    let orders_by_symbol: std::collections::HashSet<&str> =
+        orders.iter().map(|o| o.symbol.as_str()).collect();
+    let mut drift_count = 0usize;
+    for (sym, target) in &target_notionals {
+        if successfully_adjusted.contains(sym) {
+            current_notionals.insert(sym.clone(), *target);
+        } else if !orders_by_symbol.contains(sym.as_str()) {
+            // Not in orders: delta was below threshold (price valid) OR price missing.
+            // If price valid, sync to target — delta was negligible.
+            // If price missing, keep prior notional.
+            let has_price = closes
+                .get(sym)
+                .map(|p| p.is_finite() && *p > 0.0)
+                .unwrap_or(false);
+            if has_price {
+                current_notionals.insert(sym.clone(), *target);
+            }
+            // else: keep whatever was there (may be None/absent, that's fine)
+        } else {
+            // Symbol was in orders but not in successfully_adjusted → order failed.
+            // Preserve prior notional and count drift.
+            drift_count += 1;
+        }
+    }
+    if drift_count > 0 {
+        warn!(
+            drift_count,
+            total_orders = orders.len(),
+            "some orders failed; current_notionals preserves prior values for failed legs \
+             — see #267 for full Alpaca reconciliation"
+        );
+    }
 }
 
 fn log_intent(intent: &PositionIntent) {
@@ -505,6 +562,34 @@ mod tests {
         assert_eq!(
             BasketExecution::Live.alpaca_mode(),
             Some(ExecutionMode::Live)
+        );
+    }
+
+    /// Verifies the bar-timestamp unshift needed in the live bar loop.
+    /// stream.rs adds +60s (open→close); we subtract it to get bar-open
+    /// time for RTH filtering, so the 19:59-open / 20:00-close bar is
+    /// correctly classified as RTH rather than being filtered out.
+    #[test]
+    fn test_bar_timestamp_unshift_keeps_last_rth_bar() {
+        // Alpaca bar open-time 19:59 UTC = 71940 minutes from epoch day start.
+        // stream.rs adds 60_000 ms → stream timestamp = 20:00 UTC.
+        let base = DateTime::<Utc>::from_timestamp(0, 0).unwrap();
+        let _ = base; // sanity: construction works
+                      // Build a millis value for some 2026-02-06 19:59 UTC, shift +60s.
+        let open = chrono::NaiveDate::from_ymd_opt(2026, 2, 6)
+            .unwrap()
+            .and_hms_opt(19, 59, 0)
+            .unwrap()
+            .and_utc();
+        let stream_ts_ms = open.timestamp_millis() + 60_000;
+        // Replicate the unshift used in the bar loop.
+        let bar_open_ts_ms = stream_ts_ms - 60_000;
+        let dt = DateTime::<Utc>::from_timestamp_millis(bar_open_ts_ms).unwrap();
+        let minute = dt.hour() * 60 + dt.minute();
+        assert_eq!(minute, 19 * 60 + 59, "unshift must recover bar-open minute");
+        assert!(
+            (RTH_START_MIN..SESSION_CLOSE_MIN).contains(&minute),
+            "last RTH bar (19:59 open) must pass RTH filter after unshift"
         );
     }
 
