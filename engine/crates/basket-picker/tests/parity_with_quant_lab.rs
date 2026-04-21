@@ -6,6 +6,9 @@
 use basket_picker::{fit_ou_ar1, optimize_symmetric_thresholds};
 
 /// Reference spread generated in Python with np.random.seed(42).
+/// Generation: OU process with kappa=25.0, mu=0.05, sigma_cont=0.10, dt=1/252.
+/// Command: cd quant-lab && python3 -c "import numpy as np; np.random.seed(42); ..."
+/// See test file history for full generation script.
 const REFERENCE_SPREAD: [f64; 100] = [
     0.05,
     0.05312900505131859,

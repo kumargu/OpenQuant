@@ -120,6 +120,20 @@ pub fn load_universe_from_str(content: &str) -> Result<Universe, String> {
     let raw: RawUniverse =
         toml::from_str(content).map_err(|e| format!("failed to parse TOML: {}", e))?;
 
+    // Validate schema and version
+    if raw.version.schema != "basket_universe" {
+        return Err(format!(
+            "unsupported schema: expected 'basket_universe', got '{}'",
+            raw.version.schema
+        ));
+    }
+    if raw.version.version != "v1" {
+        return Err(format!(
+            "unsupported version: expected 'v1', got '{}'",
+            raw.version.version
+        ));
+    }
+
     // Parse frozen_at date for candidates
     let fit_date = NaiveDate::parse_from_str(&raw.version.frozen_at, "%Y-%m-%d")
         .map_err(|e| format!("invalid frozen_at date: {}", e))?;

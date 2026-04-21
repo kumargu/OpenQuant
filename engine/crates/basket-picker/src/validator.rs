@@ -118,6 +118,17 @@ pub fn validate(
         }
     };
 
+    // Validate clip bounds (clamp panics if min > max)
+    if config.k_clip_min > config.k_clip_max {
+        return BasketFit::rejected(
+            candidate.clone(),
+            format!(
+                "invalid config: k_clip_min ({}) > k_clip_max ({})",
+                config.k_clip_min, config.k_clip_max
+            ),
+        );
+    }
+
     // Clip k to allowed range
     let k_raw = bertram.k;
     let k_clipped = k_raw.clamp(config.k_clip_min, config.k_clip_max);
@@ -266,5 +277,32 @@ mod tests {
 
         assert!(!fit.valid);
         assert!(fit.reject_reason.unwrap().contains("insufficient data"));
+    }
+
+    #[test]
+    fn test_validate_invalid_config_clip_bounds() {
+        let candidate = BasketCandidate {
+            target: "AAPL".to_string(),
+            members: vec!["MSFT".to_string(), "GOOGL".to_string()],
+            sector: "tech".to_string(),
+            fit_date: chrono::NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+        };
+
+        let (target, peer1, peer2) = make_cointegrated_prices(100, 12345);
+
+        let mut bars = HashMap::new();
+        bars.insert("AAPL".to_string(), target);
+        bars.insert("MSFT".to_string(), peer1);
+        bars.insert("GOOGL".to_string(), peer2);
+
+        let config = ValidatorConfig {
+            k_clip_min: 2.5,
+            k_clip_max: 0.15, // Invalid: min > max
+            ..Default::default()
+        };
+        let fit = validate(&candidate, &bars, &config);
+
+        assert!(!fit.valid);
+        assert!(fit.reject_reason.unwrap().contains("invalid config"));
     }
 }

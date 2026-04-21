@@ -62,6 +62,7 @@ fn erfi(x: f64) -> f64 {
 }
 
 /// Bertram eq (9): expected first-passage time from a to m under OU.
+/// Returns time in years (kappa is annualized, so result is in years).
 fn expected_trade_length(a: f64, m: f64, theta: f64, kappa: f64, sigma_cont: f64) -> f64 {
     if kappa <= 0.0 || sigma_cont <= 0.0 {
         return f64::NAN;
