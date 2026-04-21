@@ -30,20 +30,15 @@ pub struct BasketParams {
 impl BasketParams {
     /// Create from a validated BasketFit.
     ///
-    /// The basket_id includes fit_date to distinguish fits for the same
-    /// target/sector with different parameters or peer baskets.
+    /// Uses the candidate's canonical ID which includes sector, target,
+    /// fit_date, and a hash of the peer members for uniqueness.
     pub fn from_fit(fit: &BasketFit) -> Option<Self> {
         if !fit.valid {
             return None;
         }
         let ou = fit.ou.as_ref()?;
-        // Include fit_date in ID to ensure uniqueness across refits
-        let basket_id = format!(
-            "{}:{}:{}",
-            fit.candidate.sector, fit.candidate.target, fit.candidate.fit_date
-        );
         Some(Self {
-            basket_id,
+            basket_id: fit.candidate.id(),
             target: fit.candidate.target.clone(),
             peers: fit.candidate.members.clone(),
             ou: ou.clone(),
@@ -273,6 +268,11 @@ impl BasketEngine {
     pub fn get_params(&self, basket_id: &str) -> Option<&BasketParams> {
         self.params.get(basket_id)
     }
+
+    /// Iterate over all basket params.
+    pub fn iter_params(&self) -> impl Iterator<Item = (&String, &BasketParams)> {
+        self.params.iter()
+    }
 }
 
 #[cfg(test)]
@@ -315,6 +315,10 @@ mod tests {
         }
     }
 
+    fn test_basket_id() -> String {
+        make_test_fit().candidate.id()
+    }
+
     #[test]
     fn test_engine_creation() {
         let fit = make_test_fit();
@@ -355,7 +359,7 @@ mod tests {
         assert_eq!(intents[0].target_position, 1);
         assert_eq!(intents[0].reason, TransitionReason::InitialEntryLong);
 
-        let state = engine.get_state("chips:AMD:2026-04-20").unwrap();
+        let state = engine.get_state(&test_basket_id()).unwrap();
         assert_eq!(state.position, 1);
     }
 
@@ -414,10 +418,7 @@ mod tests {
             },
         ];
         engine.on_bars(&bars1);
-        assert_eq!(
-            engine.get_state("chips:AMD:2026-04-20").unwrap().position,
-            1
-        );
+        assert_eq!(engine.get_state(&test_basket_id()).unwrap().position, 1);
 
         // Then flip to short
         let bars2 = vec![
@@ -440,10 +441,7 @@ mod tests {
         let intents = engine.on_bars(&bars2);
         assert_eq!(intents.len(), 1);
         assert_eq!(intents[0].reason, TransitionReason::FlipLongToShort);
-        assert_eq!(
-            engine.get_state("chips:AMD:2026-04-20").unwrap().position,
-            -1
-        );
+        assert_eq!(engine.get_state(&test_basket_id()).unwrap().position, -1);
     }
 
     #[test]
@@ -472,10 +470,7 @@ mod tests {
 
         let intents = engine.on_bars(&bars);
         assert!(intents.is_empty());
-        assert_eq!(
-            engine.get_state("chips:AMD:2026-04-20").unwrap().position,
-            0
-        );
+        assert_eq!(engine.get_state(&test_basket_id()).unwrap().position, 0);
     }
 
     #[test]
@@ -536,8 +531,8 @@ mod tests {
         let loaded = BasketEngine::load_state(tmp.path()).unwrap();
 
         // Verify state matches
-        let orig_state = engine.get_state("chips:AMD:2026-04-20").unwrap();
-        let loaded_state = loaded.get_state("chips:AMD:2026-04-20").unwrap();
+        let orig_state = engine.get_state(&test_basket_id()).unwrap();
+        let loaded_state = loaded.get_state(&test_basket_id()).unwrap();
         assert_eq!(orig_state.position, loaded_state.position);
         assert_eq!(orig_state.entry_date, loaded_state.entry_date);
     }
@@ -569,7 +564,7 @@ mod tests {
         let intents = engine.on_bars(&bars);
         assert!(intents.is_empty(), "mixed dates should return no intents");
         assert_eq!(
-            engine.get_state("chips:AMD:2026-04-20").unwrap().position,
+            engine.get_state(&test_basket_id()).unwrap().position,
             0,
             "state should remain flat"
         );

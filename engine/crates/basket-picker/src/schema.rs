@@ -20,9 +20,30 @@ pub struct BasketCandidate {
 }
 
 impl BasketCandidate {
-    /// Canonical ID: "{sector}:{target}".
+    /// Canonical ID: "{sector}:{target}:{fit_date}:{members_hash}".
+    ///
+    /// The members_hash is a stable 8-char hex hash of the sorted peer symbols,
+    /// ensuring uniqueness when peer composition changes.
     pub fn id(&self) -> String {
-        format!("{}:{}", self.sector, self.target)
+        let members_hash = self.members_hash();
+        format!(
+            "{}:{}:{}:{}",
+            self.sector, self.target, self.fit_date, members_hash
+        )
+    }
+
+    /// Compute a stable 8-char hex hash of the sorted members.
+    fn members_hash(&self) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut sorted_members = self.members.clone();
+        sorted_members.sort();
+
+        let mut hasher = DefaultHasher::new();
+        sorted_members.hash(&mut hasher);
+        let hash = hasher.finish();
+        format!("{:08x}", hash as u32)
     }
 }
 
