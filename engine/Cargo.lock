@@ -348,6 +348,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "basket-engine"
+version = "0.1.0"
+dependencies = [
+ "basket-picker",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "basket-picker"
 version = "0.1.0"
 dependencies = [
