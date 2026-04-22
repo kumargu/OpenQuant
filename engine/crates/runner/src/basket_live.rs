@@ -116,8 +116,6 @@ pub async fn run_basket_live(
         "loaded warmup closes"
     );
 
-    // Build price-history map for validator (HashMap<symbol, Vec<f64>> aligned by date).
-    let price_history = align_history(&closes);
     let validator_config = ValidatorConfig {
         residual_window: universe.strategy.residual_window_days,
         k_clip_min: universe.strategy.threshold_clip_min,
@@ -125,10 +123,20 @@ pub async fn run_basket_live(
         cost: universe.strategy.cost_bps_assumed / 10_000.0,
     };
 
+    // Validate each candidate with its OWN per-basket date intersection.
+    // A universe-wide intersection lets one sparse symbol shrink every series
+    // below `residual_window` and reject otherwise-valid baskets, even when
+    // the candidate's own symbols have sufficient history.
     let fits: Vec<_> = universe
         .candidates
         .iter()
-        .map(|c| validate(c, &price_history, &validator_config))
+        .map(|c| {
+            let mut basket_symbols: Vec<&str> = Vec::with_capacity(c.members.len() + 1);
+            basket_symbols.push(c.target.as_str());
+            basket_symbols.extend(c.members.iter().map(String::as_str));
+            let aligned = align_basket_history(&closes, &basket_symbols);
+            validate(c, &aligned, &validator_config)
+        })
         .collect();
     let valid_count = fits.iter().filter(|f| f.valid).count();
     info!(
@@ -147,12 +155,16 @@ pub async fn run_basket_live(
     //    Without this, a restart with live open positions would trigger
     //    target-minus-zero deltas, flooding Alpaca with duplicate orders.
     //    Noop skips this (no Alpaca account needed for shadow mode).
+    //    Paper/Live FAIL CLOSED: if reconciliation cannot load open positions,
+    //    we refuse to start. Trading from an empty notional map would diff
+    //    targets against zero and flood Alpaca with duplicate orders against
+    //    already-open broker positions, potentially double-sizing every leg.
     let mut current_notionals = match execution.alpaca_mode() {
         None => {
             info!("noop mode — skipping startup position reconciliation");
             HashMap::new()
         }
-        Some(mode) => seed_current_notionals_from_alpaca(alpaca, mode).await,
+        Some(mode) => seed_current_notionals_from_alpaca(alpaca, mode).await?,
     };
 
     // 3. Subscribe to all universe symbols over WebSocket.
@@ -240,33 +252,29 @@ pub async fn run_basket_live(
 
 /// Fetch open positions from Alpaca and express them as signed notional per symbol.
 /// Used on startup so `diff_to_orders` computes correct deltas from the engine's target.
+///
+/// Returns `Err` on any fetch failure; the caller must treat this as fatal for
+/// paper/live execution (trading from an empty notional map would double-size
+/// every already-open leg on the first session).
 async fn seed_current_notionals_from_alpaca(
     alpaca: &AlpacaClient,
     mode: ExecutionMode,
-) -> HashMap<String, f64> {
-    match alpaca.get_positions(mode).await {
-        Ok(positions) => {
-            let notionals: HashMap<String, f64> = positions
-                .into_iter()
-                .map(|(sym, (qty, avg_entry))| (sym, qty * avg_entry))
-                .collect();
-            info!(
-                n_positions = notionals.len(),
-                "seeded current_notionals from Alpaca open positions"
-            );
-            notionals
-        }
-        Err(e) => {
-            // Fail closed: if we can't read positions, we can't safely diff. Warn loudly
-            // and return empty so the operator notices in the first session's logs.
-            warn!(
-                error = %e,
-                "failed to fetch Alpaca positions on startup — current_notionals empty; \
-                 first session will emit target-minus-zero deltas and may double-size"
-            );
-            HashMap::new()
-        }
-    }
+) -> Result<HashMap<String, f64>, String> {
+    let positions = alpaca.get_positions(mode).await.map_err(|e| {
+        format!(
+            "startup position reconciliation failed — refusing to trade without a \
+             trusted notional map (fetch error: {e})"
+        )
+    })?;
+    let notionals: HashMap<String, f64> = positions
+        .into_iter()
+        .map(|(sym, (qty, avg_entry))| (sym, qty * avg_entry))
+        .collect();
+    info!(
+        n_positions = notionals.len(),
+        "seeded current_notionals from Alpaca open positions"
+    );
+    Ok(notionals)
 }
 
 /// Run the engine for one session close and dispatch orders.
@@ -367,44 +375,66 @@ async fn process_session_close(
         }
     }
 
-    // Update current_notionals ONLY for legs we successfully adjusted.
-    //   - successful order   → adopt target notional for that symbol
-    //   - failed order       → keep prior notional (next session will retry)
-    //   - symbol not in orders
-    //       - because delta was tiny        → sync to target (no-op / near-no-op)
-    //       - because price missing/invalid → keep prior notional
-    // `diff_to_orders` emits an order exactly when BOTH delta >= tolerance AND
+    // Reconcile current_notionals against what actually executed.
+    //
+    // We MUST iterate the union of `current_notionals ∪ target_notionals`
+    // — not just targets — so symbols dropped from the target set (e.g.,
+    // a basket that fully exited) are cleared after a successful close.
+    // Iterating only targets leaves the old notional in place, and
+    // `diff_to_orders` then emits another close order for it next session
+    // (current=X, target=0 → close X), producing repeat liquidation attempts.
+    //
+    // `diff_to_orders` emits an order exactly when BOTH |delta| >= 1.0 AND
     // price is finite+positive. So "in orders" ≡ "was adjustable this session".
+    //
+    // Per symbol, we update as follows:
+    //   - in successfully_adjusted
+    //       target present → set current to target
+    //       target absent  → remove (position closed)
+    //   - in orders but not adjusted      → order failed; keep prior notional
+    //   - not in orders + price valid
+    //       target present → set current to target (delta was negligible)
+    //       target absent  → remove (position effectively zero)
+    //   - not in orders + price missing   → keep prior notional (can't tell)
     let orders_by_symbol: std::collections::HashSet<&str> =
         orders.iter().map(|o| o.symbol.as_str()).collect();
+    let mut all_symbols: std::collections::HashSet<String> =
+        current_notionals.keys().cloned().collect();
+    all_symbols.extend(target_notionals.keys().cloned());
     let mut drift_count = 0usize;
-    for (sym, target) in &target_notionals {
-        if successfully_adjusted.contains(sym) {
-            current_notionals.insert(sym.clone(), *target);
-        } else if !orders_by_symbol.contains(sym.as_str()) {
-            // Not in orders: delta was below threshold (price valid) OR price missing.
-            // If price valid, sync to target — delta was negligible.
-            // If price missing, keep prior notional.
+    for sym in all_symbols {
+        let target_opt = target_notionals.get(&sym).copied();
+        let apply_target = |current: &mut HashMap<String, f64>| match target_opt {
+            Some(t) => {
+                current.insert(sym.clone(), t);
+            }
+            None => {
+                current.remove(&sym);
+            }
+        };
+        if successfully_adjusted.contains(&sym) {
+            apply_target(current_notionals);
+        } else if orders_by_symbol.contains(sym.as_str()) {
+            // Order was emitted but did not succeed → preserve prior notional.
+            drift_count += 1;
+        } else {
+            // No order emitted this session: either delta was below threshold
+            // (price valid) or price was missing.
             let has_price = closes
-                .get(sym)
+                .get(&sym)
                 .map(|p| p.is_finite() && *p > 0.0)
                 .unwrap_or(false);
             if has_price {
-                current_notionals.insert(sym.clone(), *target);
+                apply_target(current_notionals);
             }
-            // else: keep whatever was there (may be None/absent, that's fine)
-        } else {
-            // Symbol was in orders but not in successfully_adjusted → order failed.
-            // Preserve prior notional and count drift.
-            drift_count += 1;
+            // else: price missing — keep prior notional.
         }
     }
     if drift_count > 0 {
         warn!(
             drift_count,
             total_orders = orders.len(),
-            "some orders failed; current_notionals preserves prior values for failed legs \
-             — see #267 for full Alpaca reconciliation"
+            "some orders failed; current_notionals preserves prior values for failed legs"
         );
     }
 }
@@ -525,25 +555,40 @@ fn load_warmup_closes(
     Ok(out)
 }
 
-/// Transform per-symbol `Vec<(date, close)>` into aligned `HashMap<symbol, Vec<close>>`
-/// by the intersection of dates — required shape for `basket_picker::validate`.
-fn align_history(closes: &HashMap<String, Vec<(NaiveDate, f64)>>) -> HashMap<String, Vec<f64>> {
-    if closes.is_empty() {
+/// Align the date index for ONE basket (`target` + its peer `members`).
+///
+/// Produces the `HashMap<symbol, Vec<f64>>` shape that `basket_picker::validate`
+/// requires, intersecting dates across ONLY this basket's symbols. Missing
+/// symbols are passed through unaligned (length 0 after intersection with
+/// nothing), so the validator emits a precise "missing symbol" rejection.
+fn align_basket_history(
+    closes: &HashMap<String, Vec<(NaiveDate, f64)>>,
+    symbols: &[&str],
+) -> HashMap<String, Vec<f64>> {
+    let mut series_by_symbol: Vec<(&str, &Vec<(NaiveDate, f64)>)> =
+        Vec::with_capacity(symbols.len());
+    for s in symbols {
+        if let Some(v) = closes.get(*s) {
+            series_by_symbol.push((*s, v));
+        }
+    }
+    if series_by_symbol.is_empty() {
         return HashMap::new();
     }
-    // Intersection of dates across all symbols.
-    let first = closes.values().next().unwrap();
-    let mut common: std::collections::BTreeSet<NaiveDate> = first.iter().map(|(d, _)| *d).collect();
-    for series in closes.values() {
+
+    // Intersection of dates across ONLY this basket's symbols.
+    let mut common: std::collections::BTreeSet<NaiveDate> =
+        series_by_symbol[0].1.iter().map(|(d, _)| *d).collect();
+    for (_, series) in &series_by_symbol[1..] {
         let s: std::collections::BTreeSet<NaiveDate> = series.iter().map(|(d, _)| *d).collect();
         common = common.intersection(&s).cloned().collect();
     }
 
     let mut out = HashMap::new();
-    for (symbol, series) in closes {
+    for (symbol, series) in &series_by_symbol {
         let map: HashMap<NaiveDate, f64> = series.iter().copied().collect();
         let aligned: Vec<f64> = common.iter().filter_map(|d| map.get(d).copied()).collect();
-        out.insert(symbol.clone(), aligned);
+        out.insert((*symbol).to_string(), aligned);
     }
     out
 }
@@ -594,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn test_align_history_intersects_dates() {
+    fn test_align_basket_history_intersects_only_basket_symbols() {
         let mut closes = HashMap::new();
         closes.insert(
             "A".to_string(),
@@ -612,11 +657,46 @@ mod tests {
                 (NaiveDate::from_ymd_opt(2026, 1, 3).unwrap(), 21.0),
             ],
         );
-        let aligned = align_history(&closes);
+        let aligned = align_basket_history(&closes, &["A", "B"]);
         // Intersection is [2026-01-02, 2026-01-03] — each series has 2 entries.
         assert_eq!(aligned.get("A").unwrap().len(), 2);
         assert_eq!(aligned.get("B").unwrap().len(), 2);
         assert_eq!(aligned.get("A").unwrap()[0], 11.0);
         assert_eq!(aligned.get("B").unwrap()[0], 20.0);
+    }
+
+    #[test]
+    fn test_align_basket_history_ignores_unrelated_sparse_symbols() {
+        // Basket X/Y both have full 3-day history; unrelated sparse C has
+        // only 1 day. A universe-wide intersection would shrink X/Y to that
+        // 1 day. Per-basket alignment must keep X/Y at 3.
+        let mut closes = HashMap::new();
+        closes.insert(
+            "X".to_string(),
+            vec![
+                (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 10.0),
+                (NaiveDate::from_ymd_opt(2026, 1, 2).unwrap(), 11.0),
+                (NaiveDate::from_ymd_opt(2026, 1, 3).unwrap(), 12.0),
+            ],
+        );
+        closes.insert(
+            "Y".to_string(),
+            vec![
+                (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 20.0),
+                (NaiveDate::from_ymd_opt(2026, 1, 2).unwrap(), 21.0),
+                (NaiveDate::from_ymd_opt(2026, 1, 3).unwrap(), 22.0),
+            ],
+        );
+        closes.insert(
+            "C_SPARSE".to_string(),
+            vec![(NaiveDate::from_ymd_opt(2026, 1, 3).unwrap(), 99.0)],
+        );
+        let aligned = align_basket_history(&closes, &["X", "Y"]);
+        assert_eq!(aligned.get("X").unwrap().len(), 3);
+        assert_eq!(aligned.get("Y").unwrap().len(), 3);
+        assert!(
+            !aligned.contains_key("C_SPARSE"),
+            "symbols outside the basket must not appear in the aligned map"
+        );
     }
 }
