@@ -16,6 +16,7 @@
 
 mod alpaca;
 mod bar_cache;
+mod basket_live;
 mod basket_runner;
 mod earnings;
 mod pair_picker_service;
@@ -129,6 +130,22 @@ struct StreamArgs {
     /// Override pipeline profile (default: selected by --engine).
     #[arg(long)]
     pipeline: Option<String>,
+
+    /// Basket universe TOML file. Required when --engine basket.
+    #[arg(long)]
+    universe: Option<PathBuf>,
+
+    /// Directory containing per-symbol 1-min parquets. Required when --engine basket.
+    /// Defaults to $QUANT_DATA_DIR if set, else `~/quant-data/bars/v3_sp500_2024-2026_1min_adjusted`.
+    #[arg(long)]
+    bars_dir: Option<PathBuf>,
+
+    /// Execution mode for --engine basket.
+    ///   noop:  log intents only, no orders placed (default, shadow mode)
+    ///   paper: paper Alpaca account
+    ///   live:  real-money Alpaca (explicit opt-in required)
+    #[arg(long, default_value = "noop")]
+    execution: String,
 }
 
 /// Args for replay (adds date range).
@@ -273,6 +290,16 @@ async fn main() {
         .with_writer(tee)
         .init();
 
+    // Basket engine in Live/Paper mode takes a dedicated path — it uses
+    // BasketEngine (continuous state machine) driven by 1-min bars, not the
+    // PairsEngine pipeline below. Early-return after the basket runner finishes.
+    if let Command::Live(a) | Command::Paper(a) = &cli.command {
+        if a.engine.is_basket() {
+            run_basket_stream(a.clone(), matches!(&cli.command, Command::Live(_))).await;
+            return;
+        }
+    }
+
     // Convert CLI command → (config, trading_dir, data_dir, candidates, pipeline, run_mode)
     let (config, trading_dir, data_dir, candidates, pipeline, run_mode) = match cli.command {
         Command::Live(a) => {
@@ -401,6 +428,114 @@ async fn main() {
         run_mode,
     )
     .await;
+}
+
+// ── Basket live/paper dispatch ──────────────────────────────────────
+
+async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
+    let universe_path = match args.universe {
+        Some(p) => p,
+        None => {
+            error!("--universe is required when --engine basket");
+            std::process::exit(1);
+        }
+    };
+
+    let bars_dir = args.bars_dir.unwrap_or_else(|| {
+        std::env::var("QUANT_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_default();
+                PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
+            })
+    });
+
+    // Parse execution mode. Default = noop (shadow).
+    // Extra safety: `paper live` must come from `Command::Live` (real-money path),
+    // otherwise treat as paper.
+    let execution = match args.execution.as_str() {
+        "noop" => basket_live::BasketExecution::Noop,
+        "paper" => basket_live::BasketExecution::Paper,
+        "live" => {
+            if !is_live_command {
+                warn!(
+                    "--execution live requested but command is 'paper'; \
+                     downgrading to Paper to prevent accidental real-money orders"
+                );
+                basket_live::BasketExecution::Paper
+            } else {
+                basket_live::BasketExecution::Live
+            }
+        }
+        other => {
+            error!(requested = %other, "unknown --execution (expected noop|paper|live)");
+            std::process::exit(1);
+        }
+    };
+
+    let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Refresh quant-data before warmup. Without this, the basket path reads
+    // potentially-stale parquets, and the validator fits OU on outdated prices
+    // — the same failure mode the pairs path fixes at main.rs refresh block.
+    // Filter refresh to only the universe's symbols (avoid refreshing unrelated SP500 names).
+    if bars_dir.exists() {
+        let filter = match basket_picker::load_universe(&universe_path) {
+            Ok(u) => {
+                let mut syms: Vec<String> = u
+                    .sectors
+                    .values()
+                    .flat_map(|s| s.members.iter().cloned())
+                    .collect();
+                syms.sort();
+                syms.dedup();
+                Some(syms)
+            }
+            Err(e) => {
+                error!(error = %e, "failed to load universe for refresh filter");
+                std::process::exit(1);
+            }
+        };
+        let target = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        info!(
+            target = target.as_str(),
+            filter_count = filter.as_ref().map(Vec::len).unwrap_or(0),
+            "refreshing quant-data bars (basket universe)"
+        );
+        match refresh::refresh_all(&bars_dir, &target, &alpaca, filter.as_deref()).await {
+            Ok(n) if n > 0 => info!(bars = n, "quant-data refreshed"),
+            Ok(_) => info!("quant-data already up to date"),
+            Err(e) => warn!(
+                error = e.as_str(),
+                "quant-data refresh failed — continuing with possibly stale data"
+            ),
+        }
+    } else {
+        warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
+    }
+
+    // Portfolio config: use sensible defaults for now. Capital & leverage can
+    // be surfaced to CLI/config in a follow-up; defaults match baseline config.
+    let portfolio_config = basket_engine::PortfolioConfig::default();
+
+    if let Err(e) = basket_live::run_basket_live(
+        &alpaca,
+        &universe_path,
+        &bars_dir,
+        execution,
+        portfolio_config,
+    )
+    .await
+    {
+        error!(error = %e, "basket live runner failed");
+        std::process::exit(1);
+    }
 }
 
 // ── Unified run function ─────────────────────────────────────────────
