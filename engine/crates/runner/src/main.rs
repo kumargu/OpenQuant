@@ -58,7 +58,7 @@ enum Command {
 /// Usage:
 ///   openquant-runner paper --engine snp500
 ///   openquant-runner replay --engine metals --start 2025-07-01 --end 2026-03-28
-///   openquant-runner replay --engine basket --universe config/basket_universe_v1.toml --start 2024-07-01 --end 2026-04-13
+///   openquant-runner replay --engine basket --start 2024-07-01 --end 2026-04-13
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Engine {
     /// S&P 500 equities — ADF cointegration, GICS sector pairs.
@@ -66,7 +66,7 @@ enum Engine {
     /// Metals — curated structurally-similar pairs, lab pipeline (structural gates relaxed).
     Metals,
     /// Basket spread strategy — OU/Bertram symmetric state machine.
-    /// Requires --universe flag pointing to a basket_universe_v1 TOML file.
+    /// Defaults to `config/basket_universe_v1.toml`; override with `--universe`.
     Basket,
     // Future: Bitcoin, etc.
 }
@@ -84,7 +84,15 @@ impl Engine {
         match self {
             Engine::Snp500 => None, // candidates must be provided via --candidates flag
             Engine::Metals => Some("pairs/metals_pairs.json"),
-            Engine::Basket => None, // basket uses --universe flag instead
+            Engine::Basket => None, // basket uses universe_path() instead
+        }
+    }
+
+    /// Default basket universe TOML. `--universe` overrides.
+    fn universe_path(&self) -> Option<&'static str> {
+        match self {
+            Engine::Snp500 | Engine::Metals => None,
+            Engine::Basket => Some("config/basket_universe_v1.toml"),
         }
     }
 
@@ -131,7 +139,7 @@ struct StreamArgs {
     #[arg(long)]
     pipeline: Option<String>,
 
-    /// Basket universe TOML file. Required when --engine basket.
+    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml` when --engine basket.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -187,7 +195,7 @@ struct ReplayArgs {
     #[arg(long)]
     bar_cache: Option<PathBuf>,
 
-    /// Basket universe TOML file. Required when --engine basket.
+    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml` when --engine basket.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -330,13 +338,14 @@ async fn main() {
             // Basket replay uses walk-forward semantics (matches quant-lab backtest).
             // Reads per-symbol parquets directly; no Alpaca API calls.
             if a.engine.is_basket() {
-                let universe_path = match &a.universe {
-                    Some(p) => p.clone(),
-                    None => {
+                let universe_path = a
+                    .universe
+                    .clone()
+                    .or_else(|| a.engine.universe_path().map(PathBuf::from))
+                    .unwrap_or_else(|| {
                         error!("--universe is required when --engine basket");
                         std::process::exit(1);
-                    }
-                };
+                    });
 
                 let bars_dir = a.bars_dir.clone().unwrap_or_else(|| {
                     std::env::var("QUANT_DATA_DIR")
@@ -433,13 +442,14 @@ async fn main() {
 // ── Basket live/paper dispatch ──────────────────────────────────────
 
 async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
-    let universe_path = match args.universe {
-        Some(p) => p,
-        None => {
+    let universe_path = args
+        .universe
+        .clone()
+        .or_else(|| args.engine.universe_path().map(PathBuf::from))
+        .unwrap_or_else(|| {
             error!("--universe is required when --engine basket");
             std::process::exit(1);
-        }
-    };
+        });
 
     let bars_dir = args.bars_dir.unwrap_or_else(|| {
         std::env::var("QUANT_DATA_DIR")
