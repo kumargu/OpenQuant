@@ -5,8 +5,8 @@
 //! bars from the Alpaca WebSocket.
 //!
 //! Flow per trading day:
-//!   1. Warmup (startup): read last N days of parquets, validate candidates,
-//!      build `BasketEngine` from `BasketFit`s. Engine enters with empty state.
+//!   1. Startup: load the frozen basket fit artifact and build `BasketEngine`
+//!      from those persisted `BasketFit`s. Engine enters with empty state.
 //!   2. Bar loop: for each 1-min bar, update per-symbol "last RTH bar".
 //!   3. Session close (19:59 UTC): snapshot the day's closes, call
 //!      `BasketEngine::on_bars()`, get `PositionIntent`s.
@@ -28,7 +28,7 @@ use basket_engine::{
     aggregate_positions, diff_to_orders, BasketEngine, DailyBar, OrderIntent, PortfolioConfig,
     PositionIntent, Side,
 };
-use basket_picker::{load_universe, validate, ValidatorConfig};
+use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tracing::{debug, error, info, warn};
@@ -69,23 +69,20 @@ impl BasketExecution {
     }
 }
 
-/// Warmup window: days of history to seed state. Needs >= residual_window from
-/// the universe config (60 by default) + a small buffer for safety.
-const WARMUP_DAYS: i64 = 90;
-
 /// Run the basket live/paper loop.
 ///
 /// Returns on Ctrl+C or fatal error.
 pub async fn run_basket_live(
     alpaca: &AlpacaClient,
     universe_path: &Path,
-    bars_dir: &Path,
+    fit_artifact_path: &Path,
     execution: BasketExecution,
     portfolio_config: PortfolioConfig,
+    fits: &[BasketFit],
 ) -> Result<(), String> {
     info!(
         universe = %universe_path.display(),
-        bars_dir = %bars_dir.display(),
+        fit_artifact = %fit_artifact_path.display(),
         execution = execution.label(),
         "========== BASKET LIVE RUNNER =========="
     );
@@ -94,7 +91,7 @@ pub async fn run_basket_live(
         warn!("LIVE MODE — real-money orders will be placed on every EOD signal");
     }
 
-    // 1. Load universe + validate candidates using parquet warmup data.
+    // 1. Load universe + frozen fit artifact.
     let universe = load_universe(universe_path)?;
     info!(
         baskets = universe.num_baskets(),
@@ -103,46 +100,23 @@ pub async fn run_basket_live(
     );
 
     let symbols = collect_symbols(&universe);
-    let closes = load_warmup_closes(bars_dir, &symbols, WARMUP_DAYS)?;
     info!(
         symbols = symbols.len(),
-        loaded_series = closes.len(),
-        "loaded warmup closes"
+        fits = fits.len(),
+        "loaded frozen basket fit artifact"
     );
 
-    let validator_config = ValidatorConfig {
-        residual_window: universe.strategy.residual_window_days,
-        k_clip_min: universe.strategy.threshold_clip_min,
-        k_clip_max: universe.strategy.threshold_clip_max,
-        cost: universe.strategy.cost_bps_assumed / 10_000.0,
-    };
-
-    // Validate each candidate with its OWN per-basket date intersection.
-    // A universe-wide intersection lets one sparse symbol shrink every series
-    // below `residual_window` and reject otherwise-valid baskets, even when
-    // the candidate's own symbols have sufficient history.
-    let fits: Vec<_> = universe
-        .candidates
-        .iter()
-        .map(|c| {
-            let mut basket_symbols: Vec<&str> = Vec::with_capacity(c.members.len() + 1);
-            basket_symbols.push(c.target.as_str());
-            basket_symbols.extend(c.members.iter().map(String::as_str));
-            let aligned = align_basket_history(&closes, &basket_symbols);
-            validate(c, &aligned, &validator_config)
-        })
-        .collect();
     let valid_count = fits.iter().filter(|f| f.valid).count();
     info!(
         total = fits.len(),
         valid = valid_count,
-        "validated basket candidates"
+        "loaded basket fits"
     );
     if valid_count == 0 {
-        return Err("no valid baskets after warmup validation".to_string());
+        return Err("no valid baskets in fit artifact".to_string());
     }
 
-    let mut engine = BasketEngine::new(&fits);
+    let mut engine = BasketEngine::new(fits);
     info!(baskets = engine.num_baskets(), "basket engine initialized");
 
     // 2. Seed current_notionals from Alpaca positions (startup reconciliation).
@@ -610,7 +584,7 @@ fn log_order(order: &OrderIntent, label: &str) {
     );
 }
 
-fn collect_symbols(universe: &basket_picker::Universe) -> Vec<String> {
+pub(crate) fn collect_symbols(universe: &basket_picker::Universe) -> Vec<String> {
     let mut symbols: Vec<String> = universe
         .sectors
         .values()
@@ -623,7 +597,7 @@ fn collect_symbols(universe: &basket_picker::Universe) -> Vec<String> {
 
 /// Read the last `window_days` trading days of daily closes for each symbol.
 /// Aggregates 1-min parquets to RTH-last-bar closes (same rule as replay).
-fn load_warmup_closes(
+pub(crate) fn load_warmup_closes(
     bars_dir: &Path,
     symbols: &[String],
     window_days: i64,
@@ -706,7 +680,7 @@ fn load_warmup_closes(
 /// requires, intersecting dates across ONLY this basket's symbols. Missing
 /// symbols are passed through unaligned (length 0 after intersection with
 /// nothing), so the validator emits a precise "missing symbol" rejection.
-fn align_basket_history(
+pub(crate) fn align_basket_history(
     closes: &HashMap<String, Vec<(NaiveDate, f64)>>,
     symbols: &[&str],
 ) -> HashMap<String, Vec<f64>> {
