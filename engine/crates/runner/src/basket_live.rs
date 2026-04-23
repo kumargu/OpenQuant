@@ -296,7 +296,7 @@ pub async fn run_basket_live(
                             date = %today,
                             symbols_expected,
                             buffered_days = day_closes.len(),
-                            current_notionals = current_notionals.len(),
+                            current_shares = current_shares.len(),
                             "session close grace elapsed on weekday with zero buffered closes"
                         );
                         return Err(format!(
@@ -344,7 +344,7 @@ pub async fn run_basket_live(
                         &mut current_shares,
                         execution,
                     )
-                    .await;
+                    .await?;
                     if let Err(e) = engine.save_state(state_path) {
                         error!(
                             error = %e,
@@ -410,10 +410,10 @@ async fn process_session_close(
     portfolio_config: &PortfolioConfig,
     current_shares: &mut HashMap<String, i64>,
     execution: BasketExecution,
-) {
+) -> Result<(), String> {
     if closes.is_empty() {
         warn!(date = %date, "no RTH closes buffered for session — skipping engine");
-        return;
+        return Ok(());
     }
 
     // Build DailyBar slice for BasketEngine.
@@ -440,7 +440,14 @@ async fn process_session_close(
 
     // Portfolio layer: target notionals across symbols, then diff to orders.
     let target_notionals = aggregate_positions(engine, portfolio_config);
-    let target_shares = target_shares_from_notionals(&target_notionals, closes);
+    let target_shares = target_shares_from_notionals(&target_notionals, closes).map_err(|e| {
+        error!(
+            date = %date,
+            error = %e,
+            "unable to price target notionals into share targets"
+        );
+        e
+    })?;
 
     // Summary of the notional plan before we diff — this is where yesterday's
     // $340K-on-$100K problem was invisible. Emit gross long, gross short,
@@ -470,7 +477,7 @@ async fn process_session_close(
     let orders = diff_to_orders(current_shares, &target_shares);
     if orders.is_empty() {
         info!(date = %date, "no orders to emit — targets already match current");
-        return;
+        return Ok(());
     }
 
     // Distribution of order notionals — flags the "one leg $30K, rest $200"
@@ -574,6 +581,7 @@ async fn process_session_close(
             "some orders failed; current_shares preserves prior values for failed legs"
         );
     }
+    Ok(())
 }
 
 /// Summarize a `target_notionals` map into (gross_long, gross_short, max_abs,

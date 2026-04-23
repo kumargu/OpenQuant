@@ -144,19 +144,31 @@ pub struct OrderIntent {
 pub fn target_shares_from_notionals(
     target: &HashMap<String, f64>,
     prices: &HashMap<String, f64>,
-) -> HashMap<String, i64> {
+) -> Result<HashMap<String, i64>, String> {
     let mut shares = HashMap::new();
+    let mut invalid_symbols = Vec::new();
     for (symbol, target_notional) in target {
         let price = match prices.get(symbol) {
             Some(&p) if p.is_finite() && p > 0.0 => p,
-            _ => continue,
+            _ => {
+                invalid_symbols.push(symbol.clone());
+                continue;
+            }
         };
         let qty = (target_notional / price).round() as i64;
         if qty != 0 {
             shares.insert(symbol.clone(), qty);
         }
     }
-    shares
+    if invalid_symbols.is_empty() {
+        Ok(shares)
+    } else {
+        invalid_symbols.sort();
+        Err(format!(
+            "missing or invalid close for target share conversion: {}",
+            invalid_symbols.join(", ")
+        ))
+    }
 }
 
 /// Compute orders needed to move from current shares to target shares.
@@ -295,8 +307,18 @@ mod tests {
         prices.insert("AMD".to_string(), 100.0);
         prices.insert("NVDA".to_string(), 200.0);
 
-        let shares = target_shares_from_notionals(&target, &prices);
+        let shares = target_shares_from_notionals(&target, &prices).unwrap();
         assert_eq!(shares.get("AMD"), Some(&30));
         assert_eq!(shares.get("NVDA"), Some(&-10));
+    }
+
+    #[test]
+    fn test_target_shares_from_notionals_rejects_invalid_price() {
+        let mut target: HashMap<String, f64> = HashMap::new();
+        target.insert("AMD".to_string(), 3000.0);
+
+        let prices: HashMap<String, f64> = HashMap::new();
+        let err = target_shares_from_notionals(&target, &prices).unwrap_err();
+        assert!(err.contains("AMD"));
     }
 }
