@@ -25,8 +25,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use basket_engine::{
-    aggregate_positions, diff_to_orders, BasketEngine, DailyBar, OrderIntent, PortfolioConfig,
-    PositionIntent, Side,
+    aggregate_positions, diff_to_orders, BasketEngine, DailyBar, OrderIntent, PortfolioConfig, PositionIntent, Side,
 };
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -79,10 +78,12 @@ pub async fn run_basket_live(
     execution: BasketExecution,
     portfolio_config: PortfolioConfig,
     fits: &[BasketFit],
+    state_path: &Path,
 ) -> Result<(), String> {
     info!(
         universe = %universe_path.display(),
         fit_artifact = %fit_artifact_path.display(),
+        state_path = %state_path.display(),
         execution = execution.label(),
         "========== BASKET LIVE RUNNER =========="
     );
@@ -116,8 +117,31 @@ pub async fn run_basket_live(
         return Err("no valid baskets in fit artifact".to_string());
     }
 
-    let mut engine = BasketEngine::new(fits);
-    info!(baskets = engine.num_baskets(), "basket engine initialized");
+    let expected_ids: std::collections::HashSet<String> =
+        fits.iter().filter(|f| f.valid).map(|f| f.candidate.id()).collect();
+    let state_exists = state_path.exists();
+    let mut engine = if state_exists {
+        let loaded = BasketEngine::load_state(state_path)?;
+        let loaded_ids: std::collections::HashSet<String> =
+            loaded.iter_params().map(|(id, _)| id.clone()).collect();
+        if loaded_ids != expected_ids {
+            return Err(format!(
+                "state snapshot basket set mismatch: snapshot={}, artifact={}",
+                loaded_ids.len(),
+                expected_ids.len()
+            ));
+        }
+        info!(
+            baskets = loaded.num_baskets(),
+            state_path = %state_path.display(),
+            "loaded basket engine state snapshot"
+        );
+        loaded
+    } else {
+        let fresh = BasketEngine::new(fits);
+        info!(baskets = fresh.num_baskets(), "basket engine initialized from frozen fits");
+        fresh
+    };
 
     // 2. Seed current_notionals from Alpaca positions (startup reconciliation).
     //    Without this, a restart with live open positions would trigger
@@ -134,6 +158,17 @@ pub async fn run_basket_live(
         }
         Some(mode) => seed_current_notionals_from_alpaca(alpaca, mode).await?,
     };
+    if execution.alpaca_mode().is_some() && !state_exists && !current_notionals.is_empty() {
+        error!(
+            state_path = %state_path.display(),
+            broker_positions = current_notionals.len(),
+            "broker has open positions but no basket state snapshot was found"
+        );
+        return Err(format!(
+            "open broker positions found but no basket state snapshot exists at {}",
+            state_path.display()
+        ));
+    }
 
     // 3. Subscribe to all universe symbols over WebSocket.
     let mut bar_rx = stream::start_bar_stream(&alpaca.api_key, &alpaca.api_secret, &symbols).await;
@@ -282,6 +317,19 @@ pub async fn run_basket_live(
                         execution,
                     )
                     .await;
+                    if let Err(e) = engine.save_state(state_path) {
+                        error!(
+                            error = %e,
+                            state_path = %state_path.display(),
+                            "failed to persist basket engine state after session close"
+                        );
+                        return Err(e);
+                    }
+                    info!(
+                        date = %today,
+                        state_path = %state_path.display(),
+                        "persisted basket engine state after session close"
+                    );
                 }
             }
             _ = &mut ctrl_c => {

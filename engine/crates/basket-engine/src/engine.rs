@@ -347,6 +347,17 @@ impl BasketEngine {
             params.insert(p.basket_id.clone(), p);
         }
 
+        for basket_id in params.keys() {
+            if !snapshot.states.contains_key(basket_id) {
+                return Err(format!("missing runtime state for basket_id '{basket_id}'"));
+            }
+        }
+        for basket_id in snapshot.states.keys() {
+            if !params.contains_key(basket_id) {
+                return Err(format!("runtime state present for unknown basket_id '{basket_id}'"));
+            }
+        }
+
         Ok(Self {
             params,
             states: snapshot.states,
