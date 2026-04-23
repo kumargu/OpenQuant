@@ -25,7 +25,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use basket_engine::{
-    aggregate_positions, diff_to_orders, BasketEngine, DailyBar, OrderIntent, PortfolioConfig, PositionIntent, Side,
+    aggregate_positions, diff_to_orders, target_shares_from_notionals, BasketEngine, DailyBar,
+    OrderIntent, PortfolioConfig, PositionIntent, Side,
 };
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
@@ -145,7 +146,7 @@ pub async fn run_basket_live(
         fresh
     };
 
-    // 2. Seed current_notionals from Alpaca positions (startup reconciliation).
+    // 2. Seed current_shares from Alpaca positions (startup reconciliation).
     //    Without this, a restart with live open positions would trigger
     //    target-minus-zero deltas, flooding Alpaca with duplicate orders.
     //    Noop skips this (no Alpaca account needed for shadow mode).
@@ -153,17 +154,17 @@ pub async fn run_basket_live(
     //    we refuse to start. Trading from an empty notional map would diff
     //    targets against zero and flood Alpaca with duplicate orders against
     //    already-open broker positions, potentially double-sizing every leg.
-    let mut current_notionals = match execution.alpaca_mode() {
+    let mut current_shares = match execution.alpaca_mode() {
         None => {
             info!("noop mode — skipping startup position reconciliation");
             HashMap::new()
         }
-        Some(mode) => seed_current_notionals_from_alpaca(alpaca, mode).await?,
+        Some(mode) => seed_current_shares_from_alpaca(alpaca, mode).await?,
     };
-    if execution.alpaca_mode().is_some() && !state_exists && !current_notionals.is_empty() {
+    if execution.alpaca_mode().is_some() && !state_exists && !current_shares.is_empty() {
         error!(
             state_path = %state_path.display(),
-            broker_positions = current_notionals.len(),
+            broker_positions = current_shares.len(),
             "broker has open positions but no basket state snapshot was found"
         );
         return Err(format!(
@@ -267,7 +268,7 @@ pub async fn run_basket_live(
                     in_rth,
                     past_close,
                     processed_today = processed_sessions.contains(&today),
-                    current_notionals = current_notionals.len(),
+                    current_shares = current_shares.len(),
                     last_bar_age_s,
                     "BAR_LOOP heartbeat"
                 );
@@ -340,7 +341,7 @@ pub async fn run_basket_live(
                         today,
                         &closes_for_day,
                         &portfolio_config,
-                        &mut current_notionals,
+                        &mut current_shares,
                         execution,
                     )
                     .await;
@@ -378,25 +379,25 @@ pub async fn run_basket_live(
 /// Returns `Err` on any fetch failure; the caller must treat this as fatal for
 /// paper/live execution (trading from an empty notional map would double-size
 /// every already-open leg on the first session).
-async fn seed_current_notionals_from_alpaca(
+async fn seed_current_shares_from_alpaca(
     alpaca: &AlpacaClient,
     mode: ExecutionMode,
-) -> Result<HashMap<String, f64>, String> {
+) -> Result<HashMap<String, i64>, String> {
     let positions = alpaca.get_positions(mode).await.map_err(|e| {
         format!(
             "startup position reconciliation failed — refusing to trade without a \
              trusted notional map (fetch error: {e})"
         )
     })?;
-    let notionals: HashMap<String, f64> = positions
+    let shares: HashMap<String, i64> = positions
         .into_iter()
-        .map(|(sym, (qty, avg_entry))| (sym, qty * avg_entry))
+        .map(|(sym, (qty, _avg_entry))| (sym, qty.round() as i64))
         .collect();
     info!(
-        n_positions = notionals.len(),
-        "seeded current_notionals from Alpaca open positions"
+        n_positions = shares.len(),
+        "seeded current_shares from Alpaca open positions"
     );
-    Ok(notionals)
+    Ok(shares)
 }
 
 /// Run the engine for one session close and dispatch orders.
@@ -407,7 +408,7 @@ async fn process_session_close(
     date: NaiveDate,
     closes: &HashMap<String, f64>,
     portfolio_config: &PortfolioConfig,
-    current_notionals: &mut HashMap<String, f64>,
+    current_shares: &mut HashMap<String, i64>,
     execution: BasketExecution,
 ) {
     if closes.is_empty() {
@@ -439,6 +440,7 @@ async fn process_session_close(
 
     // Portfolio layer: target notionals across symbols, then diff to orders.
     let target_notionals = aggregate_positions(engine, portfolio_config);
+    let target_shares = target_shares_from_notionals(&target_notionals, closes);
 
     // Summary of the notional plan before we diff — this is where yesterday's
     // $340K-on-$100K problem was invisible. Emit gross long, gross short,
@@ -455,7 +457,7 @@ async fn process_session_close(
     info!(
         date = %date,
         targets = target_notionals.len(),
-        currents = current_notionals.len(),
+        current_positions = current_shares.len(),
         gross_long = %format!("{:.0}", gross_long),
         gross_short = %format!("{:.0}", gross_short),
         gross_notional = %format!("{:.0}", gross_long + gross_short.abs()),
@@ -465,7 +467,7 @@ async fn process_session_close(
         "target notionals summary"
     );
 
-    let orders = diff_to_orders(current_notionals, &target_notionals, closes);
+    let orders = diff_to_orders(current_shares, &target_shares);
     if orders.is_empty() {
         info!(date = %date, "no orders to emit — targets already match current");
         return;
@@ -493,11 +495,7 @@ async fn process_session_close(
     );
 
     // Track which symbols were successfully adjusted so we only update
-    // `current_notionals` for legs that actually executed. This matters
-    // when `diff_to_orders` skipped symbols (missing prices) or when
-    // Alpaca rejected orders — blindly syncing to target would desync
-    // internal state from the broker's view and prevent future corrective
-    // orders.
+    // `current_shares` for legs that actually executed.
     let mut successfully_adjusted: std::collections::HashSet<String> = Default::default();
 
     match execution.alpaca_mode() {
@@ -543,36 +541,16 @@ async fn process_session_close(
         }
     }
 
-    // Reconcile current_notionals against what actually executed.
-    //
-    // We MUST iterate the union of `current_notionals ∪ target_notionals`
-    // — not just targets — so symbols dropped from the target set (e.g.,
-    // a basket that fully exited) are cleared after a successful close.
-    // Iterating only targets leaves the old notional in place, and
-    // `diff_to_orders` then emits another close order for it next session
-    // (current=X, target=0 → close X), producing repeat liquidation attempts.
-    //
-    // `diff_to_orders` emits an order exactly when BOTH |delta| >= 1.0 AND
-    // price is finite+positive. So "in orders" ≡ "was adjustable this session".
-    //
-    // Per symbol, we update as follows:
-    //   - in successfully_adjusted
-    //       target present → set current to target
-    //       target absent  → remove (position closed)
-    //   - in orders but not adjusted      → order failed; keep prior notional
-    //   - not in orders + price valid
-    //       target present → set current to target (delta was negligible)
-    //       target absent  → remove (position effectively zero)
-    //   - not in orders + price missing   → keep prior notional (can't tell)
+    // Reconcile current_shares against what actually executed.
     let orders_by_symbol: std::collections::HashSet<&str> =
         orders.iter().map(|o| o.symbol.as_str()).collect();
     let mut all_symbols: std::collections::HashSet<String> =
-        current_notionals.keys().cloned().collect();
-    all_symbols.extend(target_notionals.keys().cloned());
+        current_shares.keys().cloned().collect();
+    all_symbols.extend(target_shares.keys().cloned());
     let mut drift_count = 0usize;
     for sym in all_symbols {
-        let target_opt = target_notionals.get(&sym).copied();
-        let apply_target = |current: &mut HashMap<String, f64>| match target_opt {
+        let target_opt = target_shares.get(&sym).copied();
+        let apply_target = |current: &mut HashMap<String, i64>| match target_opt {
             Some(t) => {
                 current.insert(sym.clone(), t);
             }
@@ -581,28 +559,19 @@ async fn process_session_close(
             }
         };
         if successfully_adjusted.contains(&sym) {
-            apply_target(current_notionals);
+            apply_target(current_shares);
         } else if orders_by_symbol.contains(sym.as_str()) {
-            // Order was emitted but did not succeed → preserve prior notional.
+            // Order was emitted but did not succeed → preserve prior shares.
             drift_count += 1;
         } else {
-            // No order emitted this session: either delta was below threshold
-            // (price valid) or price was missing.
-            let has_price = closes
-                .get(&sym)
-                .map(|p| p.is_finite() && *p > 0.0)
-                .unwrap_or(false);
-            if has_price {
-                apply_target(current_notionals);
-            }
-            // else: price missing — keep prior notional.
+            apply_target(current_shares);
         }
     }
     if drift_count > 0 {
         warn!(
             drift_count,
             total_orders = orders.len(),
-            "some orders failed; current_notionals preserves prior values for failed legs"
+            "some orders failed; current_shares preserves prior values for failed legs"
         );
     }
 }

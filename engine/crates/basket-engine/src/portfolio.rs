@@ -140,14 +140,29 @@ pub struct OrderIntent {
     pub reason: OrderReason,
 }
 
-/// Compute orders needed to move from current to target positions.
-///
-/// Takes current notionals, target notionals, and current prices.
-/// Returns the orders needed to reach target.
-pub fn diff_to_orders(
-    current: &HashMap<String, f64>,
+/// Convert target notionals into whole-share targets using current prices.
+pub fn target_shares_from_notionals(
     target: &HashMap<String, f64>,
     prices: &HashMap<String, f64>,
+) -> HashMap<String, i64> {
+    let mut shares = HashMap::new();
+    for (symbol, target_notional) in target {
+        let price = match prices.get(symbol) {
+            Some(&p) if p.is_finite() && p > 0.0 => p,
+            _ => continue,
+        };
+        let qty = (target_notional / price).round() as i64;
+        if qty != 0 {
+            shares.insert(symbol.clone(), qty);
+        }
+    }
+    shares
+}
+
+/// Compute orders needed to move from current shares to target shares.
+pub fn diff_to_orders(
+    current: &HashMap<String, i64>,
+    target: &HashMap<String, i64>,
 ) -> Vec<OrderIntent> {
     let mut orders = Vec::new();
 
@@ -157,30 +172,19 @@ pub fn diff_to_orders(
     all_symbols.dedup();
 
     for symbol in all_symbols {
-        let current_notional = current.get(symbol).copied().unwrap_or(0.0);
-        let target_notional = target.get(symbol).copied().unwrap_or(0.0);
-        let delta = target_notional - current_notional;
-
-        if delta.abs() < 1.0 {
-            continue; // Skip tiny deltas
-        }
-
-        let price = match prices.get(symbol) {
-            Some(&p) if p.is_finite() && p > 0.0 => p,
-            _ => continue, // Skip if no valid price
-        };
-
-        let qty = (delta.abs() / price).round() as u32;
-        if qty == 0 {
+        let current_qty = current.get(symbol).copied().unwrap_or(0);
+        let target_qty = target.get(symbol).copied().unwrap_or(0);
+        let delta = target_qty - current_qty;
+        if delta == 0 {
             continue;
         }
 
-        let side = if delta > 0.0 { Side::Buy } else { Side::Sell };
+        let side = if delta > 0 { Side::Buy } else { Side::Sell };
 
         orders.push(OrderIntent {
             symbol: symbol.clone(),
             side,
-            qty,
+            qty: delta.unsigned_abs() as u32,
             reason: OrderReason::Aggregated,
         });
     }
@@ -261,18 +265,14 @@ mod tests {
 
     #[test]
     fn test_diff_to_orders() {
-        let mut current: HashMap<String, f64> = HashMap::new();
-        current.insert("AMD".to_string(), 5000.0);
+        let mut current: HashMap<String, i64> = HashMap::new();
+        current.insert("AMD".to_string(), 50);
 
-        let mut target: HashMap<String, f64> = HashMap::new();
-        target.insert("AMD".to_string(), 3000.0);
-        target.insert("NVDA".to_string(), 2000.0);
+        let mut target: HashMap<String, i64> = HashMap::new();
+        target.insert("AMD".to_string(), 30);
+        target.insert("NVDA".to_string(), 10);
 
-        let mut prices: HashMap<String, f64> = HashMap::new();
-        prices.insert("AMD".to_string(), 100.0);
-        prices.insert("NVDA".to_string(), 200.0);
-
-        let orders = diff_to_orders(&current, &target, &prices);
+        let orders = diff_to_orders(&current, &target);
 
         assert_eq!(orders.len(), 2);
         // AMD: 3000 - 5000 = -2000, sell 20 shares
@@ -283,5 +283,20 @@ mod tests {
         let nvda_order = orders.iter().find(|o| o.symbol == "NVDA").unwrap();
         assert_eq!(nvda_order.side, Side::Buy);
         assert_eq!(nvda_order.qty, 10);
+    }
+
+    #[test]
+    fn test_target_shares_from_notionals() {
+        let mut target: HashMap<String, f64> = HashMap::new();
+        target.insert("AMD".to_string(), 3000.0);
+        target.insert("NVDA".to_string(), -2000.0);
+
+        let mut prices: HashMap<String, f64> = HashMap::new();
+        prices.insert("AMD".to_string(), 100.0);
+        prices.insert("NVDA".to_string(), 200.0);
+
+        let shares = target_shares_from_notionals(&target, &prices);
+        assert_eq!(shares.get("AMD"), Some(&30));
+        assert_eq!(shares.get("NVDA"), Some(&-10));
     }
 }
