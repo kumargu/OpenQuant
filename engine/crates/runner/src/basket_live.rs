@@ -29,7 +29,7 @@ use basket_engine::{
     PositionIntent, Side,
 };
 use basket_picker::{load_universe, validate, ValidatorConfig};
-use chrono::{DateTime, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Timelike, Utc, Weekday};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tracing::{debug, error, info, warn};
 
@@ -283,14 +283,18 @@ pub async fn run_basket_live(
                 if past_close && !processed_sessions.contains(&today) {
                     let closes_for_day = day_closes.remove(&today).unwrap_or_default();
                     if closes_for_day.is_empty() {
-                        // Weekend / holiday / blackout — mark processed to avoid busy-looping.
-                        info!(
-                            date = %today,
-                            minute_now,
-                            "session close grace elapsed but no RTH closes buffered — marking processed"
-                        );
-                        processed_sessions.insert(today);
-                        continue;
+                        if matches!(today.weekday(), Weekday::Sat | Weekday::Sun) {
+                            info!(
+                                date = %today,
+                                minute_now,
+                                "session close grace elapsed on weekend — marking processed"
+                            );
+                            processed_sessions.insert(today);
+                            continue;
+                        }
+                        return Err(format!(
+                            "session close grace elapsed on weekday {today} but no RTH closes were buffered"
+                        ));
                     }
                     // Log exactly which symbols' closes we have and, crucially,
                     // which expected ones are missing. Yesterday we had no
@@ -311,6 +315,12 @@ pub async fn run_basket_live(
                         missing_sample = ?missing.iter().take(10).collect::<Vec<_>>(),
                         "session close firing"
                     );
+                    if !missing.is_empty() {
+                        return Err(format!(
+                            "incomplete close snapshot for {today}: missing {} symbols",
+                            missing.len()
+                        ));
+                    }
                     processed_sessions.insert(today);
                     process_session_close(
                         &mut engine,
@@ -645,6 +655,7 @@ fn load_warmup_closes(
     use arrow::array::{Array, Float64Array, TimestampMicrosecondArray};
     use std::collections::BTreeMap;
     let cutoff = Utc::now().date_naive() - chrono::Duration::days(window_days);
+    let today = Utc::now().date_naive();
 
     let mut out = HashMap::new();
     for symbol in symbols {
@@ -692,7 +703,7 @@ fn load_warmup_closes(
                     continue;
                 }
                 let date = dt.date();
-                if date < cutoff {
+                if date < cutoff || date >= today {
                     continue;
                 }
                 daily
