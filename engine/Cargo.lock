@@ -1685,6 +1685,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyse-holiday-cal"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "382dbb796eed7dbed8603bb577c3e5ce74caaff6dc74b528bc5e733c1d123ee6"
+dependencies = [
+ "chrono",
+ "lazy_static",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1764,6 +1774,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "futures-util",
+ "nyse-holiday-cal",
  "openquant-core",
  "pair-picker",
  "parquet",
