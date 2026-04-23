@@ -42,10 +42,7 @@ type BarColumns = (
 );
 
 use crate::alpaca::{AlpacaBar, AlpacaClient};
-
-/// RTH session: 13:30–20:00 UTC (same as quant-lab and mock_alpaca.py).
-const RTH_START_MINUTES: i64 = 13 * 60 + 30;
-const RTH_END_MINUTES: i64 = 20 * 60;
+use crate::market_session;
 
 /// Number of trading days to check for fulfillment.
 const LOOKBACK_DAYS: i64 = 90;
@@ -233,26 +230,22 @@ fn write_parquet(path: &Path, cols: &BarColumns) -> Result<(), String> {
     Ok(())
 }
 
-fn micros_to_hm(us: i64) -> (i64, i64) {
-    let secs = us / 1_000_000;
-    let h = (secs % 86400) / 3600;
-    let m = (secs % 3600) / 60;
-    (h, m)
-}
-
 fn micros_to_date(us: i64) -> String {
     let secs = us / 1_000_000;
-    let dt = chrono::DateTime::from_timestamp(secs, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
-    dt.format("%Y-%m-%d").to_string()
+    chrono::DateTime::from_timestamp(secs, 0)
+        .map(|dt| market_session::trading_day_utc(dt.to_utc()).to_string())
+        .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH.date_naive().to_string())
 }
 
 /// Count RTH bars per date from a timestamp slice.
 fn rth_bars_by_date(timestamps: &[i64]) -> HashMap<String, usize> {
     let mut by_date: HashMap<String, usize> = HashMap::new();
     for &ts in timestamps {
-        let (h, m) = micros_to_hm(ts);
-        let minutes = h * 60 + m;
-        if !(RTH_START_MINUTES..RTH_END_MINUTES).contains(&minutes) {
+        let secs = ts / 1_000_000;
+        let Some(dt) = chrono::DateTime::from_timestamp(secs, 0) else {
+            continue;
+        };
+        if !market_session::is_rth_utc(dt.to_utc()) {
             continue;
         }
         *by_date.entry(micros_to_date(ts)).or_insert(0) += 1;

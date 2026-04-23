@@ -19,6 +19,7 @@ mod bar_cache;
 mod basket_live;
 mod basket_runner;
 mod earnings;
+mod market_session;
 mod pair_picker_service;
 pub mod refresh;
 mod stream;

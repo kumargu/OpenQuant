@@ -29,11 +29,12 @@ use basket_engine::{
     PositionIntent, Side,
 };
 use basket_picker::{load_universe, validate, ValidatorConfig};
-use chrono::{DateTime, Datelike, NaiveDate, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tracing::{debug, error, info, warn};
 
 use crate::alpaca::{AlpacaClient, ExecutionMode};
+use crate::market_session;
 use crate::stream;
 
 /// Execution mode for basket live/paper.
@@ -67,13 +68,6 @@ impl BasketExecution {
         }
     }
 }
-
-/// Session close in UTC minutes (RTH end = 20:00). The last 1-min bar finalizes
-/// at 19:59 (Alpaca's `t` is bar-open; close is `t + 60s`).
-const SESSION_CLOSE_MIN: u32 = 20 * 60;
-
-/// RTH window start in UTC minutes (13:30).
-const RTH_START_MIN: u32 = 13 * 60 + 30;
 
 /// Warmup window: days of history to seed state. Needs >= residual_window from
 /// the universe config (60 by default) + a small buffer for safety.
@@ -212,18 +206,16 @@ pub async fn run_basket_live(
                     Some(d) => d,
                     None => continue,
                 };
-                let minute = dt.hour() * 60 + dt.minute();
-                if !(RTH_START_MIN..SESSION_CLOSE_MIN).contains(&minute) {
+                if !market_session::is_rth_utc(dt) {
                     // Outside RTH — ignore (do not contaminate daily close).
                     debug!(
                         symbol = bar.symbol.as_str(),
-                        minute,
                         ts = bar.timestamp,
                         "bar outside RTH — discarded"
                     );
                     continue;
                 }
-                let date = dt.date_naive();
+                let date = market_session::trading_day_utc(dt);
                 if bar.close.is_finite() && bar.close > 0.0 {
                     let entry = day_closes.entry(date).or_default();
                     entry.insert(bar.symbol.clone(), bar.close);
@@ -247,10 +239,9 @@ pub async fn run_basket_live(
                 // the channel is backed up or the RTH filter is rejecting
                 // everything.
                 let now = Utc::now();
-                let today = now.date_naive();
-                let minute_now = now.hour() * 60 + now.minute();
-                let in_rth = (RTH_START_MIN..SESSION_CLOSE_MIN).contains(&minute_now);
-                let past_close = minute_now >= SESSION_CLOSE_MIN + CLOSE_GRACE_MIN;
+                let today = market_session::trading_day_utc(now);
+                let in_rth = market_session::is_rth_utc(now);
+                let past_close = market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN);
                 let buffered_today = day_closes.get(&today).map(|m| m.len()).unwrap_or(0);
                 let last_bar_age_s = if last_bar_rx_ts_ms == 0 {
                     -1i64
@@ -262,7 +253,6 @@ pub async fn run_basket_live(
                     bars_processed_window,
                     buffered_today,
                     symbols_expected,
-                    minute_now,
                     in_rth,
                     past_close,
                     processed_today = processed_sessions.contains(&today),
@@ -277,21 +267,26 @@ pub async fn run_basket_live(
                 // given date and haven't processed it yet, fire now — regardless
                 // of which symbols' 19:59 bars landed.
                 let now = Utc::now();
-                let today = now.date_naive();
-                let minute_now = now.hour() * 60 + now.minute();
-                let past_close = minute_now >= SESSION_CLOSE_MIN + CLOSE_GRACE_MIN;
+                let today = market_session::trading_day_utc(now);
+                let past_close = market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN);
                 if past_close && !processed_sessions.contains(&today) {
                     let closes_for_day = day_closes.remove(&today).unwrap_or_default();
                     if closes_for_day.is_empty() {
                         if matches!(today.weekday(), Weekday::Sat | Weekday::Sun) {
                             info!(
                                 date = %today,
-                                minute_now,
                                 "session close grace elapsed on weekend — marking processed"
                             );
                             processed_sessions.insert(today);
                             continue;
                         }
+                        error!(
+                            date = %today,
+                            symbols_expected,
+                            buffered_days = day_closes.len(),
+                            current_notionals = current_notionals.len(),
+                            "session close grace elapsed on weekday with zero buffered closes"
+                        );
                         return Err(format!(
                             "session close grace elapsed on weekday {today} but no RTH closes were buffered"
                         ));
@@ -307,8 +302,6 @@ pub async fn run_basket_live(
                         .collect();
                     info!(
                         date = %today,
-                        minute_now,
-                        grace_elapsed_past_min = minute_now.saturating_sub(SESSION_CLOSE_MIN + CLOSE_GRACE_MIN),
                         closes_in_buffer = closes_for_day.len(),
                         symbols_expected,
                         missing_count = missing.len(),
@@ -316,6 +309,14 @@ pub async fn run_basket_live(
                         "session close firing"
                     );
                     if !missing.is_empty() {
+                        error!(
+                            date = %today,
+                            closes_in_buffer = closes_for_day.len(),
+                            symbols_expected,
+                            missing_count = missing.len(),
+                            missing_sample = ?missing.iter().take(20).collect::<Vec<_>>(),
+                            "incomplete close snapshot at session close"
+                        );
                         return Err(format!(
                             "incomplete close snapshot for {today}: missing {} symbols",
                             missing.len()
@@ -694,15 +695,15 @@ fn load_warmup_closes(
                     Some(d) => d.naive_utc(),
                     None => continue,
                 };
-                let minute = dt.hour() * 60 + dt.minute();
-                if !(RTH_START_MIN..SESSION_CLOSE_MIN).contains(&minute) {
+                let dt_utc = dt.and_utc();
+                if !market_session::is_rth_utc(dt_utc) {
                     continue;
                 }
                 let px = close.value(i);
                 if !px.is_finite() || px <= 0.0 {
                     continue;
                 }
-                let date = dt.date();
+                let date = market_session::trading_day_utc(dt_utc);
                 if date < cutoff || date >= today {
                     continue;
                 }
@@ -766,6 +767,7 @@ fn align_basket_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
 
     #[test]
     fn test_basket_execution_alpaca_mode_mapping() {
@@ -803,7 +805,7 @@ mod tests {
         let minute = dt.hour() * 60 + dt.minute();
         assert_eq!(minute, 19 * 60 + 59, "unshift must recover bar-open minute");
         assert!(
-            (RTH_START_MIN..SESSION_CLOSE_MIN).contains(&minute),
+            market_session::is_rth_utc(dt),
             "last RTH bar (19:59 open) must pass RTH filter after unshift"
         );
     }

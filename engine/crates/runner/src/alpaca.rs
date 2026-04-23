@@ -2,10 +2,11 @@
 //!
 //! Pure Rust, no Python. Reads API keys from .env file.
 
-use chrono::Timelike;
 use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{error, info};
+
+use crate::market_session;
 
 const DATA_URL_DEFAULT: &str = "https://data.alpaca.markets/v2/stocks/bars";
 
@@ -96,13 +97,6 @@ impl AlpacaClient {
         Ok(Self::new(api_key, api_secret))
     }
 
-    // ── RTH session filter (13:30–20:00 UTC ≈ 9:30–16:00 EDT) ──
-    // Must match quant-lab's aggregation so pair-picker, engine warmup,
-    // and lab all compute statistics on the same daily close prices.
-    // See CLAUDE.md: "one data source for everything — 1-min IEX bars."
-    const RTH_START_MINUTES: i64 = 13 * 60 + 30; // 13:30 UTC
-    const RTH_END_MINUTES: i64 = 20 * 60; // 20:00 UTC
-
     /// Aggregate 1-min bars to daily RTH close (last tick per session day).
     /// Groups by (symbol, calendar date), filters to RTH, takes last close.
     fn aggregate_to_daily(
@@ -119,11 +113,11 @@ impl AlpacaClient {
                     if !bar.c.is_finite() || bar.c <= 0.0 {
                         continue;
                     }
-                    let minutes = dt.hour() as i64 * 60 + dt.minute() as i64;
-                    if !(Self::RTH_START_MINUTES..Self::RTH_END_MINUTES).contains(&minutes) {
+                    let dt_utc = dt.with_timezone(&chrono::Utc);
+                    if !market_session::is_rth_utc(dt_utc) {
                         continue;
                     }
-                    let date_key = dt.format("%Y-%m-%d").to_string();
+                    let date_key = market_session::trading_day_utc(dt_utc).to_string();
                     let ts_ms = dt.timestamp_millis();
                     let entry = day_map.entry(date_key).or_insert((ts_ms, bar.c));
                     if ts_ms >= entry.0 {
@@ -207,15 +201,13 @@ impl AlpacaClient {
             .await?;
         let aggregated = Self::aggregate_to_daily(&raw);
 
-        // Adjust timestamp to 16:00 ET (market close) so the engine's
-        // is_daily_close check recognizes warmup bars.
-        const CLOSE_HOUR_UTC: i64 = 20; // 16:00 ET (EDT) = 20:00 UTC
         let mut all_bars: Vec<(String, i64, f64)> = Vec::new();
         for (symbol, days) in &aggregated {
             for &(ts_ms, close) in days {
-                // Snap timestamp to 20:00 UTC of that day
-                let day_start = ts_ms / 86_400_000 * 86_400_000;
-                let close_ts = day_start + CLOSE_HOUR_UTC * 3600 * 1000;
+                let day = chrono::DateTime::from_timestamp_millis(ts_ms)
+                    .map(|dt| market_session::trading_day_utc(dt.to_utc()))
+                    .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH.date_naive());
+                let close_ts = market_session::close_timestamp_utc_for_day(day);
                 all_bars.push((symbol.clone(), close_ts, close));
             }
         }

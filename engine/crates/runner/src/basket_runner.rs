@@ -16,10 +16,12 @@ use std::path::Path;
 
 use arrow::array::{Array, Float64Array, TimestampMicrosecondArray};
 use basket_picker::{fit_ou_ar1, load_universe, optimize_symmetric_thresholds, Universe};
-use chrono::{NaiveDate, Timelike};
+use chrono::NaiveDate;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+
+use crate::market_session;
 
 // Quant-lab walk-forward fit_dates (matches baseline.json)
 const FIT_DATES: &[&str] = &[
@@ -32,10 +34,6 @@ const FIT_DATES: &[&str] = &[
     "2025-12-31",
     "2026-01-31",
 ];
-
-// RTH session: 13:30–20:00 UTC
-const RTH_START_MIN: u32 = 13 * 60 + 30;
-const RTH_END_MIN: u32 = 20 * 60;
 
 /// Portfolio stats matching quant-lab's portfolio_stats.
 #[derive(Debug, Clone, Serialize)]
@@ -426,15 +424,15 @@ fn read_daily_closes(path: &Path) -> Result<BTreeMap<NaiveDate, f64>, String> {
                 Some(d) => d.naive_utc(),
                 None => continue,
             };
-            let minute = dt.hour() * 60 + dt.minute();
-            if !(RTH_START_MIN..RTH_END_MIN).contains(&minute) {
+            let dt_utc = dt.and_utc();
+            if !market_session::is_rth_utc(dt_utc) {
                 continue;
             }
             let px = close.value(i);
             if !px.is_finite() || px <= 0.0 {
                 continue;
             }
-            let date = dt.date();
+            let date = market_session::trading_day_utc(dt_utc);
             daily
                 .entry(date)
                 .and_modify(|(prev_ts, prev_close)| {
