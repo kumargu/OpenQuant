@@ -288,10 +288,11 @@ async fn run_stream(
 
     // Silent-death watchdog: if no message (bar, ping, or otherwise) has
     // arrived in this long, the socket is a zombie and we force a
-    // reconnect. The check lives in the heartbeat branch below — NOT in
-    // `tokio::time::timeout(read.next())` — because any select arm that
-    // wins (typically the 60s heartbeat) cancels and restarts that
-    // timeout future, preventing it from ever completing.
+    // reconnect. Enforced by a `sleep_until(deadline)` future in its own
+    // select arm — NOT the heartbeat arm — so detection latency is bounded
+    // by the timeout itself rather than by the 60s heartbeat cadence. A
+    // heartbeat-branch check could add up to ~60s of extra latency if the
+    // socket went silent right after a tick.
     let read_timeout = tokio::time::Duration::from_secs(90);
     let mut heartbeat =
         tokio::time::interval(tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
@@ -300,22 +301,19 @@ async fn run_stream(
     // heartbeat with zero data before any bars have had a chance to arrive.
     heartbeat.tick().await;
 
+    // Silent-death deadline. Reset to `now + read_timeout` on every
+    // message arrival. When this future fires, we treat the stream as
+    // dead and return Err to force reconnect.
+    let idle_deadline = tokio::time::sleep(read_timeout);
+    tokio::pin!(idle_deadline);
+
     loop {
         tokio::select! {
-            _ = heartbeat.tick() => {
-                emit_heartbeat(&mut metrics, &expected);
-                let silent_for = metrics.last_message_at.elapsed();
-                if silent_for >= read_timeout {
-                    warn!(
-                        bars_total = metrics.bars_total,
-                        pings_received = metrics.pings_received,
-                        seconds_silent = silent_for.as_secs(),
-                        threshold_secs = read_timeout.as_secs(),
-                        "no message from stream — assuming dead connection, reconnecting"
-                    );
-                    return Err(format!("read timeout ({}s)", silent_for.as_secs()));
-                }
-            }
+            // Keep read arm first so that if a message and the deadline
+            // fire at the same tick (unlikely but possible), the message
+            // wins.
+            biased;
+
             msg = read.next() => {
                 let msg = match msg {
                     Some(m) => m.map_err(|e| format!("read error: {e}"))?,
@@ -326,9 +324,12 @@ async fn run_stream(
                     }
                 };
                 // Any message — bar, text, ping, close — resets the
-                // silent-death clock. Centralized here so every message
-                // type updates it.
+                // silent-death deadline. Keep `last_message_at` in sync
+                // for pretty-printing in the heartbeat log.
                 metrics.mark_message();
+                idle_deadline
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + read_timeout);
 
                 match msg {
                     Message::Ping(data) => {
@@ -348,6 +349,20 @@ async fn run_stream(
                     }
                     _ => {}
                 }
+            }
+            _ = heartbeat.tick() => {
+                emit_heartbeat(&mut metrics, &expected);
+            }
+            _ = &mut idle_deadline => {
+                let silent_for = metrics.last_message_at.elapsed();
+                warn!(
+                    bars_total = metrics.bars_total,
+                    pings_received = metrics.pings_received,
+                    seconds_silent = silent_for.as_secs(),
+                    threshold_secs = read_timeout.as_secs(),
+                    "no message from stream — assuming dead connection, reconnecting"
+                );
+                return Err(format!("read timeout ({}s)", silent_for.as_secs()));
             }
         }
     }
