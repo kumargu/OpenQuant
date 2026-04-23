@@ -118,6 +118,14 @@ struct StreamMetrics {
     pongs_sent: u64,
     non_bar_messages: u64,
     window_started: Instant,
+    /// Wall-clock time of the last message of ANY kind (bar, ping, text,
+    /// close). Used by the silent-death watchdog in the heartbeat branch
+    /// of the main select. The check has to live on a struct field rather
+    /// than be implemented via `tokio::time::timeout(read.next())` because
+    /// the `select!` arm that wins (the 60s heartbeat, typically) cancels
+    /// the pending timeout future every iteration and prevents it from
+    /// ever firing.
+    last_message_at: Instant,
     last_bar_ts_by_symbol: HashMap<String, i64>,
     /// Symbols we've already warned about in the current staleness window.
     /// Prevents WARN-spam for a symbol that's persistently stale (one warn
@@ -127,6 +135,7 @@ struct StreamMetrics {
 
 impl StreamMetrics {
     fn new() -> Self {
+        let now = Instant::now();
         Self {
             bars_total: 0,
             bars_last_window: 0,
@@ -136,10 +145,15 @@ impl StreamMetrics {
             pings_received: 0,
             pongs_sent: 0,
             non_bar_messages: 0,
-            window_started: Instant::now(),
+            window_started: now,
+            last_message_at: now,
             last_bar_ts_by_symbol: HashMap::new(),
             stale_warned: HashSet::new(),
         }
+    }
+
+    fn mark_message(&mut self) {
+        self.last_message_at = Instant::now();
     }
 
     fn record_bar(&mut self, symbol: &str, ts: i64) -> BarClassification {
@@ -147,9 +161,12 @@ impl StreamMetrics {
         self.bars_last_window += 1;
         match self.last_bar_ts_by_symbol.get(symbol).copied() {
             Some(prev) if ts < prev => {
+                // Count but DO NOT regress the stored last-seen clock.
+                // Moving it backward would (1) inflate age_ms in the
+                // heartbeat, triggering false stale warnings, and
+                // (2) make a subsequent bar with ts < true_latest look
+                // "fresh" on comparison against the now-regressed value.
                 self.out_of_order += 1;
-                self.last_bar_ts_by_symbol.insert(symbol.to_string(), ts);
-                self.stale_warned.remove(symbol);
                 BarClassification::OutOfOrder { prev_ts: prev }
             }
             Some(prev) if ts == prev => {
@@ -269,10 +286,12 @@ async fn run_stream(
     let expected: HashSet<String> = symbols.iter().cloned().collect();
     let mut metrics = StreamMetrics::new();
 
-    // Timeout after 90s of silence: if no message (not even a ping) arrives
-    // in 90 seconds, assume the connection is dead and reconnect. Alpaca
-    // sends bars every minute for our symbols, so 90s of total silence is
-    // a strong signal the connection is zombie.
+    // Silent-death watchdog: if no message (bar, ping, or otherwise) has
+    // arrived in this long, the socket is a zombie and we force a
+    // reconnect. The check lives in the heartbeat branch below — NOT in
+    // `tokio::time::timeout(read.next())` — because any select arm that
+    // wins (typically the 60s heartbeat) cancels and restarts that
+    // timeout future, preventing it from ever completing.
     let read_timeout = tokio::time::Duration::from_secs(90);
     let mut heartbeat =
         tokio::time::interval(tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
@@ -285,28 +304,31 @@ async fn run_stream(
         tokio::select! {
             _ = heartbeat.tick() => {
                 emit_heartbeat(&mut metrics, &expected);
+                let silent_for = metrics.last_message_at.elapsed();
+                if silent_for >= read_timeout {
+                    warn!(
+                        bars_total = metrics.bars_total,
+                        pings_received = metrics.pings_received,
+                        seconds_silent = silent_for.as_secs(),
+                        threshold_secs = read_timeout.as_secs(),
+                        "no message from stream — assuming dead connection, reconnecting"
+                    );
+                    return Err(format!("read timeout ({}s)", silent_for.as_secs()));
+                }
             }
-            res = tokio::time::timeout(read_timeout, read.next()) => {
-                let msg = match res {
-                    Ok(Some(msg)) => msg.map_err(|e| format!("read error: {e}"))?,
-                    Ok(None) => {
+            msg = read.next() => {
+                let msg = match msg {
+                    Some(m) => m.map_err(|e| format!("read error: {e}"))?,
+                    None => {
                         // Stream ended normally
                         info!(bars_total = metrics.bars_total, "stream ended (no more messages)");
                         return Ok(());
                     }
-                    Err(_) => {
-                        // Timeout — no message in 90s, connection is zombie.
-                        // This path is specifically for the silent-death case —
-                        // caller forces a reconnect.
-                        warn!(
-                            bars_total = metrics.bars_total,
-                            pings_received = metrics.pings_received,
-                            seconds_silent = read_timeout.as_secs(),
-                            "no message from stream in 90s — assuming dead connection, reconnecting"
-                        );
-                        return Err("read timeout (90s)".into());
-                    }
                 };
+                // Any message — bar, text, ping, close — resets the
+                // silent-death clock. Centralized here so every message
+                // type updates it.
+                metrics.mark_message();
 
                 match msg {
                     Message::Ping(data) => {
