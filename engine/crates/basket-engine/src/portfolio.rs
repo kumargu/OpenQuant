@@ -84,7 +84,19 @@ pub fn basket_to_legs(params: &BasketParams, position: i8, notional: f64) -> Vec
 pub fn aggregate_positions(
     engine: &BasketEngine,
     config: &PortfolioConfig,
-) -> HashMap<String, f64> {
+) -> Result<HashMap<String, f64>, String> {
+    let active_count = engine
+        .iter_params()
+        .filter_map(|(basket_id, _)| engine.get_state(basket_id))
+        .filter(|s| s.position != 0)
+        .count();
+    if active_count > config.n_active_baskets {
+        return Err(format!(
+            "active basket cap exceeded: active={}, configured_cap={}",
+            active_count, config.n_active_baskets
+        ));
+    }
+
     let notional_per_basket = config.notional_per_basket();
     let mut symbol_notionals: HashMap<String, f64> = HashMap::new();
 
@@ -104,7 +116,7 @@ pub fn aggregate_positions(
         }
     }
 
-    symbol_notionals
+    Ok(symbol_notionals)
 }
 
 /// Order side.
@@ -209,6 +221,9 @@ pub fn diff_to_orders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DailyBar;
+    use basket_picker::{BasketCandidate, BasketFit, BertramResult};
+    use chrono::NaiveDate;
 
     fn make_test_params() -> BasketParams {
         BasketParams {
@@ -225,6 +240,37 @@ mod tests {
                 half_life_days: 13.51,
             },
             threshold_k: 1.25,
+        }
+    }
+
+    fn make_test_fit(target: &str, peers: &[&str]) -> BasketFit {
+        BasketFit {
+            candidate: BasketCandidate {
+                target: target.to_string(),
+                members: peers.iter().map(|s| s.to_string()).collect(),
+                sector: "test".to_string(),
+                fit_date: NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+            },
+            ou: Some(basket_picker::OuFit {
+                a: 0.0,
+                b: 0.95,
+                kappa: 12.92,
+                mu: 0.0,
+                sigma: 0.01,
+                sigma_eq: 0.032,
+                half_life_days: 13.51,
+            }),
+            bertram: Some(BertramResult {
+                a: -0.04,
+                m: 0.04,
+                k: 1.25,
+                expected_return_rate: 0.1,
+                expected_trade_length_days: 10.0,
+                sigma_cont: 0.05,
+            }),
+            threshold_k: 1.25,
+            valid: true,
+            reject_reason: None,
         }
     }
 
@@ -320,5 +366,29 @@ mod tests {
         let prices: HashMap<String, f64> = HashMap::new();
         let err = target_shares_from_notionals(&target, &prices).unwrap_err();
         assert!(err.contains("AMD"));
+    }
+
+    #[test]
+    fn test_aggregate_positions_rejects_cap_breach() {
+        let fit_a = make_test_fit("AAA", &["BBB", "CCC"]);
+        let fit_b = make_test_fit("DDD", &["EEE", "FFF"]);
+        let mut engine = BasketEngine::new(&[fit_a.clone(), fit_b.clone()]);
+
+        let bars = vec![
+            DailyBar { symbol: "AAA".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 90.0 },
+            DailyBar { symbol: "BBB".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 100.0 },
+            DailyBar { symbol: "CCC".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 100.0 },
+            DailyBar { symbol: "DDD".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 90.0 },
+            DailyBar { symbol: "EEE".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 100.0 },
+            DailyBar { symbol: "FFF".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 100.0 },
+        ];
+        engine.on_bars(&bars);
+
+        let config = PortfolioConfig {
+            capital: 100_000.0,
+            leverage: 4.0,
+            n_active_baskets: 1,
+        };
+        assert!(aggregate_positions(&engine, &config).is_err());
     }
 }

@@ -439,7 +439,17 @@ async fn process_session_close(
     }
 
     // Portfolio layer: target notionals across symbols, then diff to orders.
-    let target_notionals = aggregate_positions(engine, portfolio_config);
+    let target_notionals = match aggregate_positions(engine, portfolio_config) {
+        Ok(n) => n,
+        Err(e) => {
+            error!(
+                error = %e,
+                configured_cap = portfolio_config.n_active_baskets,
+                "basket portfolio construction rejected by active-basket cap"
+            );
+            return Err(e);
+        }
+    };
     let target_shares = target_shares_from_notionals(&target_notionals, closes).map_err(|e| {
         error!(
             date = %date,
