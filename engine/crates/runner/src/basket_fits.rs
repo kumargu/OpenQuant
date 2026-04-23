@@ -38,17 +38,20 @@ pub fn default_live_state_path(fit_artifact_path: &Path) -> PathBuf {
     fit_artifact_path.with_file_name(format!("{stem}.state.json"))
 }
 
-pub fn build_live_fit_artifact(universe_path: &Path, bars_dir: &Path) -> Result<BasketFitArtifact, String> {
+pub fn build_live_fit_artifact(
+    universe_path: &Path,
+    bars_dir: &Path,
+) -> Result<BasketFitArtifact, String> {
     let universe = load_universe(universe_path)?;
     let symbols = collect_symbols(&universe);
     let closes = load_warmup_closes(bars_dir, &symbols, WARMUP_DAYS)?;
-    Ok(build_live_fit_artifact_from_inputs(&universe, &closes))
+    build_live_fit_artifact_from_inputs(&universe, &closes)
 }
 
 pub fn build_live_fit_artifact_from_inputs(
     universe: &Universe,
     closes: &std::collections::HashMap<String, Vec<(chrono::NaiveDate, f64)>>,
-) -> BasketFitArtifact {
+) -> Result<BasketFitArtifact, String> {
     let validator_config = ValidatorConfig {
         residual_window: universe.strategy.residual_window_days,
         k_clip_min: universe.strategy.threshold_clip_min,
@@ -67,15 +70,16 @@ pub fn build_live_fit_artifact_from_inputs(
             validate(c, &aligned, &validator_config)
         })
         .collect();
+    ensure_unique_fit_ids(&fits)?;
 
-    BasketFitArtifact {
+    Ok(BasketFitArtifact {
         schema: FIT_ARTIFACT_SCHEMA.to_string(),
         version: FIT_ARTIFACT_VERSION.to_string(),
         universe_version: universe.version.version.clone(),
         universe_frozen_at: universe.version.frozen_at.clone(),
         generated_at: Utc::now().to_rfc3339(),
         fits,
-    }
+    })
 }
 
 pub fn save_fit_artifact(path: &Path, artifact: &BasketFitArtifact) -> Result<(), String> {
@@ -85,8 +89,8 @@ pub fn save_fit_artifact(path: &Path, artifact: &BasketFitArtifact) -> Result<()
 }
 
 pub fn load_fit_artifact(path: &Path, universe: &Universe) -> Result<BasketFitArtifact, String> {
-    let content =
-        fs::read_to_string(path).map_err(|e| format!("read fit artifact {}: {e}", path.display()))?;
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("read fit artifact {}: {e}", path.display()))?;
     let artifact: BasketFitArtifact =
         serde_json::from_str(&content).map_err(|e| format!("parse fit artifact: {e}"))?;
 
@@ -114,6 +118,7 @@ pub fn load_fit_artifact(path: &Path, universe: &Universe) -> Result<BasketFitAr
             artifact.universe_frozen_at, universe.version.frozen_at
         ));
     }
+    ensure_unique_fit_ids(&artifact.fits)?;
 
     let expected_ids: HashSet<String> = universe.candidates.iter().map(|c| c.id()).collect();
     let artifact_ids: HashSet<String> = artifact.fits.iter().map(|f| f.candidate.id()).collect();
@@ -126,6 +131,17 @@ pub fn load_fit_artifact(path: &Path, universe: &Universe) -> Result<BasketFitAr
     }
 
     Ok(artifact)
+}
+
+fn ensure_unique_fit_ids(fits: &[BasketFit]) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for fit in fits {
+        let id = fit.candidate.id();
+        if !seen.insert(id.clone()) {
+            return Err(format!("duplicate basket fit id '{id}' in artifact"));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -175,7 +191,7 @@ traded_targets = ["AAA"]
         closes.insert("BBB".to_string(), mk_series(101.0));
         closes.insert("CCC".to_string(), mk_series(99.0));
 
-        let artifact = build_live_fit_artifact_from_inputs(&universe, &closes);
+        let artifact = build_live_fit_artifact_from_inputs(&universe, &closes).unwrap();
         let tmp = tempfile::NamedTempFile::new().unwrap();
         save_fit_artifact(tmp.path(), &artifact).unwrap();
         let loaded = load_fit_artifact(tmp.path(), &universe).unwrap();
@@ -201,5 +217,22 @@ traded_targets = ["AAA"]
             default_live_state_path(path),
             PathBuf::from("config/basket_universe_v1.fits.state.json")
         );
+    }
+
+    #[test]
+    fn test_duplicate_fit_ids_are_rejected() {
+        let universe = load_universe_from_str(TEST_UNIVERSE).unwrap();
+        let mut closes: HashMap<String, Vec<(chrono::NaiveDate, f64)>> = HashMap::new();
+        closes.insert("AAA".to_string(), mk_series(100.0));
+        closes.insert("BBB".to_string(), mk_series(101.0));
+        closes.insert("CCC".to_string(), mk_series(99.0));
+
+        let mut artifact = build_live_fit_artifact_from_inputs(&universe, &closes).unwrap();
+        artifact.fits.push(artifact.fits[0].clone());
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        save_fit_artifact(tmp.path(), &artifact).unwrap();
+
+        let err = load_fit_artifact(tmp.path(), &universe).unwrap_err();
+        assert!(err.contains("duplicate basket fit id"));
     }
 }

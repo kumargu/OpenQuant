@@ -231,6 +231,9 @@ struct BasketFitArgs {
     #[arg(long)]
     universe: Option<PathBuf>,
 
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+
     /// Directory containing per-symbol 1-min parquets.
     #[arg(long)]
     bars_dir: Option<PathBuf>,
@@ -305,7 +308,7 @@ async fn main() {
     let data_dir = match &cli.command {
         Command::Live(a) | Command::Paper(a) => &a.data_dir,
         Command::Replay(a) => &a.data_dir,
-        Command::FreezeBasketFits(_) => std::path::Path::new("data"),
+        Command::FreezeBasketFits(a) => &a.data_dir,
     };
 
     let journal_dir = data_dir.join("journal");
