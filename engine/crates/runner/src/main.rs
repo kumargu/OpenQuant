@@ -16,6 +16,7 @@
 
 mod alpaca;
 mod bar_cache;
+mod basket_fits;
 mod basket_live;
 mod basket_runner;
 mod earnings;
@@ -51,6 +52,8 @@ enum Command {
     /// Replay — historical minute bars from Alpaca REST, no orders.
     /// The engine processes bars identically to live; it doesn't know it's replaying.
     Replay(ReplayArgs),
+    /// Build a frozen basket fit artifact from the current universe and parquet history.
+    FreezeBasketFits(BasketFitArgs),
 }
 
 /// Asset class / strategy variant. Each variant defines its own config,
@@ -155,6 +158,10 @@ struct StreamArgs {
     ///   live:  real-money Alpaca (explicit opt-in required)
     #[arg(long, default_value = "noop")]
     execution: String,
+
+    /// Frozen basket fit artifact. Defaults to `<universe>.fits.json`.
+    #[arg(long)]
+    fit_artifact: Option<PathBuf>,
 }
 
 /// Args for replay (adds date range).
@@ -212,6 +219,21 @@ struct ReplayArgs {
     /// Output TSV for basket replay metrics (default: data/basket_parity.tsv).
     #[arg(long)]
     tsv_out: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct BasketFitArgs {
+    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml`.
+    #[arg(long)]
+    universe: Option<PathBuf>,
+
+    /// Directory containing per-symbol 1-min parquets.
+    #[arg(long)]
+    bars_dir: Option<PathBuf>,
+
+    /// Output fit artifact path. Defaults to `<universe>.fits.json`.
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 const DEFAULT_CONFIG: &str = "config/pairs.toml";
@@ -279,6 +301,7 @@ async fn main() {
     let data_dir = match &cli.command {
         Command::Live(a) | Command::Paper(a) => &a.data_dir,
         Command::Replay(a) => &a.data_dir,
+        Command::FreezeBasketFits(_) => std::path::Path::new("data"),
     };
 
     let journal_dir = data_dir.join("journal");
@@ -307,6 +330,11 @@ async fn main() {
             run_basket_stream(a.clone(), matches!(&cli.command, Command::Live(_))).await;
             return;
         }
+    }
+
+    if let Command::FreezeBasketFits(a) = &cli.command {
+        run_freeze_basket_fits(a.clone());
+        return;
     }
 
     // Convert CLI command → (config, trading_dir, data_dir, candidates, pipeline, run_mode)
@@ -427,6 +455,7 @@ async fn main() {
                 },
             )
         }
+        Command::FreezeBasketFits(_) => unreachable!("handled before run-mode dispatch"),
     };
 
     run(
@@ -460,6 +489,10 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
                 PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
             })
     });
+    let fit_artifact_path = args
+        .fit_artifact
+        .clone()
+        .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
 
     // Parse execution mode. Default = noop (shadow).
     // Extra safety: `paper live` must come from `Command::Live` (real-money path),
@@ -492,10 +525,10 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         }
     };
 
-    // Refresh quant-data before warmup. Without this, the basket path reads
-    // potentially-stale parquets, and the validator fits OU on outdated prices
-    // — the same failure mode the pairs path fixes at main.rs refresh block.
-    // Filter refresh to only the universe's symbols (avoid refreshing unrelated SP500 names).
+    // Refresh quant-data before the session starts so the universe's parquet
+    // history stays current for any future artifact rebuilds and operator
+    // diagnostics. Filter refresh to only the universe's symbols to avoid
+    // touching unrelated SP500 names.
     if bars_dir.exists() {
         let filter = match basket_picker::load_universe(&universe_path) {
             Ok(u) => {
@@ -534,19 +567,89 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     // Portfolio config: use sensible defaults for now. Capital & leverage can
     // be surfaced to CLI/config in a follow-up; defaults match baseline config.
     let portfolio_config = basket_engine::PortfolioConfig::default();
+    let universe = match basket_picker::load_universe(&universe_path) {
+        Ok(u) => u,
+        Err(e) => {
+            error!(error = %e, "failed to load basket universe");
+            std::process::exit(1);
+        }
+    };
+    let fit_artifact = match basket_fits::load_fit_artifact(&fit_artifact_path, &universe) {
+        Ok(a) => a,
+        Err(e) => {
+            error!(
+                error = %e,
+                fit_artifact = %fit_artifact_path.display(),
+                "failed to load frozen basket fit artifact"
+            );
+            error!(
+                "build it first with: openquant-runner freeze-basket-fits --universe {} --bars-dir {} --out {}",
+                universe_path.display(),
+                bars_dir.display(),
+                fit_artifact_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
 
     if let Err(e) = basket_live::run_basket_live(
         &alpaca,
         &universe_path,
-        &bars_dir,
+        &fit_artifact_path,
         execution,
         portfolio_config,
+        &fit_artifact.fits,
     )
     .await
     {
         error!(error = %e, "basket live runner failed");
         std::process::exit(1);
     }
+}
+
+fn run_freeze_basket_fits(args: BasketFitArgs) {
+    let universe_path = args
+        .universe
+        .unwrap_or_else(|| PathBuf::from("config/basket_universe_v1.toml"));
+    let bars_dir = args.bars_dir.unwrap_or_else(|| {
+        std::env::var("QUANT_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_default();
+                PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
+            })
+    });
+    let out = args
+        .out
+        .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
+
+    info!(
+        universe = %universe_path.display(),
+        bars_dir = %bars_dir.display(),
+        out = %out.display(),
+        "========== FREEZE BASKET FITS =========="
+    );
+
+    let artifact = match basket_fits::build_live_fit_artifact(&universe_path, &bars_dir) {
+        Ok(a) => a,
+        Err(e) => {
+            error!(error = %e, "failed to build basket fit artifact");
+            std::process::exit(1);
+        }
+    };
+    let valid = artifact.fits.iter().filter(|f| f.valid).count();
+    if let Err(e) = basket_fits::save_fit_artifact(&out, &artifact) {
+        error!(error = %e, "failed to save basket fit artifact");
+        std::process::exit(1);
+    }
+    info!(
+        path = %out.display(),
+        total = artifact.fits.len(),
+        valid,
+        invalid = artifact.fits.len().saturating_sub(valid),
+        generated_at = artifact.generated_at.as_str(),
+        "wrote frozen basket fit artifact"
+    );
 }
 
 // ── Unified run function ─────────────────────────────────────────────
