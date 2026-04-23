@@ -162,6 +162,10 @@ struct StreamArgs {
     /// Frozen basket fit artifact. Defaults to `<universe>.fits.json`.
     #[arg(long)]
     fit_artifact: Option<PathBuf>,
+
+    /// Persisted basket engine runtime state. Defaults to `<fit-artifact>.state.json`.
+    #[arg(long)]
+    state_path: Option<PathBuf>,
 }
 
 /// Args for replay (adds date range).
@@ -493,6 +497,10 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         .fit_artifact
         .clone()
         .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
+    let state_path = args
+        .state_path
+        .clone()
+        .unwrap_or_else(|| basket_fits::default_live_state_path(&fit_artifact_path));
 
     // Parse execution mode. Default = noop (shadow).
     // Extra safety: `paper live` must come from `Command::Live` (real-money path),
@@ -599,6 +607,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         execution,
         portfolio_config,
         &fit_artifact.fits,
+        &state_path,
     )
     .await
     {
