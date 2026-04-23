@@ -31,7 +31,7 @@ use basket_engine::{
 use basket_picker::{load_universe, validate, ValidatorConfig};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::alpaca::{AlpacaClient, ExecutionMode};
 use crate::stream;
@@ -183,8 +183,20 @@ pub async fn run_basket_live(
     const CLOSE_GRACE_MIN: u32 = 2;
 
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+    // Dedicated 60s heartbeat that summarizes buffer state. Separate from the
+    // 30s wall-clock tick so we get clean one-per-minute INFO lines
+    // regardless of how often the close-firing check runs.
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(60));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Skip first fire so we don't heartbeat with zero data.
+    heartbeat.tick().await;
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
+
+    let symbols_expected = symbols.len();
+    let mut bars_processed_total: u64 = 0;
+    let mut bars_processed_window: u64 = 0;
+    let mut last_bar_rx_ts_ms: i64 = 0;
 
     loop {
         tokio::select! {
@@ -203,15 +215,62 @@ pub async fn run_basket_live(
                 let minute = dt.hour() * 60 + dt.minute();
                 if !(RTH_START_MIN..SESSION_CLOSE_MIN).contains(&minute) {
                     // Outside RTH — ignore (do not contaminate daily close).
+                    debug!(
+                        symbol = bar.symbol.as_str(),
+                        minute,
+                        ts = bar.timestamp,
+                        "bar outside RTH — discarded"
+                    );
                     continue;
                 }
                 let date = dt.date_naive();
                 if bar.close.is_finite() && bar.close > 0.0 {
-                    day_closes
-                        .entry(date)
-                        .or_default()
-                        .insert(bar.symbol.clone(), bar.close);
+                    let entry = day_closes.entry(date).or_default();
+                    entry.insert(bar.symbol.clone(), bar.close);
+                    bars_processed_total += 1;
+                    bars_processed_window += 1;
+                    last_bar_rx_ts_ms = bar.timestamp;
+                    debug!(
+                        symbol = bar.symbol.as_str(),
+                        close = bar.close,
+                        date = %date,
+                        buffer_size = entry.len(),
+                        symbols_expected,
+                        "buffered bar"
+                    );
                 }
+            }
+            _ = heartbeat.tick() => {
+                // BAR_LOOP heartbeat — surfaces whether bars are making it
+                // out of `stream.rs`'s channel into the basket buffer. If
+                // this goes silent while `stream heartbeat` shows activity,
+                // the channel is backed up or the RTH filter is rejecting
+                // everything.
+                let now = Utc::now();
+                let today = now.date_naive();
+                let minute_now = now.hour() * 60 + now.minute();
+                let in_rth = (RTH_START_MIN..SESSION_CLOSE_MIN).contains(&minute_now);
+                let past_close = minute_now >= SESSION_CLOSE_MIN + CLOSE_GRACE_MIN;
+                let buffered_today = day_closes.get(&today).map(|m| m.len()).unwrap_or(0);
+                let last_bar_age_s = if last_bar_rx_ts_ms == 0 {
+                    -1i64
+                } else {
+                    (now.timestamp_millis() - last_bar_rx_ts_ms) / 1000
+                };
+                info!(
+                    bars_processed_total,
+                    bars_processed_window,
+                    buffered_today,
+                    symbols_expected,
+                    minute_now,
+                    in_rth,
+                    past_close,
+                    processed_today = processed_sessions.contains(&today),
+                    current_notionals = current_notionals.len(),
+                    last_bar_age_s,
+                    "BAR_LOOP heartbeat"
+                );
+                bars_processed_window = 0;
             }
             _ = tick.tick() => {
                 // Wall-clock trigger: if we are past session close + grace for a
@@ -225,9 +284,33 @@ pub async fn run_basket_live(
                     let closes_for_day = day_closes.remove(&today).unwrap_or_default();
                     if closes_for_day.is_empty() {
                         // Weekend / holiday / blackout — mark processed to avoid busy-looping.
+                        info!(
+                            date = %today,
+                            minute_now,
+                            "session close grace elapsed but no RTH closes buffered — marking processed"
+                        );
                         processed_sessions.insert(today);
                         continue;
                     }
+                    // Log exactly which symbols' closes we have and, crucially,
+                    // which expected ones are missing. Yesterday we had no
+                    // way to tell mid-incident whether this was a subscribe
+                    // problem, a stream-drop problem, or a buffer problem.
+                    let missing: Vec<&str> = symbols
+                        .iter()
+                        .filter(|s| !closes_for_day.contains_key(s.as_str()))
+                        .map(|s| s.as_str())
+                        .collect();
+                    info!(
+                        date = %today,
+                        minute_now,
+                        grace_elapsed_past_min = minute_now.saturating_sub(SESSION_CLOSE_MIN + CLOSE_GRACE_MIN),
+                        closes_in_buffer = closes_for_day.len(),
+                        symbols_expected,
+                        missing_count = missing.len(),
+                        missing_sample = ?missing.iter().take(10).collect::<Vec<_>>(),
+                        "session close firing"
+                    );
                     processed_sessions.insert(today);
                     process_session_close(
                         &mut engine,
@@ -242,7 +325,11 @@ pub async fn run_basket_live(
                 }
             }
             _ = &mut ctrl_c => {
-                info!("========== SHUTDOWN ==========");
+                info!(
+                    bars_processed_total,
+                    sessions_processed = processed_sessions.len(),
+                    "========== SHUTDOWN =========="
+                );
                 break;
             }
         }
@@ -317,12 +404,58 @@ async fn process_session_close(
 
     // Portfolio layer: target notionals across symbols, then diff to orders.
     let target_notionals = aggregate_positions(engine, portfolio_config);
+
+    // Summary of the notional plan before we diff — this is where yesterday's
+    // $340K-on-$100K problem was invisible. Emit gross long, gross short,
+    // net, absolute max leg, and median leg so we can spot sizing anomalies
+    // without shelling into sqlite. `gross_long + gross_short` = gross
+    // notional = leverage × equity (should be ≤ equity × leverage_assumed
+    // from the universe TOML).
+    let (gross_long, gross_short, max_abs, sorted_abs) = summarize_notionals(&target_notionals);
+    let median_abs = if sorted_abs.is_empty() {
+        0.0
+    } else {
+        sorted_abs[sorted_abs.len() / 2]
+    };
+    info!(
+        date = %date,
+        targets = target_notionals.len(),
+        currents = current_notionals.len(),
+        gross_long = %format!("{:.0}", gross_long),
+        gross_short = %format!("{:.0}", gross_short),
+        gross_notional = %format!("{:.0}", gross_long + gross_short.abs()),
+        net_notional = %format!("{:.0}", gross_long + gross_short),
+        max_abs_leg = %format!("{:.0}", max_abs),
+        median_abs_leg = %format!("{:.0}", median_abs),
+        "target notionals summary"
+    );
+
     let orders = diff_to_orders(current_notionals, &target_notionals, closes);
     if orders.is_empty() {
+        info!(date = %date, "no orders to emit — targets already match current");
         return;
     }
 
-    info!(date = %date, n_orders = orders.len(), "emitting orders");
+    // Distribution of order notionals — flags the "one leg $30K, rest $200"
+    // case that we saw yesterday. Computed cheaply from prices + qtys.
+    let order_notionals: Vec<f64> = orders
+        .iter()
+        .filter_map(|o| {
+            closes
+                .get(&o.symbol)
+                .map(|p| p * o.qty as f64)
+                .filter(|n| n.is_finite() && *n > 0.0)
+        })
+        .collect();
+    let order_gross: f64 = order_notionals.iter().sum();
+    let order_max = order_notionals.iter().cloned().fold(0.0_f64, f64::max);
+    info!(
+        date = %date,
+        n_orders = orders.len(),
+        order_gross_notional = %format!("{:.0}", order_gross),
+        order_max_notional = %format!("{:.0}", order_max),
+        "emitting orders"
+    );
 
     // Track which symbols were successfully adjusted so we only update
     // `current_notionals` for legs that actually executed. This matters
@@ -437,6 +570,32 @@ async fn process_session_close(
             "some orders failed; current_notionals preserves prior values for failed legs"
         );
     }
+}
+
+/// Summarize a `target_notionals` map into (gross_long, gross_short, max_abs,
+/// sorted_abs). `gross_short` is returned as a negative number.
+fn summarize_notionals(targets: &HashMap<String, f64>) -> (f64, f64, f64, Vec<f64>) {
+    let mut gross_long = 0.0_f64;
+    let mut gross_short = 0.0_f64;
+    let mut max_abs = 0.0_f64;
+    let mut abs: Vec<f64> = Vec::with_capacity(targets.len());
+    for &n in targets.values() {
+        if !n.is_finite() {
+            continue;
+        }
+        if n > 0.0 {
+            gross_long += n;
+        } else {
+            gross_short += n;
+        }
+        let a = n.abs();
+        abs.push(a);
+        if a > max_abs {
+            max_abs = a;
+        }
+    }
+    abs.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    (gross_long, gross_short, max_abs, abs)
 }
 
 fn log_intent(intent: &PositionIntent) {

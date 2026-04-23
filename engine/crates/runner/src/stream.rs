@@ -4,6 +4,32 @@
 //! subscribes to minute bars for all pair symbols, and yields bars as they arrive.
 //!
 //! The engine processes each bar immediately — no buffering, no polling.
+//!
+//! ## Observability
+//!
+//! The stream task emits a deliberate mix of log levels so you can tune verbosity
+//! to the diagnostic question at hand:
+//!
+//! - **INFO**: connect / auth / subscribe-send / subscribe-ack / 60-second
+//!   heartbeat (bars total + last window + symbols active) / stale-symbol
+//!   warnings promoted to WARN.
+//! - **DEBUG**: welcome message body, non-bar messages, ping/pong frames,
+//!   per-bar receipt, subscription-ack raw payload.
+//! - **WARN**: stream reconnects, 90-second read timeout, invalid bars,
+//!   out-of-order bars, duplicate bars, stale subscribed symbols during RTH.
+//! - **ERROR**: stream protocol errors forcing reconnect.
+//!
+//! Tune via `RUST_LOG`:
+//!
+//! ```text
+//! RUST_LOG=info                                # default; ~1 line/minute per stream
+//! RUST_LOG=info,openquant_runner::stream=debug # distinguish silent-death vs
+//!                                              # healthy-but-quiet: ping/pong
+//!                                              # frames become visible
+//! ```
+
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -17,6 +43,20 @@ const ALPACA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
 /// Add 60s so the timestamp reflects when the bar data is finalized.
 /// This matters for force_close_minute: a 15:29 bar completes at 15:30.
 const MINUTE_BAR_DURATION_MS: i64 = 60_000;
+
+/// Heartbeat interval — emits one INFO summary per interval with live counters.
+const HEARTBEAT_INTERVAL_SECS: u64 = 60;
+
+/// Per-symbol staleness threshold during RTH. A symbol that was subscribed but
+/// has had no bar arrive in this long is flagged as WARN. 3 minutes accounts
+/// for illiquid names that don't print every minute while still catching
+/// genuinely broken subscriptions.
+const SYMBOL_STALE_THRESHOLD_SECS: u64 = 180;
+
+/// Regular trading hours (UTC) — watchdog only warns about stale symbols
+/// during this window. Outside RTH, absence of bars is expected.
+const RTH_OPEN_MIN_UTC: u32 = 13 * 60 + 30; // 13:30 UTC
+const RTH_CLOSE_MIN_UTC: u32 = 20 * 60; // 20:00 UTC
 
 /// A bar received from the Alpaca stream.
 #[derive(Debug, Clone)]
@@ -50,6 +90,85 @@ struct StreamMessage {
     low: f64,
     #[serde(rename = "v", default)]
     volume: f64,
+    /// For subscription-confirmation messages (`T == "subscription"`) Alpaca
+    /// echoes back the stream lists it accepted. Logging this lets us catch
+    /// cases where we asked for 52 symbols but only got 48.
+    #[serde(rename = "bars", default)]
+    bars_confirmed: Vec<String>,
+    #[serde(rename = "trades", default)]
+    #[allow(dead_code)]
+    trades_confirmed: Vec<String>,
+    #[serde(rename = "quotes", default)]
+    #[allow(dead_code)]
+    quotes_confirmed: Vec<String>,
+    #[serde(rename = "msg", default)]
+    message_body: String,
+    #[serde(rename = "code", default)]
+    code: i64,
+}
+
+/// Counters maintained across the read loop for the INFO heartbeat.
+struct StreamMetrics {
+    bars_total: u64,
+    bars_last_window: u64,
+    invalid_bars: u64,
+    out_of_order: u64,
+    duplicates: u64,
+    pings_received: u64,
+    pongs_sent: u64,
+    non_bar_messages: u64,
+    window_started: Instant,
+    last_bar_ts_by_symbol: HashMap<String, i64>,
+    /// Symbols we've already warned about in the current staleness window.
+    /// Prevents WARN-spam for a symbol that's persistently stale (one warn
+    /// per staleness window is enough to signal the problem).
+    stale_warned: HashSet<String>,
+}
+
+impl StreamMetrics {
+    fn new() -> Self {
+        Self {
+            bars_total: 0,
+            bars_last_window: 0,
+            invalid_bars: 0,
+            out_of_order: 0,
+            duplicates: 0,
+            pings_received: 0,
+            pongs_sent: 0,
+            non_bar_messages: 0,
+            window_started: Instant::now(),
+            last_bar_ts_by_symbol: HashMap::new(),
+            stale_warned: HashSet::new(),
+        }
+    }
+
+    fn record_bar(&mut self, symbol: &str, ts: i64) -> BarClassification {
+        self.bars_total += 1;
+        self.bars_last_window += 1;
+        match self.last_bar_ts_by_symbol.get(symbol).copied() {
+            Some(prev) if ts < prev => {
+                self.out_of_order += 1;
+                self.last_bar_ts_by_symbol.insert(symbol.to_string(), ts);
+                self.stale_warned.remove(symbol);
+                BarClassification::OutOfOrder { prev_ts: prev }
+            }
+            Some(prev) if ts == prev => {
+                self.duplicates += 1;
+                BarClassification::Duplicate
+            }
+            _ => {
+                self.last_bar_ts_by_symbol.insert(symbol.to_string(), ts);
+                self.stale_warned.remove(symbol);
+                BarClassification::Fresh
+            }
+        }
+    }
+}
+
+enum BarClassification {
+    Fresh,
+    OutOfOrder { prev_ts: i64 },
+    Duplicate,
 }
 
 /// Start streaming bars from Alpaca. Returns a channel receiver that yields bars.
@@ -68,8 +187,9 @@ pub async fn start_bar_stream(
     let symbols = symbols.to_vec();
 
     tokio::spawn(async move {
+        let mut reconnect_count: u64 = 0;
         loop {
-            info!("connecting to Alpaca stream");
+            info!(reconnect_count, "connecting to Alpaca stream");
             match run_stream(&api_key, &api_secret, &symbols, &tx).await {
                 Ok(()) => {
                     // Server closed the connection (end of day, maintenance).
@@ -82,6 +202,7 @@ pub async fn start_bar_stream(
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
+            reconnect_count += 1;
         }
     });
 
@@ -104,7 +225,7 @@ async fn run_stream(
     // Read the welcome message
     if let Some(msg) = read.next().await {
         let msg = msg.map_err(|e| format!("read error: {e}"))?;
-        debug!("welcome: {}", msg.to_text().unwrap_or(""));
+        debug!(welcome = msg.to_text().unwrap_or(""), "welcome message");
     }
 
     // Authenticate
@@ -138,85 +259,289 @@ async fn run_stream(
         .await
         .map_err(|e| format!("subscribe send failed: {e}"))?;
 
-    info!(symbols = symbols.len(), "subscribed to minute bars");
+    info!(
+        symbols_requested = symbols.len(),
+        "subscribed to minute bars (sent)"
+    );
 
-    // Read messages forever — each bar is fed to the channel.
+    // Expected symbol set — used by the watchdog to enumerate what we're
+    // waiting for and to validate server-side subscription acknowledgements.
+    let expected: HashSet<String> = symbols.iter().cloned().collect();
+    let mut metrics = StreamMetrics::new();
+
     // Timeout after 90s of silence: if no message (not even a ping) arrives
     // in 90 seconds, assume the connection is dead and reconnect. Alpaca
-    // sends bars every minute for 65 symbols, so 90s of total silence
-    // is a strong signal the connection is zombie.
+    // sends bars every minute for our symbols, so 90s of total silence is
+    // a strong signal the connection is zombie.
     let read_timeout = tokio::time::Duration::from_secs(90);
+    let mut heartbeat =
+        tokio::time::interval(tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // First tick fires immediately — consume it so we don't emit a
+    // heartbeat with zero data before any bars have had a chance to arrive.
+    heartbeat.tick().await;
+
     loop {
-        let msg = match tokio::time::timeout(read_timeout, read.next()).await {
-            Ok(Some(msg)) => msg.map_err(|e| format!("read error: {e}"))?,
-            Ok(None) => {
-                // Stream ended normally
-                info!("stream ended (no more messages)");
-                return Ok(());
+        tokio::select! {
+            _ = heartbeat.tick() => {
+                emit_heartbeat(&mut metrics, &expected);
             }
-            Err(_) => {
-                // Timeout — no message in 90s, connection is zombie
-                warn!("no message from stream in 90s — assuming dead connection");
-                return Err("read timeout (90s)".into());
-            }
-        };
+            res = tokio::time::timeout(read_timeout, read.next()) => {
+                let msg = match res {
+                    Ok(Some(msg)) => msg.map_err(|e| format!("read error: {e}"))?,
+                    Ok(None) => {
+                        // Stream ended normally
+                        info!(bars_total = metrics.bars_total, "stream ended (no more messages)");
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        // Timeout — no message in 90s, connection is zombie.
+                        // This path is specifically for the silent-death case —
+                        // caller forces a reconnect.
+                        warn!(
+                            bars_total = metrics.bars_total,
+                            pings_received = metrics.pings_received,
+                            seconds_silent = read_timeout.as_secs(),
+                            "no message from stream in 90s — assuming dead connection, reconnecting"
+                        );
+                        return Err("read timeout (90s)".into());
+                    }
+                };
 
-        let text = match msg {
-            Message::Text(t) => t.to_string(),
-            Message::Ping(data) => {
-                let _ = write.send(Message::Pong(data)).await;
-                continue;
-            }
-            Message::Close(_) => {
-                info!("stream closed by server");
-                return Ok(());
-            }
-            _ => continue,
-        };
-
-        // Alpaca sends arrays of messages
-        let messages: Vec<StreamMessage> = match serde_json::from_str(&text) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        for msg in messages {
-            if msg.msg_type != "b" {
-                // "b" = bar, skip others (subscription confirmations, errors, etc.)
-                debug!(msg_type = msg.msg_type.as_str(), "non-bar message");
-                continue;
-            }
-
-            let ts = chrono::DateTime::parse_from_rfc3339(&msg.timestamp)
-                .map(|dt| dt.timestamp_millis() + MINUTE_BAR_DURATION_MS)
-                .unwrap_or(0);
-
-            if ts == 0 || msg.close <= 0.0 {
-                warn!(symbol = msg.symbol.as_str(), "invalid bar from stream");
-                continue;
-            }
-
-            let bar = StreamBar {
-                symbol: msg.symbol,
-                timestamp: ts,
-                close: msg.close,
-                open: msg.open,
-                high: msg.high,
-                low: msg.low,
-                volume: msg.volume,
-            };
-
-            debug!(
-                symbol = bar.symbol.as_str(),
-                close = %format_args!("{:.2}", bar.close),
-                "bar received"
-            );
-
-            if tx.send(bar).await.is_err() {
-                // Receiver dropped — shutdown
-                return Ok(());
+                match msg {
+                    Message::Ping(data) => {
+                        metrics.pings_received += 1;
+                        if write.send(Message::Pong(data)).await.is_ok() {
+                            metrics.pongs_sent += 1;
+                        }
+                        debug!(pings_received = metrics.pings_received, "ping/pong");
+                        continue;
+                    }
+                    Message::Close(_) => {
+                        info!(bars_total = metrics.bars_total, "stream closed by server");
+                        return Ok(());
+                    }
+                    Message::Text(t) => {
+                        handle_text(&t, &mut metrics, &expected, tx).await?;
+                    }
+                    _ => {}
+                }
             }
         }
     }
-    // loop never exits normally — only via return in timeout/error/end handlers
+}
+
+/// Handle a text message from Alpaca. Parses the JSON array, routes each
+/// element to the appropriate handler (bar, subscription-ack, error).
+async fn handle_text(
+    text: &str,
+    metrics: &mut StreamMetrics,
+    expected: &HashSet<String>,
+    tx: &mpsc::Sender<StreamBar>,
+) -> Result<(), String> {
+    let messages: Vec<StreamMessage> = match serde_json::from_str(text) {
+        Ok(m) => m,
+        Err(e) => {
+            debug!(err = %e, payload = text, "failed to parse stream message");
+            return Ok(());
+        }
+    };
+
+    for msg in messages {
+        match msg.msg_type.as_str() {
+            "b" => process_bar(msg, metrics, tx).await?,
+            "subscription" => log_subscription_ack(&msg, expected),
+            "success" => info!(msg = msg.message_body.as_str(), "stream success"),
+            "error" => {
+                error!(
+                    code = msg.code,
+                    msg = msg.message_body.as_str(),
+                    "stream error message"
+                );
+            }
+            other => {
+                metrics.non_bar_messages += 1;
+                debug!(msg_type = other, "non-bar message");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn log_subscription_ack(msg: &StreamMessage, expected: &HashSet<String>) {
+    let confirmed: HashSet<String> = msg.bars_confirmed.iter().cloned().collect();
+    let missing: Vec<String> = expected.difference(&confirmed).cloned().collect();
+    let extra: Vec<String> = confirmed.difference(expected).cloned().collect();
+    if missing.is_empty() && extra.is_empty() {
+        info!(
+            confirmed = confirmed.len(),
+            "subscription ack — server confirmed all requested symbols"
+        );
+    } else {
+        warn!(
+            requested = expected.len(),
+            confirmed = confirmed.len(),
+            missing_count = missing.len(),
+            extra_count = extra.len(),
+            missing_sample = ?missing.iter().take(10).collect::<Vec<_>>(),
+            extra_sample = ?extra.iter().take(10).collect::<Vec<_>>(),
+            "subscription ack — mismatch between requested and confirmed symbols"
+        );
+    }
+}
+
+async fn process_bar(
+    msg: StreamMessage,
+    metrics: &mut StreamMetrics,
+    tx: &mpsc::Sender<StreamBar>,
+) -> Result<(), String> {
+    let ts = chrono::DateTime::parse_from_rfc3339(&msg.timestamp)
+        .map(|dt| dt.timestamp_millis() + MINUTE_BAR_DURATION_MS)
+        .unwrap_or(0);
+
+    if ts == 0 || msg.close <= 0.0 {
+        metrics.invalid_bars += 1;
+        warn!(
+            symbol = msg.symbol.as_str(),
+            close = msg.close,
+            raw_ts = msg.timestamp.as_str(),
+            "invalid bar from stream"
+        );
+        return Ok(());
+    }
+
+    let classification = metrics.record_bar(&msg.symbol, ts);
+    match classification {
+        BarClassification::Fresh => {}
+        BarClassification::Duplicate => {
+            warn!(
+                symbol = msg.symbol.as_str(),
+                ts,
+                duplicates_total = metrics.duplicates,
+                "duplicate bar (same symbol, same ts)"
+            );
+            // Continue processing — the downstream engine dedups via
+            // HashMap insert, so a dup is harmless. We log + count so
+            // we can spot a server-side replay storm.
+        }
+        BarClassification::OutOfOrder { prev_ts } => {
+            warn!(
+                symbol = msg.symbol.as_str(),
+                ts,
+                prev_ts,
+                out_of_order_total = metrics.out_of_order,
+                "out-of-order bar (arrival ts older than previous for this symbol)"
+            );
+        }
+    }
+
+    let bar = StreamBar {
+        symbol: msg.symbol,
+        timestamp: ts,
+        close: msg.close,
+        open: msg.open,
+        high: msg.high,
+        low: msg.low,
+        volume: msg.volume,
+    };
+
+    debug!(
+        symbol = bar.symbol.as_str(),
+        close = %format_args!("{:.2}", bar.close),
+        ts = bar.timestamp,
+        "bar received"
+    );
+
+    if tx.send(bar).await.is_err() {
+        // Receiver dropped — shutdown
+        return Err("receiver dropped".into());
+    }
+    Ok(())
+}
+
+/// Emit a heartbeat summarizing the last window, and fire stale-symbol
+/// warnings if any subscribed symbol has been quiet during RTH.
+fn emit_heartbeat(metrics: &mut StreamMetrics, expected: &HashSet<String>) {
+    let window_secs = metrics.window_started.elapsed().as_secs().max(1);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_minute_utc = {
+        let now = chrono::Utc::now();
+        use chrono::Timelike;
+        now.hour() * 60 + now.minute()
+    };
+    let in_rth = (RTH_OPEN_MIN_UTC..RTH_CLOSE_MIN_UTC).contains(&now_minute_utc);
+
+    // Age of the oldest last-seen bar — flags whether ANY symbols are getting
+    // bars at all.
+    let oldest_symbol_age_ms = metrics
+        .last_bar_ts_by_symbol
+        .iter()
+        .map(|(sym, &ts)| (sym.clone(), now_ms - ts))
+        .max_by_key(|(_, age)| *age);
+
+    let active_symbols = metrics.last_bar_ts_by_symbol.len();
+
+    info!(
+        bars_total = metrics.bars_total,
+        bars_last_window = metrics.bars_last_window,
+        window_secs,
+        symbols_active = active_symbols,
+        symbols_subscribed = expected.len(),
+        pings = metrics.pings_received,
+        invalid = metrics.invalid_bars,
+        out_of_order = metrics.out_of_order,
+        duplicates = metrics.duplicates,
+        oldest_symbol_age_s = oldest_symbol_age_ms
+            .as_ref()
+            .map(|(_, age)| age / 1000)
+            .unwrap_or(0),
+        oldest_symbol = oldest_symbol_age_ms
+            .as_ref()
+            .map(|(s, _)| s.as_str())
+            .unwrap_or("-"),
+        in_rth,
+        "stream heartbeat"
+    );
+
+    // Stale-symbol watchdog — only active during RTH.
+    if in_rth {
+        let stale_threshold_ms = (SYMBOL_STALE_THRESHOLD_SECS * 1000) as i64;
+        // Symbols we expected but have never seen at all:
+        let never_seen: Vec<&str> = expected
+            .iter()
+            .filter(|s| !metrics.last_bar_ts_by_symbol.contains_key(s.as_str()))
+            .map(|s| s.as_str())
+            .collect();
+        if !never_seen.is_empty() && metrics.bars_total > 0 {
+            // Bars are arriving for *some* symbols but not these. One WARN per
+            // heartbeat is enough to surface the gap without flooding.
+            warn!(
+                count = never_seen.len(),
+                sample = ?never_seen.iter().take(10).collect::<Vec<_>>(),
+                "symbols subscribed but never received any bar during RTH"
+            );
+        }
+
+        // Symbols that were fresh at some point but have since gone quiet:
+        let mut newly_stale = Vec::new();
+        for (sym, &last_ts) in &metrics.last_bar_ts_by_symbol {
+            let age_ms = now_ms - last_ts;
+            if age_ms > stale_threshold_ms && !metrics.stale_warned.contains(sym) {
+                newly_stale.push((sym.clone(), age_ms / 1000));
+            }
+        }
+        for (sym, age_s) in newly_stale {
+            warn!(
+                symbol = sym.as_str(),
+                age_s,
+                threshold_s = SYMBOL_STALE_THRESHOLD_SECS,
+                "subscribed symbol has gone quiet during RTH"
+            );
+            metrics.stale_warned.insert(sym);
+        }
+    }
+
+    // Reset window counters but keep the per-symbol map alive across windows.
+    metrics.bars_last_window = 0;
+    metrics.window_started = Instant::now();
 }

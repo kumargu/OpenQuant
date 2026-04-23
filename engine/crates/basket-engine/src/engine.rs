@@ -6,7 +6,7 @@ use std::path::Path;
 
 use basket_picker::{BasketFit, OuFit};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{debug, info, trace, warn};
 
 use crate::intent::{PositionIntent, TransitionReason};
 use crate::state::BasketState;
@@ -115,6 +115,17 @@ impl BasketEngine {
         }
 
         let mut intents = Vec::new();
+        // Per-call cardinality breakdown — emitted as INFO at the end so every
+        // `on_bars` session leaves a one-line summary we can grep even at
+        // default log level. This is the "did the engine actually evaluate
+        // anything meaningful?" counter we did not have yesterday.
+        let total_baskets = self.params.len();
+        let mut evaluated = 0usize;
+        let mut skipped_missing_target = 0usize;
+        let mut skipped_missing_peer = 0usize;
+        let mut skipped_nan_z = 0usize;
+        let mut near_threshold = 0usize;
+        let mut transitioned = 0usize;
 
         for (basket_id, params) in &self.params {
             let state = match self.states.get_mut(basket_id) {
@@ -128,12 +139,27 @@ impl BasketEngine {
             // Get target and peer prices
             let target_price = match prices.get(params.target.as_str()) {
                 Some(&p) if p.is_finite() && p > 0.0 => p,
-                _ => continue, // Skip if target price invalid
+                _ => {
+                    // Silent continue is a real blind spot: if the target's
+                    // price never arrives, the basket is inert forever and
+                    // nobody notices. DEBUG keeps the cardinality summary
+                    // terse while letting deep-dive users see per-basket
+                    // detail via `RUST_LOG=basket_engine=debug`.
+                    skipped_missing_target += 1;
+                    debug!(
+                        basket_id = %basket_id,
+                        target = params.target.as_str(),
+                        date = %date,
+                        "skip basket — missing or invalid target price"
+                    );
+                    continue;
+                }
             };
 
             let mut peer_log_sum = 0.0;
             let mut peer_count = 0;
             let mut all_peers_valid = true;
+            let mut missing_peer: Option<&str> = None;
 
             for peer in &params.peers {
                 match prices.get(peer.as_str()) {
@@ -143,13 +169,21 @@ impl BasketEngine {
                     }
                     _ => {
                         all_peers_valid = false;
+                        missing_peer = Some(peer.as_str());
                         break;
                     }
                 }
             }
 
             if !all_peers_valid || peer_count == 0 {
-                continue; // Skip if any peer price invalid
+                skipped_missing_peer += 1;
+                debug!(
+                    basket_id = %basket_id,
+                    missing_peer = missing_peer.unwrap_or("<all>"),
+                    date = %date,
+                    "skip basket — missing or invalid peer price"
+                );
+                continue;
             }
 
             // Compute spread = log(target) - mean(log(peers))
@@ -161,11 +195,52 @@ impl BasketEngine {
             state.last_z = Some(z);
 
             if !z.is_finite() {
-                continue; // NaN bar: no action
+                skipped_nan_z += 1;
+                warn!(
+                    basket_id = %basket_id,
+                    target_price,
+                    peer_count,
+                    peer_log_sum,
+                    mu = params.ou.mu,
+                    sigma_eq = params.ou.sigma_eq,
+                    "skip basket — z-score not finite"
+                );
+                continue;
             }
 
+            evaluated += 1;
             let k = params.threshold_k;
             let old_pos = state.position;
+
+            // Near-threshold counter — any basket with |z| > 0.75k is "close
+            // to firing." Tracking this gives us a pulse on whether the
+            // strategy is actually seeing opportunity vs. sitting flat.
+            if z.abs() > 0.75 * k {
+                near_threshold += 1;
+            }
+
+            // Per-basket TRACE — full detail for deep-dive debugging.
+            trace!(
+                basket_id = %basket_id,
+                target = params.target.as_str(),
+                target_price,
+                peer_count,
+                spread = %format!("{:.6}", spread),
+                z = %format!("{:.4}", z),
+                threshold_k = k,
+                position = old_pos,
+                date = %date,
+                "basket evaluation"
+            );
+
+            // Per-basket DEBUG — lighter, still per-basket-per-call.
+            debug!(
+                basket_id = %basket_id,
+                z = %format!("{:.4}", z),
+                k = %format!("{:.4}", k),
+                pos = old_pos,
+                "basket z-check"
+            );
 
             // Bertram symmetric state machine
             let (new_pos, reason) = match old_pos {
@@ -206,6 +281,8 @@ impl BasketEngine {
                     state.flip(date, spread);
                 }
 
+                transitioned += 1;
+
                 info!(
                     basket_id = %basket_id,
                     z_score = %format!("{:.4}", z),
@@ -226,6 +303,23 @@ impl BasketEngine {
                 ));
             }
         }
+
+        // Per-`on_bars` cardinality summary. Emitted at INFO so it surfaces
+        // at the default log level and gives every session a one-line
+        // "engine heartbeat" we can grep for without trace spam. Answers:
+        // "did the engine actually run, and did anything come close to firing?"
+        info!(
+            date = %date,
+            total_baskets,
+            evaluated,
+            skipped_missing_target,
+            skipped_missing_peer,
+            skipped_nan_z,
+            near_threshold,
+            transitioned,
+            intents_emitted = intents.len(),
+            "on_bars summary"
+        );
 
         intents
     }
