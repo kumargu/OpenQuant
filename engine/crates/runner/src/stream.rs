@@ -384,7 +384,7 @@ async fn handle_text(
     for msg in messages {
         match msg.msg_type.as_str() {
             "b" => process_bar(msg, metrics, tx).await?,
-            "subscription" => log_subscription_ack(&msg, expected),
+            "subscription" => log_subscription_ack(&msg, expected)?,
             "success" => info!(msg = msg.message_body.as_str(), "stream success"),
             "error" => {
                 error!(
@@ -402,7 +402,7 @@ async fn handle_text(
     Ok(())
 }
 
-fn log_subscription_ack(msg: &StreamMessage, expected: &HashSet<String>) {
+fn log_subscription_ack(msg: &StreamMessage, expected: &HashSet<String>) -> Result<(), String> {
     let confirmed: HashSet<String> = msg.bars_confirmed.iter().cloned().collect();
     let missing: Vec<String> = expected.difference(&confirmed).cloned().collect();
     let extra: Vec<String> = confirmed.difference(expected).cloned().collect();
@@ -411,6 +411,7 @@ fn log_subscription_ack(msg: &StreamMessage, expected: &HashSet<String>) {
             confirmed = confirmed.len(),
             "subscription ack — server confirmed all requested symbols"
         );
+        Ok(())
     } else {
         warn!(
             requested = expected.len(),
@@ -421,6 +422,12 @@ fn log_subscription_ack(msg: &StreamMessage, expected: &HashSet<String>) {
             extra_sample = ?extra.iter().take(10).collect::<Vec<_>>(),
             "subscription ack — mismatch between requested and confirmed symbols"
         );
+        Err(format!(
+            "subscription ack mismatch: confirmed={}, missing={}, extra={}",
+            confirmed.len(),
+            missing.len(),
+            extra.len()
+        ))
     }
 }
 
@@ -574,4 +581,33 @@ fn emit_heartbeat(metrics: &mut StreamMetrics, expected: &HashSet<String>) {
     // Reset window counters but keep the per-symbol map alive across windows.
     metrics.bars_last_window = 0;
     metrics.window_started = Instant::now();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_subscription_ack_mismatch_fails_closed() {
+        let expected: HashSet<String> = ["AAPL".to_string(), "MSFT".to_string()]
+            .into_iter()
+            .collect();
+        let msg = StreamMessage {
+            msg_type: "subscription".to_string(),
+            symbol: String::new(),
+            timestamp: String::new(),
+            close: 0.0,
+            open: 0.0,
+            high: 0.0,
+            low: 0.0,
+            volume: 0.0,
+            bars_confirmed: vec!["AAPL".to_string()],
+            trades_confirmed: vec![],
+            quotes_confirmed: vec![],
+            message_body: String::new(),
+            code: 0,
+        };
+
+        assert!(log_subscription_ack(&msg, &expected).is_err());
+    }
 }
