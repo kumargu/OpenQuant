@@ -29,7 +29,7 @@ use basket_engine::{
     PositionIntent, Side,
 };
 use basket_picker::{load_universe, validate, ValidatorConfig};
-use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
+use chrono::{DateTime, NaiveDate, Utc};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tracing::{debug, error, info, warn};
 
@@ -272,10 +272,10 @@ pub async fn run_basket_live(
                 if past_close && !processed_sessions.contains(&today) {
                     let closes_for_day = day_closes.remove(&today).unwrap_or_default();
                     if closes_for_day.is_empty() {
-                        if matches!(today.weekday(), Weekday::Sat | Weekday::Sun) {
+                        if !market_session::is_trading_day(today) {
                             info!(
                                 date = %today,
-                                "session close grace elapsed on weekend — marking processed"
+                                "session close grace elapsed on non-trading day with zero buffered closes — marking processed"
                             );
                             processed_sessions.insert(today);
                             continue;
@@ -285,10 +285,10 @@ pub async fn run_basket_live(
                             symbols_expected,
                             buffered_days = day_closes.len(),
                             current_notionals = current_notionals.len(),
-                            "session close grace elapsed on weekday with zero buffered closes"
+                            "session close grace elapsed on trading day with zero buffered closes"
                         );
                         return Err(format!(
-                            "session close grace elapsed on weekday {today} but no RTH closes were buffered"
+                            "session close grace elapsed on trading day {today} but no RTH closes were buffered"
                         ));
                     }
                     // Log exactly which symbols' closes we have and, crucially,

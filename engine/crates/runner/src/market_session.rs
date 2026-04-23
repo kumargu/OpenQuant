@@ -1,5 +1,6 @@
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
 use chrono_tz::America::New_York;
+use nyse_holiday_cal::HolidayCal;
 
 const RTH_OPEN: NaiveTime = NaiveTime::from_hms_opt(9, 30, 0).expect("valid open");
 const RTH_CLOSE: NaiveTime = NaiveTime::from_hms_opt(16, 0, 0).expect("valid close");
@@ -23,6 +24,19 @@ pub fn is_rth_utc(dt_utc: DateTime<Utc>) -> bool {
 pub fn is_after_close_grace_utc(dt_utc: DateTime<Utc>, grace_min: u32) -> bool {
     let local = dt_utc.with_timezone(&New_York);
     session_minute(local) >= (RTH_CLOSE.hour() * 60 + RTH_CLOSE.minute() + grace_min)
+}
+
+pub fn is_trading_day(day: NaiveDate) -> bool {
+    match day.is_busday() {
+        Ok(open) => open,
+        Err(_) => {
+            tracing::warn!(
+                date = %day,
+                "NYSE holiday calendar out of range; falling back to weekday trading-day check"
+            );
+            !day.is_weekend()
+        }
+    }
 }
 
 pub fn close_timestamp_utc_for_day(day: NaiveDate) -> i64 {
@@ -65,5 +79,16 @@ mod tests {
                 .time(),
             NaiveTime::from_hms_opt(21, 0, 0).unwrap()
         );
+    }
+
+    #[test]
+    fn test_is_trading_day_handles_holiday_and_weekend() {
+        let holiday = NaiveDate::from_ymd_opt(2026, 12, 25).unwrap();
+        let weekday = NaiveDate::from_ymd_opt(2026, 12, 24).unwrap();
+        let weekend = NaiveDate::from_ymd_opt(2026, 12, 26).unwrap();
+
+        assert!(!is_trading_day(holiday));
+        assert!(is_trading_day(weekday));
+        assert!(!is_trading_day(weekend));
     }
 }
