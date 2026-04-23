@@ -37,6 +37,8 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
+use crate::market_session;
+
 const ALPACA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
 
 /// Alpaca reports bar OPEN time in the `t` field (both REST and WebSocket).
@@ -52,11 +54,6 @@ const HEARTBEAT_INTERVAL_SECS: u64 = 60;
 /// for illiquid names that don't print every minute while still catching
 /// genuinely broken subscriptions.
 const SYMBOL_STALE_THRESHOLD_SECS: u64 = 180;
-
-/// Regular trading hours (UTC) — watchdog only warns about stale symbols
-/// during this window. Outside RTH, absence of bars is expected.
-const RTH_OPEN_MIN_UTC: u32 = 13 * 60 + 30; // 13:30 UTC
-const RTH_CLOSE_MIN_UTC: u32 = 20 * 60; // 20:00 UTC
 
 /// A bar received from the Alpaca stream.
 #[derive(Debug, Clone)]
@@ -501,12 +498,8 @@ async fn process_bar(
 fn emit_heartbeat(metrics: &mut StreamMetrics, expected: &HashSet<String>) {
     let window_secs = metrics.window_started.elapsed().as_secs().max(1);
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let now_minute_utc = {
-        let now = chrono::Utc::now();
-        use chrono::Timelike;
-        now.hour() * 60 + now.minute()
-    };
-    let in_rth = (RTH_OPEN_MIN_UTC..RTH_CLOSE_MIN_UTC).contains(&now_minute_utc);
+    let now_utc = chrono::Utc::now();
+    let in_rth = market_session::is_rth_utc(now_utc);
 
     // Age of the oldest last-seen bar — flags whether ANY symbols are getting
     // bars at all.
