@@ -38,7 +38,6 @@ pub fn default_live_state_path(fit_artifact_path: &Path) -> PathBuf {
     fit_artifact_path.with_file_name(format!("{stem}.state.json"))
 }
 
-<<<<<<< HEAD
 pub fn build_live_fit_artifact(universe_path: &Path, bars_dir: &Path) -> Result<BasketFitArtifact, String> {
     let universe = load_universe(universe_path)?;
     let symbols = collect_symbols(&universe);

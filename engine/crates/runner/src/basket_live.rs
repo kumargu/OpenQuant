@@ -121,9 +121,9 @@ pub async fn run_basket_live(
         fits.iter().filter(|f| f.valid).map(|f| f.candidate.id()).collect();
     let state_exists = state_path.exists();
     let mut engine = if state_exists {
-        let loaded = BasketEngine::load_state(state_path)?;
+        let snapshot = BasketEngine::load_snapshot(state_path)?;
         let loaded_ids: std::collections::HashSet<String> =
-            loaded.iter_params().map(|(id, _)| id.clone()).collect();
+            snapshot.states.keys().cloned().collect();
         if loaded_ids != expected_ids {
             return Err(format!(
                 "state snapshot basket set mismatch: snapshot={}, artifact={}",
@@ -131,12 +131,14 @@ pub async fn run_basket_live(
                 expected_ids.len()
             ));
         }
+        let mut fresh = BasketEngine::new(fits);
+        fresh.apply_states(snapshot.states)?;
         info!(
-            baskets = loaded.num_baskets(),
+            baskets = fresh.num_baskets(),
             state_path = %state_path.display(),
-            "loaded basket engine state snapshot"
+            "loaded basket runtime state onto frozen fit artifact params"
         );
-        loaded
+        fresh
     } else {
         let fresh = BasketEngine::new(fits);
         info!(baskets = fresh.num_baskets(), "basket engine initialized from frozen fits");
