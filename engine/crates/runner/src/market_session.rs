@@ -39,6 +39,24 @@ pub fn is_trading_day(day: NaiveDate) -> bool {
     }
 }
 
+pub fn previous_trading_day(mut day: NaiveDate) -> NaiveDate {
+    loop {
+        day = day.pred_opt().expect("date before supported range");
+        if is_trading_day(day) {
+            return day;
+        }
+    }
+}
+
+pub fn latest_completed_trading_day_utc(dt_utc: DateTime<Utc>, grace_min: u32) -> NaiveDate {
+    let today = trading_day_utc(dt_utc);
+    if is_trading_day(today) && is_after_close_grace_utc(dt_utc, grace_min) {
+        today
+    } else {
+        previous_trading_day(today)
+    }
+}
+
 pub fn close_timestamp_utc_for_day(day: NaiveDate) -> i64 {
     let local = New_York
         .from_local_datetime(&day.and_time(RTH_CLOSE))
@@ -90,5 +108,20 @@ mod tests {
         assert!(!is_trading_day(holiday));
         assert!(is_trading_day(weekday));
         assert!(!is_trading_day(weekend));
+    }
+
+    #[test]
+    fn test_latest_completed_trading_day_before_and_after_close() {
+        let intraday = Utc.with_ymd_and_hms(2026, 12, 24, 18, 0, 0).unwrap();
+        let after_close = Utc.with_ymd_and_hms(2026, 12, 24, 22, 30, 0).unwrap();
+
+        assert_eq!(
+            latest_completed_trading_day_utc(intraday, 2),
+            NaiveDate::from_ymd_opt(2026, 12, 23).unwrap()
+        );
+        assert_eq!(
+            latest_completed_trading_day_utc(after_close, 2),
+            NaiveDate::from_ymd_opt(2026, 12, 24).unwrap()
+        );
     }
 }
