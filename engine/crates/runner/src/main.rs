@@ -16,6 +16,7 @@
 
 mod alpaca;
 mod bar_cache;
+mod bar_source;
 mod basket_fits;
 mod basket_live;
 mod basket_runner;
@@ -604,8 +605,12 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         }
     };
 
+    let bar_source =
+        bar_source::AlpacaBarSource::new(alpaca.api_key.clone(), alpaca.api_secret.clone());
+
     if let Err(e) = basket_live::run_basket_live(
         &alpaca,
+        &bar_source,
         &universe_path,
         &fit_artifact_path,
         &state_path,
