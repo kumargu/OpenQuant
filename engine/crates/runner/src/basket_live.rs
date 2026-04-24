@@ -113,24 +113,38 @@ async fn check_order_set_affordability(
     alpaca: &AlpacaClient,
     mode: ExecutionMode,
     date: NaiveDate,
+    current_shares: &HashMap<String, f64>,
+    target_shares: &HashMap<String, f64>,
     orders: &[OrderIntent],
     closes: &HashMap<String, f64>,
 ) -> Result<(), String> {
     let account = alpaca.get_account(mode).await?;
     let buying_power = parse_buying_power(&account)?;
-    let order_gross: f64 = orders
+    let current_gross: f64 = current_shares
+        .iter()
+        .filter_map(|(symbol, shares)| closes.get(symbol).map(|p| shares.abs() * p))
+        .sum();
+    let target_gross: f64 = target_shares
+        .iter()
+        .filter_map(|(symbol, shares)| closes.get(symbol).map(|p| shares.abs() * p))
+        .sum();
+    let incremental_gross = (target_gross - current_gross).max(0.0);
+    let order_turnover: f64 = orders
         .iter()
         .filter_map(|o| closes.get(&o.symbol).map(|p| p * o.qty as f64))
         .sum();
-    if order_gross > buying_power + 1.0 {
+    if incremental_gross > buying_power + 1.0 {
         return Err(format!(
-            "order set gross notional {:.2} exceeds Alpaca buying power {:.2} on {}",
-            order_gross, buying_power, date
+            "incremental gross exposure {:.2} exceeds Alpaca buying power {:.2} on {}",
+            incremental_gross, buying_power, date
         ));
     }
     info!(
         date = %date,
-        order_gross_notional = %format!("{:.0}", order_gross),
+        current_gross_notional = %format!("{:.0}", current_gross),
+        target_gross_notional = %format!("{:.0}", target_gross),
+        incremental_gross_notional = %format!("{:.0}", incremental_gross),
+        order_turnover_notional = %format!("{:.0}", order_turnover),
         buying_power = %format!("{:.0}", buying_power),
         "order-set affordability check passed"
     );
@@ -763,10 +777,24 @@ async fn process_session_close(
             *current_shares = target_shares;
         }
         Some(mode) => {
-            check_order_set_affordability(alpaca, mode, date, &orders, closes).await?;
+            check_order_set_affordability(
+                alpaca,
+                mode,
+                date,
+                current_shares,
+                &target_shares,
+                &orders,
+                closes,
+            )
+            .await?;
+            let mut ordered_refs: Vec<&OrderIntent> = orders.iter().collect();
+            ordered_refs.sort_by_key(|o| match o.side {
+                Side::Sell => 0_u8,
+                Side::Buy => 1_u8,
+            });
             let mut accepted_orders = 0usize;
             let mut failed_orders = 0usize;
-            for order in &orders {
+            for order in ordered_refs {
                 log_order(order, execution.label());
                 let side_str = match order.side {
                     Side::Buy => "buy",
@@ -1209,5 +1237,30 @@ mod tests {
         };
         let err = parse_buying_power(&account).unwrap_err();
         assert!(err.contains("not positive"));
+    }
+
+    #[test]
+    fn test_incremental_gross_logic_allows_self_financing_rotation_shape() {
+        let mut current: HashMap<String, f64> = HashMap::new();
+        current.insert("AMD".to_string(), 100.0);
+        let mut target: HashMap<String, f64> = HashMap::new();
+        target.insert("NVDA".to_string(), 50.0);
+        let mut closes: HashMap<String, f64> = HashMap::new();
+        closes.insert("AMD".to_string(), 100.0);
+        closes.insert("NVDA".to_string(), 200.0);
+
+        let current_gross: f64 = current
+            .iter()
+            .filter_map(|(symbol, shares)| closes.get(symbol).map(|p| (*shares).abs() * p))
+            .sum();
+        let target_gross: f64 = target
+            .iter()
+            .filter_map(|(symbol, shares)| closes.get(symbol).map(|p| (*shares).abs() * p))
+            .sum();
+        let incremental_gross = (target_gross - current_gross).max(0.0);
+
+        assert_eq!(current_gross, 10_000.0);
+        assert_eq!(target_gross, 10_000.0);
+        assert_eq!(incremental_gross, 0.0);
     }
 }
