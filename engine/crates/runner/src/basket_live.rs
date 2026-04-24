@@ -22,7 +22,6 @@
 //!   - `Live`: api.alpaca.markets (real money). Gated behind explicit opt-in.
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 
 use basket_engine::{
@@ -32,11 +31,9 @@ use basket_engine::{
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
 use crate::alpaca::{AlpacaClient, ExecutionMode};
-use crate::basket_fits;
 use crate::market_session;
 use crate::stream;
 
@@ -70,27 +67,6 @@ impl BasketExecution {
             Self::Live => "LIVE",
         }
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct BasketRunnerState {
-    last_processed_trading_day: Option<NaiveDate>,
-}
-
-fn load_runner_state(path: &Path) -> Result<BasketRunnerState, String> {
-    if !path.exists() {
-        return Ok(BasketRunnerState::default());
-    }
-    let content = fs::read_to_string(path)
-        .map_err(|e| format!("read runner state {}: {e}", path.display()))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("parse runner state {}: {e}", path.display()))
-}
-
-fn save_runner_state(path: &Path, state: &BasketRunnerState) -> Result<(), String> {
-    let content =
-        serde_json::to_string_pretty(state).map_err(|e| format!("serialize runner state: {e}"))?;
-    fs::write(path, content).map_err(|e| format!("write runner state {}: {e}", path.display()))
 }
 
 async fn preflight_account_check(alpaca: &AlpacaClient, mode: ExecutionMode) -> Result<(), String> {
@@ -195,6 +171,7 @@ pub async fn run_basket_live(
         .map(|f| f.candidate.id())
         .collect();
     let state_exists = state_path.exists();
+    let mut last_processed_trading_day = None;
     let mut engine = if state_exists {
         let snapshot = BasketEngine::load_snapshot(state_path)?;
         let loaded_ids: std::collections::HashSet<String> =
@@ -206,11 +183,13 @@ pub async fn run_basket_live(
                 expected_ids.len()
             ));
         }
+        last_processed_trading_day = snapshot.last_processed_trading_day;
         let mut fresh = BasketEngine::new(fits);
         fresh.apply_states(snapshot.states)?;
         info!(
             baskets = fresh.num_baskets(),
             state_path = %state_path.display(),
+            last_processed = ?last_processed_trading_day,
             "loaded basket runtime state onto current fit artifact params"
         );
         fresh
@@ -219,14 +198,6 @@ pub async fn run_basket_live(
         info!(baskets = fresh.num_baskets(), "basket engine initialized");
         fresh
     };
-
-    let runner_state_path = basket_fits::default_runner_state_path(state_path);
-    let mut runner_state = load_runner_state(&runner_state_path)?;
-    info!(
-        runner_state_path = %runner_state_path.display(),
-        last_processed = ?runner_state.last_processed_trading_day,
-        "loaded basket runner state"
-    );
 
     // 2. Seed current_notionals from Alpaca positions (startup reconciliation).
     //    Without this, a restart with live open positions would trigger
@@ -271,13 +242,13 @@ pub async fn run_basket_live(
     //    silently skip an entire session.
     let mut day_closes: HashMap<NaiveDate, HashMap<String, f64>> = HashMap::new();
     let mut processed_sessions: std::collections::HashSet<NaiveDate> = Default::default();
-    if runner_state.last_processed_trading_day == Some(today) {
+    if last_processed_trading_day == Some(today) {
         processed_sessions.insert(today);
     }
 
     if market_session::is_trading_day(today)
         && market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN)
-        && runner_state.last_processed_trading_day != Some(today)
+        && last_processed_trading_day != Some(today)
     {
         let catchup_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
         info!(
@@ -295,14 +266,13 @@ pub async fn run_basket_live(
             execution,
         )
         .await?;
-        engine.save_state(state_path)?;
-        runner_state.last_processed_trading_day = Some(today);
-        save_runner_state(&runner_state_path, &runner_state)?;
+        last_processed_trading_day = Some(today);
+        engine.save_state_with_day(state_path, last_processed_trading_day)?;
         processed_sessions.insert(today);
         info!(
             date = %today,
             state_path = %state_path.display(),
-            runner_state_path = %runner_state_path.display(),
+            last_processed = ?last_processed_trading_day,
             "catch-up close cycle completed and startup state persisted"
         );
     }
@@ -312,26 +282,33 @@ pub async fn run_basket_live(
     info!("subscribed to Alpaca 1-min bar stream");
 
     if market_session::is_trading_day(today) && market_session::is_rth_utc(now) {
-        if let Some(startup_bar) = wait_for_stream_health(&mut bar_rx, 90).await? {
-            let bar_open_ts_ms = startup_bar.timestamp - 60_000;
-            if let Some(dt) = DateTime::<Utc>::from_timestamp_millis(bar_open_ts_ms) {
-                if market_session::is_rth_utc(dt)
-                    && startup_bar.close.is_finite()
-                    && startup_bar.close > 0.0
-                {
-                    let date = market_session::trading_day_utc(dt);
-                    day_closes
-                        .entry(date)
-                        .or_default()
-                        .insert(startup_bar.symbol.clone(), startup_bar.close);
-                    info!(
-                        symbol = startup_bar.symbol.as_str(),
-                        date = %date,
-                        close = startup_bar.close,
-                        "startup stream health gate passed"
-                    );
+        match wait_for_stream_health(&mut bar_rx, 90).await {
+            Ok(Some(startup_bar)) => {
+                let bar_open_ts_ms = startup_bar.timestamp - 60_000;
+                if let Some(dt) = DateTime::<Utc>::from_timestamp_millis(bar_open_ts_ms) {
+                    if market_session::is_rth_utc(dt)
+                        && startup_bar.close.is_finite()
+                        && startup_bar.close > 0.0
+                    {
+                        let date = market_session::trading_day_utc(dt);
+                        day_closes
+                            .entry(date)
+                            .or_default()
+                            .insert(startup_bar.symbol.clone(), startup_bar.close);
+                        info!(
+                            symbol = startup_bar.symbol.as_str(),
+                            date = %date,
+                            close = startup_bar.close,
+                            "startup stream health gate passed"
+                        );
+                    }
                 }
             }
+            Ok(None) => {}
+            Err(e) => warn!(
+                error = e.as_str(),
+                "startup stream health gate did not observe a first bar; continuing"
+            ),
         }
     }
 
@@ -492,14 +469,13 @@ pub async fn run_basket_live(
                         execution,
                     )
                     .await?;
-                    engine.save_state(state_path)?;
-                    runner_state.last_processed_trading_day = Some(today);
-                    save_runner_state(&runner_state_path, &runner_state)?;
+                    last_processed_trading_day = Some(today);
+                    engine.save_state_with_day(state_path, last_processed_trading_day)?;
                     info!(
                         date = %today,
                         state_path = %state_path.display(),
-                        runner_state_path = %runner_state_path.display(),
-                        "persisted basket engine and runner state after session close"
+                        last_processed = ?last_processed_trading_day,
+                        "persisted basket engine state after session close"
                     );
                 }
             }
@@ -557,7 +533,7 @@ fn load_close_snapshot_for_day(
     symbols: &[String],
     day: NaiveDate,
 ) -> Result<HashMap<String, f64>, String> {
-    let closes = load_warmup_closes(bars_dir, symbols, 10)?;
+    let closes = load_daily_closes(bars_dir, symbols, 10, Some(day))?;
     let mut snapshot = HashMap::new();
     let mut missing = Vec::new();
     for symbol in symbols {
@@ -864,10 +840,19 @@ pub(crate) fn load_warmup_closes(
     symbols: &[String],
     window_days: i64,
 ) -> Result<HashMap<String, Vec<(NaiveDate, f64)>>, String> {
+    let today = Utc::now().date_naive();
+    load_daily_closes(bars_dir, symbols, window_days, today.pred_opt())
+}
+
+fn load_daily_closes(
+    bars_dir: &Path,
+    symbols: &[String],
+    window_days: i64,
+    max_day_inclusive: Option<NaiveDate>,
+) -> Result<HashMap<String, Vec<(NaiveDate, f64)>>, String> {
     use arrow::array::{Array, Float64Array, TimestampMicrosecondArray};
     use std::collections::BTreeMap;
     let cutoff = Utc::now().date_naive() - chrono::Duration::days(window_days);
-    let today = Utc::now().date_naive();
 
     let mut out = HashMap::new();
     for symbol in symbols {
@@ -915,8 +900,13 @@ pub(crate) fn load_warmup_closes(
                     continue;
                 }
                 let date = market_session::trading_day_utc(dt_utc);
-                if date < cutoff || date >= today {
+                if date < cutoff {
                     continue;
+                }
+                if let Some(max_day) = max_day_inclusive {
+                    if date > max_day {
+                        continue;
+                    }
                 }
                 daily
                     .entry(date)

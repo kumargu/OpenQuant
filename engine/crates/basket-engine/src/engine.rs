@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use basket_picker::{BasketFit, OuFit};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, trace, warn};
 
@@ -54,6 +55,10 @@ pub struct EngineSnapshot {
     pub params: Vec<BasketParams>,
     /// Per-basket runtime state.
     pub states: HashMap<String, BasketState>,
+    /// Last trading day that the runner fully processed. Optional so older
+    /// snapshots remain readable.
+    #[serde(default)]
+    pub last_processed_trading_day: Option<NaiveDate>,
 }
 
 /// The basket engine: manages state machines for all active baskets.
@@ -326,9 +331,19 @@ impl BasketEngine {
 
     /// Save engine state to a JSON file.
     pub fn save_state(&self, path: &Path) -> Result<(), String> {
+        self.save_state_with_day(path, None)
+    }
+
+    /// Save engine state plus the last fully processed trading day.
+    pub fn save_state_with_day(
+        &self,
+        path: &Path,
+        last_processed_trading_day: Option<NaiveDate>,
+    ) -> Result<(), String> {
         let snapshot = EngineSnapshot {
             params: self.params.values().cloned().collect(),
             states: self.states.clone(),
+            last_processed_trading_day,
         };
         let json = serde_json::to_string_pretty(&snapshot)
             .map_err(|e| format!("failed to serialize: {}", e))?;
@@ -367,6 +382,7 @@ impl BasketEngine {
         let snapshot = EngineSnapshot {
             params: self.params.values().cloned().collect(),
             states,
+            last_processed_trading_day: None,
         };
         Self::validate_snapshot(&snapshot)?;
         self.states = snapshot.states;
