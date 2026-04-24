@@ -336,11 +336,20 @@ impl BasketEngine {
         Ok(())
     }
 
-    /// Load engine state from a JSON file.
-    pub fn load_state(path: &Path) -> Result<Self, String> {
+    /// Load a raw engine snapshot without trusting persisted params as the
+    /// live source of truth. Callers that have a fresh fit artifact should
+    /// restore only runtime states onto current params.
+    pub fn load_snapshot(path: &Path) -> Result<EngineSnapshot, String> {
         let content = fs::read_to_string(path).map_err(|e| format!("failed to read: {}", e))?;
         let snapshot: EngineSnapshot =
             serde_json::from_str(&content).map_err(|e| format!("failed to parse: {}", e))?;
+        Self::validate_snapshot(&snapshot)?;
+        Ok(snapshot)
+    }
+
+    /// Load engine state from a JSON file.
+    pub fn load_state(path: &Path) -> Result<Self, String> {
+        let snapshot = Self::load_snapshot(path)?;
 
         let mut params = HashMap::new();
         for p in snapshot.params {
@@ -351,6 +360,17 @@ impl BasketEngine {
             params,
             states: snapshot.states,
         })
+    }
+
+    /// Replace runtime states while preserving the engine's current params.
+    pub fn apply_states(&mut self, states: HashMap<String, BasketState>) -> Result<(), String> {
+        let snapshot = EngineSnapshot {
+            params: self.params.values().cloned().collect(),
+            states,
+        };
+        Self::validate_snapshot(&snapshot)?;
+        self.states = snapshot.states;
+        Ok(())
     }
 
     /// Get the current state for a basket (for testing/diagnostics).
@@ -366,6 +386,26 @@ impl BasketEngine {
     /// Iterate over all basket params.
     pub fn iter_params(&self) -> impl Iterator<Item = (&String, &BasketParams)> {
         self.params.iter()
+    }
+
+    fn validate_snapshot(snapshot: &EngineSnapshot) -> Result<(), String> {
+        let mut params = HashMap::new();
+        for p in &snapshot.params {
+            params.insert(p.basket_id.clone(), p);
+        }
+        for basket_id in params.keys() {
+            if !snapshot.states.contains_key(basket_id) {
+                return Err(format!("missing runtime state for basket_id '{basket_id}'"));
+            }
+        }
+        for basket_id in snapshot.states.keys() {
+            if !params.contains_key(basket_id) {
+                return Err(format!(
+                    "runtime state present for unknown basket_id '{basket_id}'"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

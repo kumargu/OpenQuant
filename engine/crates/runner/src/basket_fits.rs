@@ -30,6 +30,22 @@ pub fn default_fit_artifact_path(universe_path: &Path) -> PathBuf {
     universe_path.with_file_name(format!("{stem}.fits.json"))
 }
 
+pub fn default_live_state_path(fit_artifact_path: &Path) -> PathBuf {
+    let stem = fit_artifact_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("basket_fits");
+    fit_artifact_path.with_file_name(format!("{stem}.state.json"))
+}
+
+pub fn default_runner_state_path(state_path: &Path) -> PathBuf {
+    let stem = state_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("basket_state");
+    state_path.with_file_name(format!("{stem}.runner.json"))
+}
+
 pub fn build_live_fit_artifact(
     universe_path: &Path,
     bars_dir: &Path,
@@ -199,6 +215,24 @@ traded_targets = ["AAA"]
         assert_eq!(
             default_fit_artifact_path(path),
             PathBuf::from("config/basket_universe_v1.fits.json")
+        );
+    }
+
+    #[test]
+    fn test_default_live_state_path() {
+        let path = Path::new("config/basket_universe_v1.fits.json");
+        assert_eq!(
+            default_live_state_path(path),
+            PathBuf::from("config/basket_universe_v1.fits.state.json")
+        );
+    }
+
+    #[test]
+    fn test_default_runner_state_path() {
+        let path = Path::new("config/basket_universe_v1.fits.state.json");
+        assert_eq!(
+            default_runner_state_path(path),
+            PathBuf::from("config/basket_universe_v1.fits.state.runner.json")
         );
     }
 
