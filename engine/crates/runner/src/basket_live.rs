@@ -215,7 +215,7 @@ pub async fn run_basket_live(
             info!("noop mode — skipping startup position reconciliation");
             HashMap::new()
         }
-        Some(mode) => seed_current_shares_from_alpaca(alpaca, mode).await?,
+        Some(mode) => seed_current_shares_from_alpaca(alpaca, mode, &symbols).await?,
     };
     if execution.alpaca_mode().is_some() && !state_exists && !current_shares.is_empty() {
         error!(
@@ -494,6 +494,7 @@ pub async fn run_basket_live(
 async fn seed_current_shares_from_alpaca(
     alpaca: &AlpacaClient,
     mode: ExecutionMode,
+    allowed_symbols: &[String],
 ) -> Result<HashMap<String, f64>, String> {
     let positions = alpaca.get_positions(mode).await.map_err(|e| {
         format!(
@@ -501,10 +502,28 @@ async fn seed_current_shares_from_alpaca(
              trusted share inventory (fetch error: {e})"
         )
     })?;
+    let allowed: std::collections::HashSet<&str> =
+        allowed_symbols.iter().map(|s| s.as_str()).collect();
+    let mut ignored_symbols = Vec::new();
     let shares: HashMap<String, f64> = positions
         .into_iter()
-        .map(|(sym, (qty, _avg_entry))| (sym, qty))
+        .filter_map(|(sym, (qty, _avg_entry))| {
+            if allowed.contains(sym.as_str()) {
+                Some((sym, qty))
+            } else {
+                ignored_symbols.push(sym);
+                None
+            }
+        })
         .collect();
+    if !ignored_symbols.is_empty() {
+        ignored_symbols.sort();
+        warn!(
+            ignored_positions = ignored_symbols.len(),
+            ignored_sample = ?ignored_symbols.iter().take(10).collect::<Vec<_>>(),
+            "ignoring non-basket broker positions during startup reconciliation"
+        );
+    }
     info!(
         n_positions = shares.len(),
         "seeded current_shares from Alpaca open positions"
