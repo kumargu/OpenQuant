@@ -222,7 +222,6 @@ struct BasketFitArgs {
     out: Option<PathBuf>,
 }
 
-
 /// Extract the unique symbols (leg_a/leg_b) from a candidates JSON file.
 ///
 /// Used to narrow the refresh pass in live/paper mode — the engine only reads bars
