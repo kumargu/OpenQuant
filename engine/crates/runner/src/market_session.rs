@@ -39,6 +39,7 @@ pub fn is_trading_day(day: NaiveDate) -> bool {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn previous_trading_day(mut day: NaiveDate) -> NaiveDate {
     loop {
         day = day.pred_opt().expect("date before supported range");
@@ -48,6 +49,7 @@ pub fn previous_trading_day(mut day: NaiveDate) -> NaiveDate {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn latest_completed_trading_day_utc(dt_utc: DateTime<Utc>, grace_min: u32) -> NaiveDate {
     let today = trading_day_utc(dt_utc);
     if is_trading_day(today) && is_after_close_grace_utc(dt_utc, grace_min) {
