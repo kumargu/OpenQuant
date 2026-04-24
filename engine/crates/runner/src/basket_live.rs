@@ -93,6 +93,50 @@ async fn preflight_account_check(alpaca: &AlpacaClient, mode: ExecutionMode) -> 
     Ok(())
 }
 
+fn parse_buying_power(account: &crate::alpaca::AlpacaAccount) -> Result<f64, String> {
+    let buying_power = account.buying_power.parse::<f64>().map_err(|e| {
+        format!(
+            "invalid Alpaca buying_power '{}': {e}",
+            account.buying_power
+        )
+    })?;
+    if !buying_power.is_finite() || buying_power <= 0.0 {
+        return Err(format!(
+            "Alpaca buying power is not positive: {}",
+            account.buying_power
+        ));
+    }
+    Ok(buying_power)
+}
+
+async fn check_order_set_affordability(
+    alpaca: &AlpacaClient,
+    mode: ExecutionMode,
+    date: NaiveDate,
+    orders: &[OrderIntent],
+    closes: &HashMap<String, f64>,
+) -> Result<(), String> {
+    let account = alpaca.get_account(mode).await?;
+    let buying_power = parse_buying_power(&account)?;
+    let order_gross: f64 = orders
+        .iter()
+        .filter_map(|o| closes.get(&o.symbol).map(|p| p * o.qty as f64))
+        .sum();
+    if order_gross > buying_power + 1.0 {
+        return Err(format!(
+            "order set gross notional {:.2} exceeds Alpaca buying power {:.2} on {}",
+            order_gross, buying_power, date
+        ));
+    }
+    info!(
+        date = %date,
+        order_gross_notional = %format!("{:.0}", order_gross),
+        buying_power = %format!("{:.0}", buying_power),
+        "order-set affordability check passed"
+    );
+    Ok(())
+}
+
 async fn wait_for_stream_health(
     bar_rx: &mut tokio::sync::mpsc::Receiver<stream::StreamBar>,
     timeout_secs: u64,
@@ -719,6 +763,7 @@ async fn process_session_close(
             *current_shares = target_shares;
         }
         Some(mode) => {
+            check_order_set_affordability(alpaca, mode, date, &orders, closes).await?;
             let mut accepted_orders = 0usize;
             let mut failed_orders = 0usize;
             for order in &orders {
@@ -1019,6 +1064,7 @@ pub(crate) fn align_basket_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alpaca::AlpacaAccount;
     use chrono::Timelike;
 
     #[test]
@@ -1150,5 +1196,18 @@ mod tests {
 
         let err = target_shares_from_notionals(&notionals, &closes).unwrap_err();
         assert!(err.contains("NVDA"));
+    }
+
+    #[test]
+    fn test_parse_buying_power_rejects_nonpositive_values() {
+        let account = AlpacaAccount {
+            status: "ACTIVE".to_string(),
+            buying_power: "0".to_string(),
+            equity: "100000".to_string(),
+            trading_blocked: false,
+            account_blocked: false,
+        };
+        let err = parse_buying_power(&account).unwrap_err();
+        assert!(err.contains("not positive"));
     }
 }
