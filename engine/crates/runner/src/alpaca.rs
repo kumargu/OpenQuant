@@ -78,6 +78,17 @@ pub struct AlpacaOrder {
     pub qty: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AlpacaAccount {
+    pub status: String,
+    pub buying_power: String,
+    pub equity: String,
+    #[serde(default)]
+    pub trading_blocked: bool,
+    #[serde(default)]
+    pub account_blocked: bool,
+}
+
 impl AlpacaClient {
     pub fn new(api_key: String, api_secret: String) -> Self {
         Self {
@@ -474,6 +485,38 @@ impl AlpacaClient {
 
         info!(positions = map.len(), "fetched Alpaca positions");
         Ok(map)
+    }
+
+    pub async fn get_account(&self, execution: ExecutionMode) -> Result<AlpacaAccount, String> {
+        let url = format!("{}/account", execution.trading_url());
+        let response = self
+            .http
+            .get(&url)
+            .header("APCA-API-KEY-ID", &self.api_key)
+            .header("APCA-API-SECRET-KEY", &self.api_secret)
+            .send()
+            .await
+            .map_err(|e| format!("account request failed: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("account API error {status}: {body}"));
+        }
+
+        let account: AlpacaAccount = response
+            .json()
+            .await
+            .map_err(|e| format!("account parse failed: {e}"))?;
+        info!(
+            status = account.status.as_str(),
+            buying_power = account.buying_power.as_str(),
+            equity = account.equity.as_str(),
+            trading_blocked = account.trading_blocked,
+            account_blocked = account.account_blocked,
+            "fetched Alpaca account"
+        );
+        Ok(account)
     }
 }
 

@@ -93,6 +93,44 @@ fn save_runner_state(path: &Path, state: &BasketRunnerState) -> Result<(), Strin
     fs::write(path, content).map_err(|e| format!("write runner state {}: {e}", path.display()))
 }
 
+async fn preflight_account_check(alpaca: &AlpacaClient, mode: ExecutionMode) -> Result<(), String> {
+    let account = alpaca.get_account(mode).await?;
+    let buying_power = account.buying_power.parse::<f64>().unwrap_or(0.0);
+    if account.status != "ACTIVE" {
+        return Err(format!(
+            "Alpaca account not ACTIVE: status={}",
+            account.status
+        ));
+    }
+    if account.trading_blocked || account.account_blocked {
+        return Err(format!(
+            "Alpaca account blocked: trading_blocked={}, account_blocked={}",
+            account.trading_blocked, account.account_blocked
+        ));
+    }
+    if !buying_power.is_finite() || buying_power <= 0.0 {
+        return Err(format!(
+            "Alpaca buying power is not positive: {}",
+            account.buying_power
+        ));
+    }
+    Ok(())
+}
+
+async fn wait_for_stream_health(
+    bar_rx: &mut tokio::sync::mpsc::Receiver<stream::StreamBar>,
+    timeout_secs: u64,
+) -> Result<Option<stream::StreamBar>, String> {
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), bar_rx.recv()).await {
+        Ok(Some(bar)) => Ok(Some(bar)),
+        Ok(None) => Err("stream closed before first startup bar arrived".to_string()),
+        Err(_) => Err(format!(
+            "stream health gate timed out after {}s without any live bar",
+            timeout_secs
+        )),
+    }
+}
+
 /// Run the basket live/paper loop.
 ///
 /// Returns on Ctrl+C or fatal error.
@@ -121,6 +159,9 @@ pub async fn run_basket_live(
 
     if execution == BasketExecution::Live {
         warn!("LIVE MODE — real-money orders will be placed on every EOD signal");
+    }
+    if let Some(mode) = execution.alpaca_mode() {
+        preflight_account_check(alpaca, mode).await?;
     }
 
     // 1. Load universe + frozen fit artifact.
@@ -224,11 +265,7 @@ pub async fn run_basket_live(
         ));
     }
 
-    // 3. Subscribe to all universe symbols over WebSocket.
-    let mut bar_rx = stream::start_bar_stream(&alpaca.api_key, &alpaca.api_secret, &symbols).await;
-    info!("subscribed to Alpaca 1-min bar stream");
-
-    // 4. Bar loop: buffer per (symbol, date) → last RTH bar.
+    // 3. Bar loop: buffer per (symbol, date) → last RTH bar.
     //    Engine is triggered by a wall-clock timer (not by `symbols[0]`'s 19:59 bar
     //    arrival) so that no single symbol becoming a data source-of-failure can
     //    silently skip an entire session.
@@ -268,6 +305,34 @@ pub async fn run_basket_live(
             runner_state_path = %runner_state_path.display(),
             "catch-up close cycle completed and startup state persisted"
         );
+    }
+
+    // 4. Subscribe to all universe symbols over WebSocket.
+    let mut bar_rx = stream::start_bar_stream(&alpaca.api_key, &alpaca.api_secret, &symbols).await;
+    info!("subscribed to Alpaca 1-min bar stream");
+
+    if market_session::is_trading_day(today) && market_session::is_rth_utc(now) {
+        if let Some(startup_bar) = wait_for_stream_health(&mut bar_rx, 90).await? {
+            let bar_open_ts_ms = startup_bar.timestamp - 60_000;
+            if let Some(dt) = DateTime::<Utc>::from_timestamp_millis(bar_open_ts_ms) {
+                if market_session::is_rth_utc(dt)
+                    && startup_bar.close.is_finite()
+                    && startup_bar.close > 0.0
+                {
+                    let date = market_session::trading_day_utc(dt);
+                    day_closes
+                        .entry(date)
+                        .or_default()
+                        .insert(startup_bar.symbol.clone(), startup_bar.close);
+                    info!(
+                        symbol = startup_bar.symbol.as_str(),
+                        date = %date,
+                        close = startup_bar.close,
+                        "startup stream health gate passed"
+                    );
+                }
+            }
+        }
     }
 
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
