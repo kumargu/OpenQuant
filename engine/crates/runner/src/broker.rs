@@ -1,0 +1,57 @@
+//! Broker abstraction for order placement and account queries.
+//!
+//! [`AlpacaClient`] is the production implementation. A `SimulatedBroker`
+//! (follow-up PR) will implement this trait for replay against a synthetic
+//! fill model, letting the live code path run without hitting Alpaca.
+
+use std::collections::HashMap;
+
+use crate::alpaca::{AlpacaAccount, AlpacaClient, AlpacaOrder, ExecutionMode};
+
+/// Abstraction over the brokerage backend.
+///
+/// Only broker actions (place orders, query positions / account) go through
+/// this trait. Historical bar fetches stay on [`AlpacaClient`] directly —
+/// they are data-plane calls, not execution.
+pub trait Broker: Send + Sync {
+    /// Place a market order. Returns the broker-side order record.
+    async fn place_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: ExecutionMode,
+    ) -> Result<AlpacaOrder, String>;
+
+    /// Fetch open positions as `symbol → (qty, avg_entry_price)`.
+    async fn get_positions(
+        &self,
+        execution: ExecutionMode,
+    ) -> Result<HashMap<String, (f64, f64)>, String>;
+
+    /// Fetch the account snapshot (status, buying power, equity, gate flags).
+    async fn get_account(&self, execution: ExecutionMode) -> Result<AlpacaAccount, String>;
+}
+
+impl Broker for AlpacaClient {
+    async fn place_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: ExecutionMode,
+    ) -> Result<AlpacaOrder, String> {
+        AlpacaClient::place_order(self, symbol, qty, side, execution).await
+    }
+
+    async fn get_positions(
+        &self,
+        execution: ExecutionMode,
+    ) -> Result<HashMap<String, (f64, f64)>, String> {
+        AlpacaClient::get_positions(self, execution).await
+    }
+
+    async fn get_account(&self, execution: ExecutionMode) -> Result<AlpacaAccount, String> {
+        AlpacaClient::get_account(self, execution).await
+    }
+}
