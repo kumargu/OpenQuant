@@ -110,6 +110,7 @@ async fn wait_for_stream_health(
 /// Run the basket live/paper loop.
 ///
 /// Returns on Ctrl+C or fatal error.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_basket_live(
     alpaca: &AlpacaClient,
     universe_path: &Path,
@@ -872,6 +873,7 @@ fn load_daily_closes(
         .collect())
 }
 
+#[allow(clippy::type_complexity)]
 fn load_daily_closes_with_timestamps(
     bars_dir: &Path,
     symbols: &[String],
