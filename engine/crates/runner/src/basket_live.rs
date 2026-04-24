@@ -34,7 +34,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tracing::{debug, error, info, warn};
 
-use crate::alpaca::{AlpacaClient, ExecutionMode};
+use crate::alpaca::ExecutionMode;
+use crate::bar_source::BarSource;
 use crate::broker::Broker;
 use crate::market_session;
 use crate::stream;
@@ -268,7 +269,8 @@ fn classify_startup_phase(
 /// Returns on Ctrl+C or fatal error.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_basket_live(
-    alpaca: &AlpacaClient,
+    broker: &impl Broker,
+    bar_source: &impl BarSource,
     universe_path: &Path,
     fit_artifact_path: &Path,
     state_path: &Path,
@@ -295,7 +297,7 @@ pub async fn run_basket_live(
         warn!("LIVE MODE — real-money orders will be placed on every EOD signal");
     }
     if let Some(mode) = execution.alpaca_mode() {
-        preflight_account_check(alpaca, mode).await?;
+        preflight_account_check(broker, mode).await?;
     }
 
     // 1. Load universe + frozen fit artifact.
@@ -372,7 +374,7 @@ pub async fn run_basket_live(
             info!("noop mode — skipping startup position reconciliation");
             HashMap::new()
         }
-        Some(mode) => seed_current_shares_from_alpaca(alpaca, mode, &symbols).await?,
+        Some(mode) => seed_current_shares_from_alpaca(broker, mode, &symbols).await?,
     };
     if execution.alpaca_mode().is_some() && !state_exists && !current_shares.is_empty() {
         error!(
@@ -418,7 +420,7 @@ pub async fn run_basket_live(
         );
         process_session_close(
             &mut engine,
-            alpaca,
+            broker,
             today,
             &catchup_closes,
             &portfolio_config,
@@ -437,9 +439,9 @@ pub async fn run_basket_live(
         );
     }
 
-    // 4. Subscribe to all universe symbols over WebSocket.
-    let mut bar_rx = stream::start_bar_stream(&alpaca.api_key, &alpaca.api_secret, &symbols).await;
-    info!("subscribed to Alpaca 1-min bar stream");
+    // 4. Subscribe to all universe symbols via the bar source.
+    let mut bar_rx = bar_source.start(&symbols).await;
+    info!("subscribed to bar source for 1-min bars");
 
     if market_session::is_trading_day(today) && market_session::is_rth_utc(now) {
         match wait_for_stream_health(&mut bar_rx, 90).await {
@@ -621,7 +623,7 @@ pub async fn run_basket_live(
                     processed_sessions.insert(today);
                     process_session_close(
                         &mut engine,
-                        alpaca,
+                        broker,
                         today,
                         &closes_for_day,
                         &portfolio_config,
