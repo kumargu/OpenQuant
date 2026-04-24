@@ -404,6 +404,15 @@ impl BasketEngine {
         self.params.iter()
     }
 
+    /// Flatten a set of baskets so portfolio admission and engine state stay aligned.
+    pub fn flatten_baskets(&mut self, basket_ids: &[String]) {
+        for basket_id in basket_ids {
+            if let Some(state) = self.states.get_mut(basket_id) {
+                state.flatten();
+            }
+        }
+    }
+
     fn validate_snapshot(snapshot: &EngineSnapshot) -> Result<(), String> {
         let mut params = HashMap::new();
         for p in &snapshot.params {

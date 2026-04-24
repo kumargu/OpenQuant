@@ -622,6 +622,9 @@ async fn process_session_close(
     // admitted target notionals to target shares.
     let plan = plan_portfolio(engine, portfolio_config);
     let target_notionals = plan.symbol_notionals;
+    if !plan.excluded_baskets.is_empty() {
+        engine.flatten_baskets(&plan.excluded_baskets);
+    }
     let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
 
     // Summary of the notional plan before we diff — this is where yesterday's
