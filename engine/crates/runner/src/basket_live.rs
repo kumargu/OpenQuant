@@ -133,6 +133,7 @@ pub async fn run_basket_live(
         execution = execution.label(),
         "========== BASKET LIVE RUNNER =========="
     );
+    portfolio_config.validate()?;
 
     if execution == BasketExecution::Live {
         warn!("LIVE MODE — real-money orders will be placed on every EOD signal");

@@ -28,6 +28,26 @@ impl Default for PortfolioConfig {
 }
 
 impl PortfolioConfig {
+    /// Validate portfolio sizing inputs before live use.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.capital.is_finite() || self.capital <= 0.0 {
+            return Err(format!(
+                "portfolio capital must be positive, got {}",
+                self.capital
+            ));
+        }
+        if !self.leverage.is_finite() || self.leverage <= 0.0 {
+            return Err(format!(
+                "portfolio leverage must be positive, got {}",
+                self.leverage
+            ));
+        }
+        if self.n_active_baskets == 0 {
+            return Err("portfolio n_active_baskets must be at least 1".to_string());
+        }
+        Ok(())
+    }
+
     /// Notional per basket = (capital * leverage) / n_active_baskets.
     pub fn notional_per_basket(&self) -> f64 {
         (self.capital * self.leverage) / self.n_active_baskets as f64
@@ -336,7 +356,19 @@ mod tests {
             leverage: 4.0,
             n_active_baskets: 10,
         };
+        config.validate().unwrap();
         assert_eq!(config.notional_per_basket(), 40_000.0);
+    }
+
+    #[test]
+    fn test_portfolio_config_rejects_zero_active_baskets() {
+        let config = PortfolioConfig {
+            capital: 100_000.0,
+            leverage: 4.0,
+            n_active_baskets: 0,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("n_active_baskets"));
     }
 
     #[test]
