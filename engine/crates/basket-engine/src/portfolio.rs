@@ -84,7 +84,19 @@ pub fn basket_to_legs(params: &BasketParams, position: i8, notional: f64) -> Vec
 pub fn aggregate_positions(
     engine: &BasketEngine,
     config: &PortfolioConfig,
-) -> HashMap<String, f64> {
+) -> Result<HashMap<String, f64>, String> {
+    let active_count = engine
+        .iter_params()
+        .filter_map(|(basket_id, _)| engine.get_state(basket_id))
+        .filter(|s| s.position != 0)
+        .count();
+    if active_count > config.n_active_baskets {
+        return Err(format!(
+            "active basket cap exceeded: active={}, configured_cap={}",
+            active_count, config.n_active_baskets
+        ));
+    }
+
     let notional_per_basket = config.notional_per_basket();
     let mut symbol_notionals: HashMap<String, f64> = HashMap::new();
 
@@ -104,7 +116,7 @@ pub fn aggregate_positions(
         }
     }
 
-    symbol_notionals
+    Ok(symbol_notionals)
 }
 
 /// Order side.
@@ -140,14 +152,41 @@ pub struct OrderIntent {
     pub reason: OrderReason,
 }
 
-/// Compute orders needed to move from current to target positions.
-///
-/// Takes current notionals, target notionals, and current prices.
-/// Returns the orders needed to reach target.
-pub fn diff_to_orders(
-    current: &HashMap<String, f64>,
+/// Convert target notionals into whole-share targets using current prices.
+pub fn target_shares_from_notionals(
     target: &HashMap<String, f64>,
     prices: &HashMap<String, f64>,
+) -> Result<HashMap<String, i64>, String> {
+    let mut shares = HashMap::new();
+    let mut invalid_symbols = Vec::new();
+    for (symbol, target_notional) in target {
+        let price = match prices.get(symbol) {
+            Some(&p) if p.is_finite() && p > 0.0 => p,
+            _ => {
+                invalid_symbols.push(symbol.clone());
+                continue;
+            }
+        };
+        let qty = (target_notional / price).round() as i64;
+        if qty != 0 {
+            shares.insert(symbol.clone(), qty);
+        }
+    }
+    if invalid_symbols.is_empty() {
+        Ok(shares)
+    } else {
+        invalid_symbols.sort();
+        Err(format!(
+            "missing or invalid close for target share conversion: {}",
+            invalid_symbols.join(", ")
+        ))
+    }
+}
+
+/// Compute orders needed to move from current shares to target shares.
+pub fn diff_to_orders(
+    current: &HashMap<String, i64>,
+    target: &HashMap<String, i64>,
 ) -> Vec<OrderIntent> {
     let mut orders = Vec::new();
 
@@ -157,30 +196,19 @@ pub fn diff_to_orders(
     all_symbols.dedup();
 
     for symbol in all_symbols {
-        let current_notional = current.get(symbol).copied().unwrap_or(0.0);
-        let target_notional = target.get(symbol).copied().unwrap_or(0.0);
-        let delta = target_notional - current_notional;
-
-        if delta.abs() < 1.0 {
-            continue; // Skip tiny deltas
-        }
-
-        let price = match prices.get(symbol) {
-            Some(&p) if p.is_finite() && p > 0.0 => p,
-            _ => continue, // Skip if no valid price
-        };
-
-        let qty = (delta.abs() / price).round() as u32;
-        if qty == 0 {
+        let current_qty = current.get(symbol).copied().unwrap_or(0);
+        let target_qty = target.get(symbol).copied().unwrap_or(0);
+        let delta = target_qty - current_qty;
+        if delta == 0 {
             continue;
         }
 
-        let side = if delta > 0.0 { Side::Buy } else { Side::Sell };
+        let side = if delta > 0 { Side::Buy } else { Side::Sell };
 
         orders.push(OrderIntent {
             symbol: symbol.clone(),
             side,
-            qty,
+            qty: delta.unsigned_abs() as u32,
             reason: OrderReason::Aggregated,
         });
     }
@@ -193,6 +221,9 @@ pub fn diff_to_orders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DailyBar;
+    use basket_picker::{BasketCandidate, BasketFit, BertramResult};
+    use chrono::NaiveDate;
 
     fn make_test_params() -> BasketParams {
         BasketParams {
@@ -209,6 +240,37 @@ mod tests {
                 half_life_days: 13.51,
             },
             threshold_k: 1.25,
+        }
+    }
+
+    fn make_test_fit(target: &str, peers: &[&str]) -> BasketFit {
+        BasketFit {
+            candidate: BasketCandidate {
+                target: target.to_string(),
+                members: peers.iter().map(|s| s.to_string()).collect(),
+                sector: "test".to_string(),
+                fit_date: NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+            },
+            ou: Some(basket_picker::OuFit {
+                a: 0.0,
+                b: 0.95,
+                kappa: 12.92,
+                mu: 0.0,
+                sigma: 0.01,
+                sigma_eq: 0.032,
+                half_life_days: 13.51,
+            }),
+            bertram: Some(BertramResult {
+                a: -0.04,
+                m: 0.04,
+                k: 1.25,
+                expected_return_rate: 0.1,
+                expected_trade_length_days: 10.0,
+                sigma_cont: 0.05,
+            }),
+            threshold_k: 1.25,
+            valid: true,
+            reject_reason: None,
         }
     }
 
@@ -261,18 +323,14 @@ mod tests {
 
     #[test]
     fn test_diff_to_orders() {
-        let mut current: HashMap<String, f64> = HashMap::new();
-        current.insert("AMD".to_string(), 5000.0);
+        let mut current: HashMap<String, i64> = HashMap::new();
+        current.insert("AMD".to_string(), 50);
 
-        let mut target: HashMap<String, f64> = HashMap::new();
-        target.insert("AMD".to_string(), 3000.0);
-        target.insert("NVDA".to_string(), 2000.0);
+        let mut target: HashMap<String, i64> = HashMap::new();
+        target.insert("AMD".to_string(), 30);
+        target.insert("NVDA".to_string(), 10);
 
-        let mut prices: HashMap<String, f64> = HashMap::new();
-        prices.insert("AMD".to_string(), 100.0);
-        prices.insert("NVDA".to_string(), 200.0);
-
-        let orders = diff_to_orders(&current, &target, &prices);
+        let orders = diff_to_orders(&current, &target);
 
         assert_eq!(orders.len(), 2);
         // AMD: 3000 - 5000 = -2000, sell 20 shares
@@ -283,5 +341,54 @@ mod tests {
         let nvda_order = orders.iter().find(|o| o.symbol == "NVDA").unwrap();
         assert_eq!(nvda_order.side, Side::Buy);
         assert_eq!(nvda_order.qty, 10);
+    }
+
+    #[test]
+    fn test_target_shares_from_notionals() {
+        let mut target: HashMap<String, f64> = HashMap::new();
+        target.insert("AMD".to_string(), 3000.0);
+        target.insert("NVDA".to_string(), -2000.0);
+
+        let mut prices: HashMap<String, f64> = HashMap::new();
+        prices.insert("AMD".to_string(), 100.0);
+        prices.insert("NVDA".to_string(), 200.0);
+
+        let shares = target_shares_from_notionals(&target, &prices).unwrap();
+        assert_eq!(shares.get("AMD"), Some(&30));
+        assert_eq!(shares.get("NVDA"), Some(&-10));
+    }
+
+    #[test]
+    fn test_target_shares_from_notionals_rejects_invalid_price() {
+        let mut target: HashMap<String, f64> = HashMap::new();
+        target.insert("AMD".to_string(), 3000.0);
+
+        let prices: HashMap<String, f64> = HashMap::new();
+        let err = target_shares_from_notionals(&target, &prices).unwrap_err();
+        assert!(err.contains("AMD"));
+    }
+
+    #[test]
+    fn test_aggregate_positions_rejects_cap_breach() {
+        let fit_a = make_test_fit("AAA", &["BBB", "CCC"]);
+        let fit_b = make_test_fit("DDD", &["EEE", "FFF"]);
+        let mut engine = BasketEngine::new(&[fit_a.clone(), fit_b.clone()]);
+
+        let bars = vec![
+            DailyBar { symbol: "AAA".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 90.0 },
+            DailyBar { symbol: "BBB".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 100.0 },
+            DailyBar { symbol: "CCC".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 100.0 },
+            DailyBar { symbol: "DDD".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 90.0 },
+            DailyBar { symbol: "EEE".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 100.0 },
+            DailyBar { symbol: "FFF".to_string(), date: NaiveDate::from_ymd_opt(2026, 4, 21).unwrap(), close: 100.0 },
+        ];
+        engine.on_bars(&bars);
+
+        let config = PortfolioConfig {
+            capital: 100_000.0,
+            leverage: 4.0,
+            n_active_baskets: 1,
+        };
+        assert!(aggregate_positions(&engine, &config).is_err());
     }
 }
