@@ -218,6 +218,15 @@ fn summarize_orders_by_side(
     (buy_count, sell_count, buy_notional, sell_notional)
 }
 
+fn order_reason_fields(reason: &basket_engine::OrderReason) -> (&'static str, Option<&str>) {
+    match reason {
+        basket_engine::OrderReason::Entry { basket_id } => ("entry", Some(basket_id.as_str())),
+        basket_engine::OrderReason::Flip { basket_id } => ("flip", Some(basket_id.as_str())),
+        basket_engine::OrderReason::Rebalance => ("rebalance", None),
+        basket_engine::OrderReason::Aggregated => ("aggregated", None),
+    }
+}
+
 async fn wait_for_stream_health(
     bar_rx: &mut tokio::sync::mpsc::Receiver<stream::StreamBar>,
     timeout_secs: u64,
@@ -910,6 +919,7 @@ async fn process_session_close(
                     Side::Buy => "buy",
                     Side::Sell => "sell",
                 };
+                let (reason, basket_id) = order_reason_fields(&order.reason);
                 match alpaca
                     .place_order(&order.symbol, order.qty as f64, side_str, mode)
                     .await
@@ -919,6 +929,8 @@ async fn process_session_close(
                             symbol = order.symbol.as_str(),
                             qty = order.qty,
                             side = side_str,
+                            reason,
+                            basket_id,
                             order_id = o.id.as_str(),
                             status = o.status.as_str(),
                             "ORDER PLACED"
@@ -931,6 +943,8 @@ async fn process_session_close(
                             symbol = order.symbol.as_str(),
                             qty = order.qty,
                             side = side_str,
+                            reason,
+                            basket_id,
                             error = e.as_str(),
                             "ORDER FAILED"
                         );
@@ -1021,11 +1035,14 @@ fn log_order(order: &OrderIntent, label: &str) {
         Side::Buy => "buy",
         Side::Sell => "sell",
     };
+    let (reason, basket_id) = order_reason_fields(&order.reason);
     info!(
         mode = label,
         symbol = order.symbol.as_str(),
         qty = order.qty,
         side = side_str,
+        reason,
+        basket_id,
         "BASKET_ORDER"
     );
 }
