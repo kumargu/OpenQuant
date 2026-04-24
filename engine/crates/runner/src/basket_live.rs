@@ -35,6 +35,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tracing::{debug, error, info, warn};
 
 use crate::alpaca::{AlpacaClient, ExecutionMode};
+use crate::broker::Broker;
 use crate::market_session;
 use crate::stream;
 
@@ -91,8 +92,8 @@ impl StartupPhase {
     }
 }
 
-async fn preflight_account_check(alpaca: &AlpacaClient, mode: ExecutionMode) -> Result<(), String> {
-    let account = alpaca.get_account(mode).await?;
+async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> Result<(), String> {
+    let account = broker.get_account(mode).await?;
     let buying_power = parse_buying_power(&account)?;
     if account.status != "ACTIVE" {
         return Err(format!(
@@ -132,7 +133,7 @@ fn parse_buying_power(account: &crate::alpaca::AlpacaAccount) -> Result<f64, Str
 }
 
 async fn check_order_set_affordability(
-    alpaca: &AlpacaClient,
+    broker: &impl Broker,
     mode: ExecutionMode,
     date: NaiveDate,
     current_shares: &HashMap<String, f64>,
@@ -140,7 +141,7 @@ async fn check_order_set_affordability(
     orders: &[OrderIntent],
     closes: &HashMap<String, f64>,
 ) -> Result<(), String> {
-    let account = alpaca.get_account(mode).await?;
+    let account = broker.get_account(mode).await?;
     let buying_power = parse_buying_power(&account)?;
     let (current_long_gross, current_short_gross) = gross_by_side(current_shares, closes);
     let (target_long_gross, target_short_gross) = gross_by_side(target_shares, closes);
@@ -658,11 +659,11 @@ pub async fn run_basket_live(
 /// paper/live execution (trading from an empty share map would double-size
 /// every already-open leg on the first session).
 async fn seed_current_shares_from_alpaca(
-    alpaca: &AlpacaClient,
+    broker: &impl Broker,
     mode: ExecutionMode,
     allowed_symbols: &[String],
 ) -> Result<HashMap<String, f64>, String> {
-    let positions = alpaca.get_positions(mode).await.map_err(|e| {
+    let positions = broker.get_positions(mode).await.map_err(|e| {
         format!(
             "startup position reconciliation failed — refusing to trade without a \
              trusted share inventory (fetch error: {e})"
@@ -746,7 +747,7 @@ fn load_close_snapshot_for_day(
 #[allow(clippy::too_many_arguments)]
 async fn process_session_close(
     engine: &mut BasketEngine,
-    alpaca: &AlpacaClient,
+    broker: &impl Broker,
     date: NaiveDate,
     closes: &HashMap<String, f64>,
     portfolio_config: &PortfolioConfig,
@@ -786,7 +787,7 @@ async fn process_session_close(
 
     let allowed_symbols: Vec<String> = closes.keys().cloned().collect();
     if let Some(mode) = execution.alpaca_mode() {
-        *current_shares = seed_current_shares_from_alpaca(alpaca, mode, &allowed_symbols).await?;
+        *current_shares = seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await?;
         info!(
             date = %date,
             current_positions = current_shares.len(),
@@ -901,7 +902,7 @@ async fn process_session_close(
         }
         Some(mode) => {
             check_order_set_affordability(
-                alpaca,
+                broker,
                 mode,
                 date,
                 current_shares,
@@ -924,7 +925,7 @@ async fn process_session_close(
                     Side::Sell => "sell",
                 };
                 let (reason, basket_id) = order_reason_fields(&order.reason);
-                match alpaca
+                match broker
                     .place_order(&order.symbol, order.qty as f64, side_str, mode)
                     .await
                 {
@@ -968,7 +969,7 @@ async fn process_session_close(
             // that turned yesterday's $100K config into a $341K lopsided book).
             if accepted_orders + failed_orders > 0 {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                match seed_current_shares_from_alpaca(alpaca, mode, &allowed_symbols).await {
+                match seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await {
                     Ok(actual_shares) => {
                         let actual_gross: f64 = actual_shares
                             .iter()
