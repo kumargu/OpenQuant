@@ -56,13 +56,17 @@ enum Command {
     FreezeBasketFits(BasketFitArgs),
 }
 
-/// Asset class / strategy variant. Each variant defines its own config,
-/// pair candidates, and pipeline defaults.
+/// Asset class / strategy variant.
+///
+/// Pair engines (`snp500`, `metals`) share the `PairsEngine` pipeline and
+/// are driven by `--config` + `--candidates`. The `basket` engine runs
+/// `BasketEngine` instead and is driven by `--universe` + `--fit-artifact`;
+/// its `--config`/`--candidates`/`--pipeline` flags are ignored.
 ///
 /// Usage:
+///   openquant-runner paper --engine basket --execution paper
 ///   openquant-runner paper --engine snp500
 ///   openquant-runner replay --engine metals --start 2025-07-01 --end 2026-03-28
-///   openquant-runner replay --engine basket --start 2024-07-01 --end 2026-04-13
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Engine {
     /// S&P 500 equities — ADF cointegration, GICS sector pairs.
@@ -76,39 +80,12 @@ enum Engine {
 }
 
 impl Engine {
-    fn config_path(&self) -> &'static str {
-        match self {
-            Engine::Snp500 => "config/pairs.toml",
-            Engine::Metals => "config/metals.toml",
-            Engine::Basket => "config/basket.toml", // Not used; basket uses universe TOML
-        }
-    }
-
-    fn candidates_path(&self) -> Option<&'static str> {
-        match self {
-            Engine::Snp500 => None, // candidates must be provided via --candidates flag
-            Engine::Metals => Some("pairs/metals_pairs.json"),
-            Engine::Basket => None, // basket uses universe_path() instead
-        }
-    }
-
     /// Default basket universe TOML. `--universe` overrides.
+    /// Only meaningful for `Basket`; pair engines ignore this.
     fn universe_path(&self) -> Option<&'static str> {
         match self {
             Engine::Snp500 | Engine::Metals => None,
             Engine::Basket => Some("config/basket_universe_v1.toml"),
-        }
-    }
-
-    fn pipeline(&self) -> &'static str {
-        // All engines use "lab" pipeline — candidates come from quant-lab,
-        // structural hard gates are relaxed, scoring + ranking active.
-        // The "default" pipeline (strict ADF/R²/structural-break gates)
-        // rejects 100% of lab candidates and is not used in production.
-        match self {
-            Engine::Snp500 => "lab",
-            Engine::Metals => "lab",
-            Engine::Basket => "basket", // basket has its own validation
         }
     }
 
@@ -121,11 +98,12 @@ impl Engine {
 #[derive(clap::Args, Debug, Clone)]
 struct StreamArgs {
     /// Asset class / strategy variant.
-    /// Required. Selects config, candidates, and pipeline for the asset class.
+    /// Pair engines (snp500, metals) use --config/--candidates;
+    /// basket uses --universe/--fit-artifact.
     #[arg(long, value_enum)]
     engine: Engine,
 
-    /// Override config file (default: selected by --engine).
+    /// Override config file (pair engines only; basket ignores this).
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -172,11 +150,12 @@ struct StreamArgs {
 #[derive(clap::Args, Debug, Clone)]
 struct ReplayArgs {
     /// Asset class / strategy variant.
-    /// Required. Selects config, candidates, and pipeline for the asset class.
+    /// Pair engines (snp500, metals) use --config/--candidates;
+    /// basket uses --universe/--fit-artifact.
     #[arg(long, value_enum)]
     engine: Engine,
 
-    /// Override config file (default: selected by --engine).
+    /// Override config file (pair engines only; basket ignores this).
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -243,8 +222,6 @@ struct BasketFitArgs {
     out: Option<PathBuf>,
 }
 
-const DEFAULT_CONFIG: &str = "config/pairs.toml";
-
 /// Extract the unique symbols (leg_a/leg_b) from a candidates JSON file.
 ///
 /// Used to narrow the refresh pass in live/paper mode — the engine only reads bars
@@ -274,15 +251,28 @@ fn load_symbols_from_candidates(path: &std::path::Path) -> Option<Vec<String>> {
 
 /// Resolve engine-specific defaults for config, candidates, and pipeline.
 /// Explicit CLI flags always override engine defaults.
+///
+/// Only called for pair-based engines (snp500, metals); `Basket` is
+/// short-circuited earlier in `main()` and never reaches this path.
 fn resolve_engine(
     engine: Engine,
     config: Option<PathBuf>,
     candidates: Option<PathBuf>,
     pipeline: Option<String>,
-) -> (Option<PathBuf>, Option<PathBuf>, String) {
-    let config = config.or_else(|| Some(PathBuf::from(engine.config_path())));
-    let candidates = candidates.or_else(|| engine.candidates_path().map(PathBuf::from));
-    let pipeline = pipeline.unwrap_or_else(|| engine.pipeline().to_string());
+) -> (PathBuf, Option<PathBuf>, String) {
+    let (default_config, default_candidates) = match engine {
+        Engine::Snp500 => ("config/pairs.toml", None),
+        Engine::Metals => ("config/metals.toml", Some("pairs/metals_pairs.json")),
+        Engine::Basket => unreachable!(
+            "resolve_engine should never be called for --engine basket; \
+             basket paths short-circuit to run_basket_stream / basket_runner"
+        ),
+    };
+    let config = config.unwrap_or_else(|| PathBuf::from(default_config));
+    let candidates = candidates.or_else(|| default_candidates.map(PathBuf::from));
+    // Every engine uses the "lab" pipeline today. The strict default pipeline
+    // rejects 100% of lab candidates and is not used in production.
+    let pipeline = pipeline.unwrap_or_else(|| "lab".to_string());
     (config, candidates, pipeline)
 }
 
@@ -676,15 +666,13 @@ fn run_freeze_basket_fits(args: BasketFitArgs) {
 // ── Unified run function ─────────────────────────────────────────────
 
 async fn run(
-    config: Option<PathBuf>,
+    config_path: PathBuf,
     trading_dir: PathBuf,
     data_dir: PathBuf,
     candidates: Option<PathBuf>,
     pipeline_profile: String,
     run_mode: RunMode,
 ) {
-    let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
-
     // ── Log mode ──
     match &run_mode {
         RunMode::Stream(ExecutionMode::Paper) => {

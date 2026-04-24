@@ -149,6 +149,17 @@ pub fn plan_portfolio(engine: &BasketEngine, config: &PortfolioConfig) -> Portfo
         .skip(config.n_active_baskets)
         .map(|(basket_id, _)| basket_id.clone())
         .collect();
+    debug_assert!(
+        selected_baskets.len() <= config.n_active_baskets,
+        "admission cap violated: selected {} > cap {}",
+        selected_baskets.len(),
+        config.n_active_baskets
+    );
+    debug_assert_eq!(
+        selected_baskets.len() + excluded_baskets.len(),
+        active_baskets,
+        "selected + excluded must equal active baskets"
+    );
     let selected: HashSet<&str> = selected_baskets.iter().map(|s| s.as_str()).collect();
 
     for (basket_id, params) in engine.iter_params() {
@@ -233,11 +244,20 @@ pub fn diff_to_orders(
     for symbol in all_symbols {
         let current_shares = current.get(symbol).copied().unwrap_or(0.0);
         let target_shares = target.get(symbol).copied().unwrap_or(0.0);
+        debug_assert!(
+            current_shares.is_finite() && target_shares.is_finite(),
+            "non-finite shares for {symbol}: current={current_shares} target={target_shares}"
+        );
         let delta = target_shares - current_shares;
+        debug_assert!(
+            delta.is_finite(),
+            "non-finite share delta for {symbol}: {delta}"
+        );
         let qty = delta.abs().round() as u32;
         if qty == 0 {
             continue;
         }
+        debug_assert!(qty > 0, "zero qty slipped past the filter for {symbol}");
 
         let side = if delta > 0.0 { Side::Buy } else { Side::Sell };
 
