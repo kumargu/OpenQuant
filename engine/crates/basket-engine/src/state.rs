@@ -65,6 +65,13 @@ impl BasketState {
         self.entry_date = Some(date);
         self.entry_spread = Some(spread);
     }
+
+    /// Flatten the position while preserving diagnostics.
+    pub fn flatten(&mut self) {
+        self.position = 0;
+        self.entry_date = None;
+        self.entry_spread = None;
+    }
 }
 
 #[cfg(test)]
@@ -110,5 +117,16 @@ mod tests {
         assert_eq!(state.spread_history.len(), 60);
         assert_eq!(state.spread_history.front(), Some(&40.0));
         assert_eq!(state.spread_history.back(), Some(&99.0));
+    }
+
+    #[test]
+    fn test_flatten_clears_position_fields() {
+        let mut state = BasketState::new();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        state.enter(1, date, 0.05);
+        state.flatten();
+        assert_eq!(state.position, 0);
+        assert_eq!(state.entry_date, None);
+        assert_eq!(state.entry_spread, None);
     }
 }
