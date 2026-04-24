@@ -753,6 +753,10 @@ async fn process_session_close(
     current_shares: &mut HashMap<String, f64>,
     execution: BasketExecution,
 ) -> Result<(), String> {
+    debug_assert!(
+        portfolio_config.validate().is_ok(),
+        "process_session_close received invalid PortfolioConfig"
+    );
     if closes.is_empty() {
         warn!(date = %date, "no RTH closes buffered for session — skipping engine");
         return Ok(());
@@ -957,6 +961,56 @@ async fn process_session_close(
                 failed_orders,
                 "submitted basket orders without mutating in-memory share inventory; next session refresh will reconcile actual fills"
             );
+
+            // Post-submission broker reconciliation: after letting fills settle,
+            // refetch positions and compare actual gross to target. Catches silent
+            // portfolio drift from partial fills / rejections (the failure mode
+            // that turned yesterday's $100K config into a $341K lopsided book).
+            if accepted_orders + failed_orders > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                match seed_current_shares_from_alpaca(alpaca, mode, &allowed_symbols).await {
+                    Ok(actual_shares) => {
+                        let actual_gross: f64 = actual_shares
+                            .iter()
+                            .filter_map(|(sym, qty)| closes.get(sym).map(|p| (qty * p).abs()))
+                            .sum();
+                        let target_gross = gross_notional;
+                        let divergence_pct = if target_gross > 0.0 {
+                            ((actual_gross - target_gross).abs() / target_gross) * 100.0
+                        } else {
+                            0.0
+                        };
+                        if divergence_pct > 10.0 {
+                            error!(
+                                date = %date,
+                                target_gross = %format!("{:.0}", target_gross),
+                                actual_gross = %format!("{:.0}", actual_gross),
+                                divergence_pct = %format!("{:.1}", divergence_pct),
+                                accepted_orders,
+                                failed_orders,
+                                broker_positions = actual_shares.len(),
+                                "BROKER DIVERGENCE: actual gross differs from target by >10%"
+                            );
+                        } else {
+                            info!(
+                                date = %date,
+                                target_gross = %format!("{:.0}", target_gross),
+                                actual_gross = %format!("{:.0}", actual_gross),
+                                divergence_pct = %format!("{:.1}", divergence_pct),
+                                broker_positions = actual_shares.len(),
+                                "post-submission reconciliation OK"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            date = %date,
+                            error = e.as_str(),
+                            "post-submission reconciliation failed — could not refetch broker positions"
+                        );
+                    }
+                }
+            }
         }
     }
     Ok(())
