@@ -608,6 +608,16 @@ async fn process_session_close(
         log_intent(intent);
     }
 
+    let allowed_symbols: Vec<String> = closes.keys().cloned().collect();
+    if let Some(mode) = execution.alpaca_mode() {
+        *current_shares = seed_current_shares_from_alpaca(alpaca, mode, &allowed_symbols).await?;
+        info!(
+            date = %date,
+            current_positions = current_shares.len(),
+            "refreshed broker share inventory before computing basket order deltas"
+        );
+    }
+
     // Portfolio layer: target notionals across symbols, then convert to target shares.
     let target_notionals = aggregate_positions(engine, portfolio_config);
     let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
@@ -665,27 +675,18 @@ async fn process_session_close(
         "emitting orders"
     );
 
-    // Track which symbols were successfully adjusted so we only update
-    // `current_shares` for legs that actually executed. This matters
-    // when the broker rejects orders — blindly syncing to target would desync
-    // internal state from the broker's view and prevent future corrective
-    // orders.
-    //
-    // The target-share conversion already fails closed on missing prices, so
-    // by the time we reach here every target leg is adjustable in share space.
-    // The only remaining source of drift is execution failure.
-    let mut successfully_adjusted: std::collections::HashSet<String> = Default::default();
-
     match execution.alpaca_mode() {
         None => {
-            // Noop — log only, but treat every emitted order as "successful"
-            // so the simulated state evolves consistently across sessions.
+            // Noop — log only, then advance the simulated share state directly
+            // to the target so shadow mode stays deterministic across sessions.
             for order in &orders {
                 log_order(order, "NOOP");
-                successfully_adjusted.insert(order.symbol.clone());
             }
+            *current_shares = target_shares;
         }
         Some(mode) => {
+            let mut accepted_orders = 0usize;
+            let mut failed_orders = 0usize;
             for order in &orders {
                 log_order(order, execution.label());
                 let side_str = match order.side {
@@ -705,66 +706,27 @@ async fn process_session_close(
                             status = o.status.as_str(),
                             "ORDER PLACED"
                         );
-                        successfully_adjusted.insert(order.symbol.clone());
+                        accepted_orders += 1;
                     }
-                    Err(e) => error!(
-                        symbol = order.symbol.as_str(),
-                        qty = order.qty,
-                        side = side_str,
-                        error = e.as_str(),
-                        "ORDER FAILED"
-                    ),
+                    Err(e) => {
+                        failed_orders += 1;
+                        error!(
+                            symbol = order.symbol.as_str(),
+                            qty = order.qty,
+                            side = side_str,
+                            error = e.as_str(),
+                            "ORDER FAILED"
+                        );
+                    }
                 }
             }
+            info!(
+                date = %date,
+                accepted_orders,
+                failed_orders,
+                "submitted basket orders without mutating in-memory share inventory; next session refresh will reconcile actual fills"
+            );
         }
-    }
-
-    // Reconcile current_shares against what actually executed.
-    //
-    // We MUST iterate the union of `current_shares ∪ target_shares`
-    // — not just targets — so symbols dropped from the target set (e.g.,
-    // a basket that fully exited) are cleared after a successful close.
-    // Iterating only targets leaves the old notional in place, and
-    // `diff_to_orders` then emits another close order for it next session.
-    //
-    // Per symbol, we update as follows:
-    //   - in successfully_adjusted
-    //       target present → set current to target
-    //       target absent  → remove (position closed)
-    //   - in orders but not adjusted      → order failed; keep prior shares
-    //   - not in orders                   → current already matches target in
-    //                                      rounded share space, so set/remove
-    let orders_by_symbol: std::collections::HashSet<&str> =
-        orders.iter().map(|o| o.symbol.as_str()).collect();
-    let mut all_symbols: std::collections::HashSet<String> =
-        current_shares.keys().cloned().collect();
-    all_symbols.extend(target_shares.keys().cloned());
-    let mut drift_count = 0usize;
-    for sym in all_symbols {
-        let target_opt = target_shares.get(&sym).copied();
-        let apply_target = |current: &mut HashMap<String, f64>| match target_opt {
-            Some(t) => {
-                current.insert(sym.clone(), t);
-            }
-            None => {
-                current.remove(&sym);
-            }
-        };
-        if successfully_adjusted.contains(&sym) {
-            apply_target(current_shares);
-        } else if orders_by_symbol.contains(sym.as_str()) {
-            // Order was emitted but did not succeed → preserve prior shares.
-            drift_count += 1;
-        } else {
-            apply_target(current_shares);
-        }
-    }
-    if drift_count > 0 {
-        warn!(
-            drift_count,
-            total_orders = orders.len(),
-            "some orders failed; current_shares preserves prior values for failed legs"
-        );
     }
     Ok(())
 }
