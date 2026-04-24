@@ -8,10 +8,11 @@
 //!   1. Startup: load the frozen basket fit artifact and build `BasketEngine`
 //!      from those persisted `BasketFit`s. Engine enters with empty state.
 //!   2. Bar loop: for each 1-min bar, update per-symbol "last RTH bar".
-//!   3. Session close (19:59 UTC): snapshot the day's closes, call
+//!   3. Session close (final RTH minute after close+grace): snapshot the
+//!      day's closes, call
 //!      `BasketEngine::on_bars()`, get `PositionIntent`s.
-//!   4. Portfolio: aggregate intents → target notionals → `OrderIntent`s via
-//!      `diff_to_orders()`.
+//!   4. Portfolio: aggregate intents → admit active baskets → convert target
+//!      notionals to target shares → `OrderIntent`s via `diff_to_orders()`.
 //!   5. Execute: depending on `BasketExecution`, log only (Noop), or place
 //!      orders on paper/live Alpaca.
 //!
@@ -69,9 +70,30 @@ impl BasketExecution {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupPhase {
+    NonTradingDay,
+    PreOpen,
+    Intraday,
+    PostClosePendingCatchup,
+    PostCloseProcessed,
+}
+
+impl StartupPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NonTradingDay => "non_trading_day",
+            Self::PreOpen => "pre_open",
+            Self::Intraday => "intraday",
+            Self::PostClosePendingCatchup => "post_close_pending_catchup",
+            Self::PostCloseProcessed => "post_close_processed",
+        }
+    }
+}
+
 async fn preflight_account_check(alpaca: &AlpacaClient, mode: ExecutionMode) -> Result<(), String> {
     let account = alpaca.get_account(mode).await?;
-    let buying_power = account.buying_power.parse::<f64>().unwrap_or(0.0);
+    let buying_power = parse_buying_power(&account)?;
     if account.status != "ACTIVE" {
         return Err(format!(
             "Alpaca account not ACTIVE: status={}",
@@ -84,12 +106,12 @@ async fn preflight_account_check(alpaca: &AlpacaClient, mode: ExecutionMode) -> 
             account.trading_blocked, account.account_blocked
         ));
     }
-    if !buying_power.is_finite() || buying_power <= 0.0 {
-        return Err(format!(
-            "Alpaca buying power is not positive: {}",
-            account.buying_power
-        ));
-    }
+    info!(
+        mode = ?mode,
+        buying_power = %format!("{:.0}", buying_power),
+        status = account.status.as_str(),
+        "startup account preflight passed"
+    );
     Ok(())
 }
 
@@ -168,6 +190,43 @@ fn gross_by_side(shares: &HashMap<String, f64>, closes: &HashMap<String, f64>) -
     (long_gross, short_gross)
 }
 
+fn summarize_orders_by_side(
+    orders: &[OrderIntent],
+    closes: &HashMap<String, f64>,
+) -> (usize, usize, f64, f64) {
+    let mut buy_count = 0usize;
+    let mut sell_count = 0usize;
+    let mut buy_notional = 0.0_f64;
+    let mut sell_notional = 0.0_f64;
+    for order in orders {
+        let notional = closes
+            .get(&order.symbol)
+            .map(|price| *price * order.qty as f64)
+            .filter(|n| n.is_finite() && *n > 0.0)
+            .unwrap_or(0.0);
+        match order.side {
+            Side::Buy => {
+                buy_count += 1;
+                buy_notional += notional;
+            }
+            Side::Sell => {
+                sell_count += 1;
+                sell_notional += notional;
+            }
+        }
+    }
+    (buy_count, sell_count, buy_notional, sell_notional)
+}
+
+fn order_reason_fields(reason: &basket_engine::OrderReason) -> (&'static str, Option<&str>) {
+    match reason {
+        basket_engine::OrderReason::Entry { basket_id } => ("entry", Some(basket_id.as_str())),
+        basket_engine::OrderReason::Flip { basket_id } => ("flip", Some(basket_id.as_str())),
+        basket_engine::OrderReason::Rebalance => ("rebalance", None),
+        basket_engine::OrderReason::Aggregated => ("aggregated", None),
+    }
+}
+
 async fn wait_for_stream_health(
     bar_rx: &mut tokio::sync::mpsc::Receiver<stream::StreamBar>,
     timeout_secs: u64,
@@ -179,6 +238,27 @@ async fn wait_for_stream_health(
             "stream health gate timed out after {}s without any live bar",
             timeout_secs
         )),
+    }
+}
+
+fn classify_startup_phase(
+    now: DateTime<Utc>,
+    last_processed_trading_day: Option<NaiveDate>,
+    close_grace_min: u32,
+) -> StartupPhase {
+    let today = market_session::trading_day_utc(now);
+    if !market_session::is_trading_day(today) {
+        StartupPhase::NonTradingDay
+    } else if market_session::is_after_close_grace_utc(now, close_grace_min) {
+        if last_processed_trading_day == Some(today) {
+            StartupPhase::PostCloseProcessed
+        } else {
+            StartupPhase::PostClosePendingCatchup
+        }
+    } else if market_session::is_rth_utc(now) {
+        StartupPhase::Intraday
+    } else {
+        StartupPhase::PreOpen
     }
 }
 
@@ -197,7 +277,7 @@ pub async fn run_basket_live(
     fits: &[BasketFit],
 ) -> Result<(), String> {
     // Grace period after session close before firing the engine. Lets late-arriving
-    // 19:59 bars land in the buffer.
+    // final-RTH-minute bars land in the buffer.
     const CLOSE_GRACE_MIN: u32 = 2;
 
     info!(
@@ -304,9 +384,19 @@ pub async fn run_basket_live(
             state_path.display()
         ));
     }
+    let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
+    info!(
+        now_utc = %now.to_rfc3339(),
+        trading_day = %today,
+        startup_phase = startup_phase.as_str(),
+        state_exists,
+        last_processed = ?last_processed_trading_day,
+        broker_positions = current_shares.len(),
+        "basket startup phase evaluated"
+    );
 
     // 3. Bar loop: buffer per (symbol, date) → last RTH bar.
-    //    Engine is triggered by a wall-clock timer (not by `symbols[0]`'s 19:59 bar
+    //    Engine is triggered by a wall-clock timer (not by one symbol's final RTH bar
     //    arrival) so that no single symbol becoming a data source-of-failure can
     //    silently skip an entire session.
     let mut day_closes: HashMap<NaiveDate, HashMap<String, f64>> = HashMap::new();
@@ -403,8 +493,8 @@ pub async fn run_basket_live(
                 // `stream.rs` shifts Alpaca bar timestamps by +60s (open→close time).
                 // Undo that here so `minute` reflects bar-OPEN time, matching the
                 // RTH filter used by replay (`basket_runner.rs::read_daily_closes`).
-                // Without this, the last RTH bar (open=19:59, stream=20:00) would be
-                // excluded by `RTH_START_MIN..SESSION_CLOSE_MIN` and the 19:59 close
+                // Without this, the last RTH bar (e.g. open=19:59, stream=20:00 in DST)
+                // would be excluded by `RTH_START_MIN..SESSION_CLOSE_MIN` and the close
                 // would never enter the buffer — missing the daily close.
                 let bar_open_ts_ms = bar.timestamp - 60_000;
                 let dt = match DateTime::<Utc>::from_timestamp_millis(bar_open_ts_ms) {
@@ -470,7 +560,7 @@ pub async fn run_basket_live(
             _ = tick.tick() => {
                 // Wall-clock trigger: if we are past session close + grace for a
                 // given date and haven't processed it yet, fire now — regardless
-                // of which symbols' 19:59 bars landed.
+                // of which symbols' final-RTH bars landed.
                 let now = Utc::now();
                 let today = market_session::trading_day_utc(now);
                 let past_close = market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN);
@@ -634,6 +724,12 @@ fn load_close_snapshot_for_day(
         }
     }
     if missing.is_empty() {
+        info!(
+            date = %day,
+            symbols = snapshot.len(),
+            expected_last_bar_ts_us,
+            "loaded finalized close snapshot for trading day"
+        );
         Ok(snapshot)
     } else {
         missing.sort();
@@ -776,9 +872,15 @@ async fn process_session_close(
         .collect();
     let order_gross: f64 = order_notionals.iter().sum();
     let order_max = order_notionals.iter().cloned().fold(0.0_f64, f64::max);
+    let (buy_orders, sell_orders, buy_notional, sell_notional) =
+        summarize_orders_by_side(&orders, closes);
     info!(
         date = %date,
         n_orders = orders.len(),
+        buy_orders,
+        sell_orders,
+        buy_notional = %format!("{:.0}", buy_notional),
+        sell_notional = %format!("{:.0}", sell_notional),
         order_gross_notional = %format!("{:.0}", order_gross),
         order_max_notional = %format!("{:.0}", order_max),
         "emitting orders"
@@ -817,6 +919,7 @@ async fn process_session_close(
                     Side::Buy => "buy",
                     Side::Sell => "sell",
                 };
+                let (reason, basket_id) = order_reason_fields(&order.reason);
                 match alpaca
                     .place_order(&order.symbol, order.qty as f64, side_str, mode)
                     .await
@@ -826,6 +929,8 @@ async fn process_session_close(
                             symbol = order.symbol.as_str(),
                             qty = order.qty,
                             side = side_str,
+                            reason,
+                            basket_id,
                             order_id = o.id.as_str(),
                             status = o.status.as_str(),
                             "ORDER PLACED"
@@ -838,6 +943,8 @@ async fn process_session_close(
                             symbol = order.symbol.as_str(),
                             qty = order.qty,
                             side = side_str,
+                            reason,
+                            basket_id,
                             error = e.as_str(),
                             "ORDER FAILED"
                         );
@@ -928,11 +1035,14 @@ fn log_order(order: &OrderIntent, label: &str) {
         Side::Buy => "buy",
         Side::Sell => "sell",
     };
+    let (reason, basket_id) = order_reason_fields(&order.reason);
     info!(
         mode = label,
         symbol = order.symbol.as_str(),
         qty = order.qty,
         side = side_str,
+        reason,
+        basket_id,
         "BASKET_ORDER"
     );
 }
@@ -1110,7 +1220,7 @@ pub(crate) fn align_basket_history(
 mod tests {
     use super::*;
     use crate::alpaca::AlpacaAccount;
-    use chrono::Timelike;
+    use chrono::{TimeZone, Timelike};
 
     #[test]
     fn test_basket_execution_alpaca_mode_mapping() {
@@ -1241,6 +1351,62 @@ mod tests {
 
         let err = target_shares_from_notionals(&notionals, &closes).unwrap_err();
         assert!(err.contains("NVDA"));
+    }
+
+    #[test]
+    fn test_classify_startup_phase_distinguishes_post_close_catchup() {
+        let dt = Utc.with_ymd_and_hms(2026, 4, 22, 20, 5, 0).unwrap();
+        let today = market_session::trading_day_utc(dt);
+
+        assert_eq!(
+            classify_startup_phase(dt, None, 2),
+            StartupPhase::PostClosePendingCatchup
+        );
+        assert_eq!(
+            classify_startup_phase(dt, Some(today), 2),
+            StartupPhase::PostCloseProcessed
+        );
+    }
+
+    #[test]
+    fn test_summarize_orders_by_side_reports_counts_and_notionals() {
+        let orders = vec![
+            OrderIntent {
+                symbol: "AMD".to_string(),
+                qty: 10,
+                side: Side::Buy,
+                reason: basket_engine::OrderReason::Entry {
+                    basket_id: "test".to_string(),
+                },
+            },
+            OrderIntent {
+                symbol: "NVDA".to_string(),
+                qty: 5,
+                side: Side::Sell,
+                reason: basket_engine::OrderReason::Flip {
+                    basket_id: "test".to_string(),
+                },
+            },
+            OrderIntent {
+                symbol: "AAPL".to_string(),
+                qty: 4,
+                side: Side::Buy,
+                reason: basket_engine::OrderReason::Aggregated,
+            },
+        ];
+        let closes = HashMap::from([
+            ("AMD".to_string(), 100.0),
+            ("NVDA".to_string(), 200.0),
+            ("AAPL".to_string(), 50.0),
+        ]);
+
+        let (buy_count, sell_count, buy_notional, sell_notional) =
+            summarize_orders_by_side(&orders, &closes);
+
+        assert_eq!(buy_count, 2);
+        assert_eq!(sell_count, 1);
+        assert_eq!(buy_notional, 1_200.0);
+        assert_eq!(sell_notional, 1_000.0);
     }
 
     #[test]
