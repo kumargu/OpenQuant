@@ -142,12 +142,11 @@ pub struct OrderIntent {
 
 /// Compute orders needed to move from current to target positions.
 ///
-/// Takes current notionals, target notionals, and current prices.
+/// Takes current shares and target shares.
 /// Returns the orders needed to reach target.
 pub fn diff_to_orders(
     current: &HashMap<String, f64>,
     target: &HashMap<String, f64>,
-    prices: &HashMap<String, f64>,
 ) -> Vec<OrderIntent> {
     let mut orders = Vec::new();
 
@@ -157,20 +156,10 @@ pub fn diff_to_orders(
     all_symbols.dedup();
 
     for symbol in all_symbols {
-        let current_notional = current.get(symbol).copied().unwrap_or(0.0);
-        let target_notional = target.get(symbol).copied().unwrap_or(0.0);
-        let delta = target_notional - current_notional;
-
-        if delta.abs() < 1.0 {
-            continue; // Skip tiny deltas
-        }
-
-        let price = match prices.get(symbol) {
-            Some(&p) if p.is_finite() && p > 0.0 => p,
-            _ => continue, // Skip if no valid price
-        };
-
-        let qty = (delta.abs() / price).round() as u32;
+        let current_shares = current.get(symbol).copied().unwrap_or(0.0);
+        let target_shares = target.get(symbol).copied().unwrap_or(0.0);
+        let delta = target_shares - current_shares;
+        let qty = delta.abs().round() as u32;
         if qty == 0 {
             continue;
         }
@@ -268,20 +257,16 @@ mod tests {
         target.insert("AMD".to_string(), 3000.0);
         target.insert("NVDA".to_string(), 2000.0);
 
-        let mut prices: HashMap<String, f64> = HashMap::new();
-        prices.insert("AMD".to_string(), 100.0);
-        prices.insert("NVDA".to_string(), 200.0);
-
-        let orders = diff_to_orders(&current, &target, &prices);
+        let orders = diff_to_orders(&current, &target);
 
         assert_eq!(orders.len(), 2);
-        // AMD: 3000 - 5000 = -2000, sell 20 shares
+        // AMD: 3000 - 5000 = -2000 shares, sell 2000 shares
         let amd_order = orders.iter().find(|o| o.symbol == "AMD").unwrap();
         assert_eq!(amd_order.side, Side::Sell);
-        assert_eq!(amd_order.qty, 20);
-        // NVDA: 2000 - 0 = 2000, buy 10 shares
+        assert_eq!(amd_order.qty, 2000);
+        // NVDA: 2000 - 0 = 2000 shares, buy 2000 shares
         let nvda_order = orders.iter().find(|o| o.symbol == "NVDA").unwrap();
         assert_eq!(nvda_order.side, Side::Buy);
-        assert_eq!(nvda_order.qty, 10);
+        assert_eq!(nvda_order.qty, 2000);
     }
 }
