@@ -533,14 +533,20 @@ fn load_close_snapshot_for_day(
     symbols: &[String],
     day: NaiveDate,
 ) -> Result<HashMap<String, f64>, String> {
-    let closes = load_daily_closes(bars_dir, symbols, 10, Some(day))?;
+    let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 10, Some(day))?;
     let mut snapshot = HashMap::new();
     let mut missing = Vec::new();
+    let expected_last_bar_ts_us =
+        (market_session::close_timestamp_utc_for_day(day) - 60_000) * 1_000;
     for symbol in symbols {
         match closes.get(symbol).and_then(|series| {
-            series
-                .iter()
-                .find_map(|(d, c)| if *d == day { Some(*c) } else { None })
+            series.iter().find_map(|(d, ts_us, c)| {
+                if *d == day && *ts_us == expected_last_bar_ts_us {
+                    Some(*c)
+                } else {
+                    None
+                }
+            })
         }) {
             Some(close) if close.is_finite() && close > 0.0 => {
                 snapshot.insert(symbol.clone(), close);
@@ -850,6 +856,28 @@ fn load_daily_closes(
     window_days: i64,
     max_day_inclusive: Option<NaiveDate>,
 ) -> Result<HashMap<String, Vec<(NaiveDate, f64)>>, String> {
+    let closes =
+        load_daily_closes_with_timestamps(bars_dir, symbols, window_days, max_day_inclusive)?;
+    Ok(closes
+        .into_iter()
+        .map(|(symbol, series)| {
+            (
+                symbol,
+                series
+                    .into_iter()
+                    .map(|(date, _ts_us, close)| (date, close))
+                    .collect(),
+            )
+        })
+        .collect())
+}
+
+fn load_daily_closes_with_timestamps(
+    bars_dir: &Path,
+    symbols: &[String],
+    window_days: i64,
+    max_day_inclusive: Option<NaiveDate>,
+) -> Result<HashMap<String, Vec<(NaiveDate, i64, f64)>>, String> {
     use arrow::array::{Array, Float64Array, TimestampMicrosecondArray};
     use std::collections::BTreeMap;
     let cutoff = Utc::now().date_naive() - chrono::Duration::days(window_days);
@@ -919,7 +947,10 @@ fn load_daily_closes(
                     .or_insert((ts_us, px));
             }
         }
-        let series: Vec<(NaiveDate, f64)> = daily.into_iter().map(|(d, (_, c))| (d, c)).collect();
+        let series: Vec<(NaiveDate, i64, f64)> = daily
+            .into_iter()
+            .map(|(d, (ts_us, c))| (d, ts_us, c))
+            .collect();
         if !series.is_empty() {
             out.insert(symbol.clone(), series);
         }
