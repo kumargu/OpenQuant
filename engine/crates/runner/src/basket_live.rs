@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use basket_engine::{
-    aggregate_positions, diff_to_orders, BasketEngine, DailyBar, OrderIntent, PortfolioConfig,
+    diff_to_orders, plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig,
     PositionIntent, Side,
 };
 use basket_picker::{load_universe, BasketFit};
@@ -618,8 +618,10 @@ async fn process_session_close(
         );
     }
 
-    // Portfolio layer: target notionals across symbols, then convert to target shares.
-    let target_notionals = aggregate_positions(engine, portfolio_config);
+    // Portfolio layer: apply active-basket admission first, then convert
+    // admitted target notionals to target shares.
+    let plan = plan_portfolio(engine, portfolio_config);
+    let target_notionals = plan.symbol_notionals;
     let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
 
     // Summary of the notional plan before we diff — this is where yesterday's
@@ -634,6 +636,8 @@ async fn process_session_close(
     } else {
         sorted_abs[sorted_abs.len() / 2]
     };
+    let gross_notional = gross_long + gross_short.abs();
+    let gross_cap = portfolio_config.capital * portfolio_config.leverage;
     info!(
         date = %date,
         targets = target_notionals.len(),
@@ -641,12 +645,38 @@ async fn process_session_close(
         current_positions = current_shares.len(),
         gross_long = %format!("{:.0}", gross_long),
         gross_short = %format!("{:.0}", gross_short),
-        gross_notional = %format!("{:.0}", gross_long + gross_short.abs()),
+        gross_notional = %format!("{:.0}", gross_notional),
+        gross_cap = %format!("{:.0}", gross_cap),
         net_notional = %format!("{:.0}", gross_long + gross_short),
         max_abs_leg = %format!("{:.0}", max_abs),
         median_abs_leg = %format!("{:.0}", median_abs),
         "target notionals summary"
     );
+    if gross_notional > gross_cap + 1.0 {
+        return Err(format!(
+            "target gross notional {:.2} exceeds configured cap {:.2}",
+            gross_notional, gross_cap
+        ));
+    }
+    if !plan.excluded_baskets.is_empty() {
+        warn!(
+            date = %date,
+            active_baskets = plan.active_baskets,
+            cap = portfolio_config.n_active_baskets,
+            admitted = plan.selected_baskets.len(),
+            excluded = plan.excluded_baskets.len(),
+            excluded_sample = ?plan.excluded_baskets.iter().take(10).collect::<Vec<_>>(),
+            "active-basket cap excluded baskets from the target portfolio"
+        );
+    } else {
+        info!(
+            date = %date,
+            active_baskets = plan.active_baskets,
+            cap = portfolio_config.n_active_baskets,
+            admitted = plan.selected_baskets.len(),
+            "portfolio admission completed without exclusions"
+        );
+    }
 
     let orders = diff_to_orders(current_shares, &target_shares);
     if orders.is_empty() {

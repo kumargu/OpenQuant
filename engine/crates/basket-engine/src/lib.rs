@@ -11,8 +11,8 @@ mod state;
 pub use engine::{BasketEngine, BasketParams, EngineSnapshot};
 pub use intent::{PositionIntent, TransitionReason};
 pub use portfolio::{
-    aggregate_positions, basket_to_legs, diff_to_orders, LegNotional, OrderIntent, OrderReason,
-    PortfolioConfig, Side,
+    aggregate_positions, basket_to_legs, diff_to_orders, plan_portfolio, LegNotional, OrderIntent,
+    OrderReason, PortfolioConfig, PortfolioPlan, Side,
 };
 pub use state::BasketState;
 
