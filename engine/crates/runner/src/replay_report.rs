@@ -1,71 +1,51 @@
-//! Parity TSV writer + quant-lab baseline comparison (#294c-3).
+//! Replay report — portfolio stats + TSV writer.
 //!
-//! Restores the parity reporting that lived in the deleted
-//! `basket_runner.rs`, but as a thin wrapper over the new replay
-//! output: stats are computed from `SimulatedBroker::daily_equity()`,
-//! NOT from a closed-form spread-delta P&L formula.
+//! Computes summary statistics and an EOD time series from the
+//! [`crate::simulated_broker::SimulatedBroker`]'s mark-to-market
+//! daily-equity history. Pure mark-to-market on simulated fills.
 //!
-//! The TSV format and the baseline JSON schema are kept identical to
-//! what the legacy walk-forward path used, so existing dashboards and
-//! comparison harnesses (e.g., quant-lab/statarb/autoresearch) keep
-//! working.
+//! Conventions used here:
+//!
+//!   - `ann_return` is linearized (`daily_mean × 252`).
+//!   - `max_drawdown` is a positive fraction `(peak − equity) / peak`.
+//!   - The TSV emits one section: `date\tequity\tdaily_pnl_dollar`.
 
 use std::fs;
 use std::path::Path;
 
 use chrono::NaiveDate;
-use serde::Deserialize;
 
-/// Portfolio summary stats — same field names and types the legacy
-/// `basket_runner::PortfolioStats` exposed, so downstream consumers
-/// do not need to change.
+/// Summary stats for a replay run.
 #[derive(Debug, Clone)]
-pub struct PortfolioStats {
+pub struct ReplayStats {
     pub cum_return: f64,
+    /// Linearized annualized return: `daily_mean × 252`.
     pub ann_return: f64,
     pub sharpe: f64,
+    /// Reported as a positive fraction `(peak − equity) / peak`.
     pub max_drawdown: f64,
     pub n_days: usize,
     pub daily_mean: f64,
     pub daily_std: f64,
 }
 
-/// Schema for `quant-lab/statarb/autoresearch/baseline/baseline.json`.
-/// Identical to the legacy struct — preserved so the existing
-/// baseline file format keeps loading.
-#[derive(Debug, Deserialize)]
-pub struct BaselineJson {
-    pub stats: BaselineStats,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct BaselineStats {
-    pub cum_return: f64,
-    pub ann_return: f64,
-    pub sharpe: f64,
-    pub max_drawdown: f64,
-    pub n_days: usize,
-    pub daily_mean: f64,
-    pub daily_std: f64,
-}
-
-/// Compute portfolio stats from a daily-equity time series. The series
+/// Compute replay stats from a daily-equity time series. The series
 /// is the output of `SimulatedBroker::daily_equity()` — already in
 /// chronological order because it's a `BTreeMap`.
 ///
-/// Definitions (matching the legacy walk-forward harness):
+/// Definitions:
 ///
-///   - daily return r_t = (E_t - E_{t-1}) / E_{t-1}, t≥1
-///   - cum_return     = E_n / E_0 - 1
+///   - daily return r_t = (E_t − E_{t-1}) / E_{t-1}, t ≥ 1
+///   - cum_return     = E_n / E_0 − 1
 ///   - daily_mean     = mean(r_t)
 ///   - daily_std      = stdev(r_t, ddof=1)
 ///   - sharpe         = daily_mean / daily_std × √252
 ///   - ann_return     = daily_mean × 252
-///   - max_drawdown   = max over t of (peak_so_far - E_t) / peak_so_far
+///   - max_drawdown   = max over t of (peak_so_far − E_t) / peak_so_far
 ///
 /// Returns `None` when fewer than 2 equity points are available — no
 /// stats are well-defined in that case.
-pub fn compute_stats(daily_equity: &[(NaiveDate, f64)]) -> Option<PortfolioStats> {
+pub fn compute_stats(daily_equity: &[(NaiveDate, f64)]) -> Option<ReplayStats> {
     if daily_equity.len() < 2 {
         return None;
     }
@@ -99,7 +79,6 @@ pub fn compute_stats(daily_equity: &[(NaiveDate, f64)]) -> Option<PortfolioStats
     };
     let ann_return = daily_mean * 252.0;
 
-    // Max drawdown over the equity curve.
     let mut peak = e0;
     let mut max_dd = 0.0_f64;
     for (_, e) in daily_equity {
@@ -114,7 +93,7 @@ pub fn compute_stats(daily_equity: &[(NaiveDate, f64)]) -> Option<PortfolioStats
         }
     }
 
-    Some(PortfolioStats {
+    Some(ReplayStats {
         cum_return,
         ann_return,
         sharpe,
@@ -125,16 +104,21 @@ pub fn compute_stats(daily_equity: &[(NaiveDate, f64)]) -> Option<PortfolioStats
     })
 }
 
-/// Write the parity TSV to `path`. Format matches the legacy
-/// `basket_runner::write_tsv` output: header comment line with summary
-/// stats, then per-session daily P&L rows (date, daily_pnl_dollar).
+/// Write the replay report to `path`.
+///
+/// Format:
+///
+///   - line 1: comment with summary stats
+///     `# cum_return=...\tann_return=...\tsharpe=...\tmax_dd=...\t
+///     n_days=...\tdaily_mean=...\tdaily_std=...`
+///   - line 2: section marker `# daily_portfolio_pnl`
+///   - line 3: header `date\tequity\tdaily_pnl_dollar`
+///   - data rows: one per session, each `YYYY-MM-DD\t<equity>\t<daily_pnl>`
 ///
 /// `daily_equity` is the output of `SimulatedBroker::daily_equity()`.
-/// Per-basket-fit metrics are not currently emitted — the new replay
-/// path does not expose per-basket P&L (#300 follow-up).
 pub fn write_tsv(
     path: &Path,
-    stats: &PortfolioStats,
+    stats: &ReplayStats,
     daily_equity: &[(NaiveDate, f64)],
 ) -> Result<(), String> {
     use std::io::Write;
@@ -165,69 +149,6 @@ pub fn write_tsv(
     Ok(())
 }
 
-/// Print a side-by-side parity comparison of replay stats against a
-/// quant-lab baseline. Returns true when all monitored metrics fall
-/// inside the documented tolerances (matching the legacy harness):
-///
-///   - cum_return: ±2 percentage points
-///   - sharpe: within [2.70, 2.90]
-///   - max_drawdown: ±1 percentage point
-///
-/// The tolerances were chosen by quant-lab (#256) when the original
-/// parity check was written. Any change to them is a separate
-/// research decision, not a refactor change.
-pub fn print_parity_comparison(rust: &PortfolioStats, py: &BaselineStats) -> bool {
-    println!("\n=== PARITY COMPARISON (Rust replay vs quant-lab) ===");
-    println!(
-        "{:20} {:>15} {:>15} {:>15}",
-        "metric", "rust", "python", "diff"
-    );
-    let rows = [
-        ("cum_return", rust.cum_return, py.cum_return),
-        ("ann_return", rust.ann_return, py.ann_return),
-        ("sharpe", rust.sharpe, py.sharpe),
-        ("max_drawdown", rust.max_drawdown, py.max_drawdown),
-        ("n_days", rust.n_days as f64, py.n_days as f64),
-        ("daily_mean", rust.daily_mean, py.daily_mean),
-        ("daily_std", rust.daily_std, py.daily_std),
-    ];
-    for (name, r, p) in rows {
-        println!("{:20} {:>15.6} {:>15.6} {:>15.6}", name, r, p, r - p);
-    }
-
-    println!("\n=== TOLERANCE CHECK ===");
-    let cum_ok = (rust.cum_return - py.cum_return).abs() < 0.02;
-    let sharpe_ok = (2.70..=2.90).contains(&rust.sharpe);
-    let dd_ok = (rust.max_drawdown - py.max_drawdown).abs() < 0.01;
-    println!(
-        "cum_return ±2%:        {} (rust={:+.4}, target={:+.4})",
-        pass(cum_ok),
-        rust.cum_return,
-        py.cum_return
-    );
-    println!(
-        "sharpe [2.70, 2.90]:   {} (rust={:.4})",
-        pass(sharpe_ok),
-        rust.sharpe
-    );
-    println!(
-        "max_dd ±1%:            {} (rust={:+.4}, target={:+.4})",
-        pass(dd_ok),
-        rust.max_drawdown,
-        py.max_drawdown
-    );
-
-    cum_ok && sharpe_ok && dd_ok
-}
-
-fn pass(ok: bool) -> &'static str {
-    if ok {
-        "PASS"
-    } else {
-        "FAIL"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn compute_stats_flat_equity_returns_zero_metrics() {
+    fn flat_equity_returns_zero_metrics() {
         let ds = dates((2024, 7, 1), 5);
         let series: Vec<_> = ds.into_iter().map(|d| (d, 10_000.0)).collect();
         let s = compute_stats(&series).unwrap();
@@ -256,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn compute_stats_monotonic_growth_has_zero_drawdown() {
+    fn monotonic_growth_has_zero_drawdown() {
         let ds = dates((2024, 7, 1), 4);
         let eqs = [10_000.0, 10_100.0, 10_300.0, 10_400.0];
         let series: Vec<_> = ds.into_iter().zip(eqs).collect();
@@ -266,12 +187,12 @@ mod tests {
     }
 
     #[test]
-    fn compute_stats_drawdown_after_peak() {
+    fn drawdown_after_peak_is_positive_fraction() {
         let ds = dates((2024, 7, 1), 4);
-        // Up to 11k, then drop to 9.9k → max_dd = 0.1
         let eqs = [10_000.0, 11_000.0, 9_900.0, 10_500.0];
         let series: Vec<_> = ds.into_iter().zip(eqs).collect();
         let s = compute_stats(&series).unwrap();
+        assert!(s.max_drawdown > 0.0, "drawdown is positive in this format");
         assert!(
             (s.max_drawdown - 0.1).abs() < 1e-9,
             "got {}",
@@ -280,7 +201,23 @@ mod tests {
     }
 
     #[test]
-    fn compute_stats_returns_none_for_empty_or_single() {
+    fn ann_return_is_linearized_not_compounded() {
+        // 1% per day for 4 days. daily_mean ≈ 0.01.
+        // Linearized ann_return = 0.01 × 252 = 2.52.
+        // Compounded would be (1.01)^252 - 1 ≈ 11.27. Big difference.
+        let ds = dates((2024, 7, 1), 5);
+        let eqs = [10_000.0, 10_100.0, 10_201.0, 10_303.01, 10_406.04];
+        let series: Vec<_> = ds.into_iter().zip(eqs).collect();
+        let s = compute_stats(&series).unwrap();
+        assert!(
+            (s.ann_return - 2.52).abs() < 0.01,
+            "expected linearized ann_return ≈ 2.52, got {}",
+            s.ann_return
+        );
+    }
+
+    #[test]
+    fn returns_none_for_empty_or_single() {
         assert!(compute_stats(&[]).is_none());
         let one = vec![(NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(), 10_000.0)];
         assert!(compute_stats(&one).is_none());
@@ -292,13 +229,12 @@ mod tests {
         let eqs = [10_000.0, 10_050.0, 10_010.0];
         let series: Vec<_> = ds.into_iter().zip(eqs).collect();
         let stats = compute_stats(&series).unwrap();
-        let tmp = std::env::temp_dir().join("parity_test_oq.tsv");
+        let tmp = std::env::temp_dir().join("replay_report_test_oq.tsv");
         write_tsv(&tmp, &stats, &series).unwrap();
         let body = std::fs::read_to_string(&tmp).unwrap();
         assert!(body.contains("cum_return="));
         assert!(body.contains("daily_portfolio_pnl"));
         assert!(body.contains("date\tequity\tdaily_pnl_dollar"));
-        // Three rows of data.
         let row_count = body.lines().filter(|l| l.starts_with("2024-07")).count();
         assert_eq!(row_count, 3);
         let _ = std::fs::remove_file(&tmp);

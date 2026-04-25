@@ -24,10 +24,10 @@ mod clock;
 mod earnings;
 mod market_session;
 mod pair_picker_service;
-mod parity;
 mod parquet_bar_source;
 pub mod refresh;
 mod replay_clock;
+mod replay_report;
 mod session_trigger;
 mod simulated_broker;
 mod stream;
@@ -248,15 +248,10 @@ struct ReplayArgs {
     #[arg(long, default_value_t = 0)]
     failure_seed: u64,
 
-    /// Write a parity TSV (cum_return, sharpe, max_dd, daily P&L) to
-    /// the given path after replay completes.
+    /// Write a replay report TSV (summary stats + per-day equity / P&L)
+    /// to the given path after replay completes.
     #[arg(long)]
-    parity_tsv: Option<PathBuf>,
-
-    /// quant-lab baseline.json to compare the replay's PortfolioStats
-    /// against. Prints PARITY COMPARISON on completion if provided.
-    #[arg(long)]
-    baseline: Option<PathBuf>,
+    report_tsv: Option<PathBuf>,
 
     /// Resume replay from an existing state snapshot at `--state-path`
     /// instead of starting from empty engine + simulated broker state.
@@ -1466,11 +1461,11 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         "REPLAY FINAL SNAPSHOT"
     );
 
-    // Parity reporting: stats from the daily-equity time series the
-    // SimulatedBroker built up via record_eod hooks. No closed-form
-    // P&L formula — this is pure mark-to-market on simulated fills.
+    // Replay report: stats from the daily-equity time series the
+    // SimulatedBroker built up via record_eod hooks. Pure
+    // mark-to-market on simulated fills.
     let daily_equity = broker.daily_equity();
-    if let Some(stats) = parity::compute_stats(&daily_equity) {
+    if let Some(stats) = replay_report::compute_stats(&daily_equity) {
         info!(
             cum_return = %format_args!("{:+.4}", stats.cum_return),
             sharpe = %format_args!("{:.3}", stats.sharpe),
@@ -1479,37 +1474,19 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             "REPLAY PORTFOLIO STATS"
         );
 
-        if let Some(tsv_path) = args.parity_tsv.as_ref() {
+        if let Some(tsv_path) = args.report_tsv.as_ref() {
             if let Some(parent) = tsv_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            match parity::write_tsv(tsv_path, &stats, &daily_equity) {
-                Ok(()) => info!(path = %tsv_path.display(), "wrote parity TSV"),
-                Err(e) => error!(error = %e, "failed to write parity TSV"),
+            match replay_report::write_tsv(tsv_path, &stats, &daily_equity) {
+                Ok(()) => info!(path = %tsv_path.display(), "wrote replay report TSV"),
+                Err(e) => error!(error = %e, "failed to write replay report TSV"),
             }
         }
-
-        if let Some(baseline_path) = args.baseline.as_ref() {
-            match std::fs::read_to_string(baseline_path)
-                .map_err(|e| e.to_string())
-                .and_then(|s| {
-                    serde_json::from_str::<parity::BaselineJson>(&s).map_err(|e| e.to_string())
-                }) {
-                Ok(bj) => {
-                    let pass = parity::print_parity_comparison(&stats, &bj.stats);
-                    if !pass {
-                        warn!("parity tolerance check FAILED — see comparison above");
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, path = %baseline_path.display(), "failed to load baseline")
-                }
-            }
-        }
-    } else if args.parity_tsv.is_some() || args.baseline.is_some() {
+    } else if args.report_tsv.is_some() {
         warn!(
             n_days = daily_equity.len(),
-            "fewer than 2 daily-equity points — skipping parity TSV / baseline comparison"
+            "fewer than 2 daily-equity points — skipping replay report TSV"
         );
     }
 
