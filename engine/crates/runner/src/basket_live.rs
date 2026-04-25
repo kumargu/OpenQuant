@@ -1,8 +1,11 @@
-//! Live/paper runner for the basket spread engine.
+//! Live / paper / replay runner for the basket spread engine.
 //!
-//! Drives `basket_engine::BasketEngine` (continuous streaming state machine,
-//! NOT the walk-forward replay in `basket_runner.rs`) with real-time 1-min
-//! bars from the Alpaca WebSocket.
+//! Drives `basket_engine::BasketEngine` (continuous streaming state machine)
+//! with bars from either the Alpaca WebSocket (live, paper) or per-symbol
+//! parquet files via [`crate::parquet_bar_source::ParquetBarSource`] (replay).
+//! All three modes flow through `run_basket_live`; the only difference is
+//! which `Broker`, `BarSource`, `Clock`, and `SessionTrigger` impls are
+//! passed in.
 //!
 //! Flow per trading day:
 //!   1. Startup: load the frozen basket fit artifact and build `BasketEngine`
@@ -436,6 +439,8 @@ pub async fn run_basket_live(
             execution,
         )
         .await?;
+        // Hook for replay's daily-equity time series. Noop on AlpacaClient.
+        broker.record_eod(today).await;
         last_processed_trading_day = Some(today);
         engine.save_state_with_day(state_path, last_processed_trading_day)?;
         processed_sessions.insert(today);
@@ -501,10 +506,10 @@ pub async fn run_basket_live(
         tokio::select! {
             Some(bar) = bar_rx.recv() => {
                 // `stream.rs` shifts Alpaca bar timestamps by +60s (open→close time).
-                // Undo that here so `minute` reflects bar-OPEN time, matching the
-                // RTH filter used by replay (`basket_runner.rs::read_daily_closes`).
-                // Without this, the last RTH bar (e.g. open=19:59, stream=20:00 in DST)
-                // would be excluded by `RTH_START_MIN..SESSION_CLOSE_MIN` and the close
+                // Undo that here so `minute` reflects bar-OPEN time, matching
+                // `market_session::is_rth_utc` semantics. Without this, the last
+                // RTH bar (e.g. open=19:59, stream=20:00 in DST) would be
+                // excluded by `RTH_START_MIN..SESSION_CLOSE_MIN` and the close
                 // would never enter the buffer — missing the daily close.
                 let bar_open_ts_ms = bar.timestamp - 60_000;
                 let dt = match DateTime::<Utc>::from_timestamp_millis(bar_open_ts_ms) {
@@ -655,6 +660,9 @@ pub async fn run_basket_live(
                         execution,
                     )
                     .await?;
+                    // Hook for replay's daily-equity time series.
+                    // Noop on AlpacaClient.
+                    broker.record_eod(today).await;
                     last_processed_trading_day = Some(today);
                     engine.save_state_with_day(state_path, last_processed_trading_day)?;
                     info!(

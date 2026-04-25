@@ -33,9 +33,8 @@ pub trait SessionTrigger: Send + Sync {
 
 /// Production trigger — polls the clock on a 30s wall-clock interval.
 ///
-/// Matches the pre-#298 behavior in `basket_live`: if the clock is past
-/// session close + grace for a date that hasn't been yielded yet, fire
-/// for that date.
+/// Fires when the clock is past session close + grace for a date that
+/// hasn't been yielded yet. Used by live / paper.
 pub struct IntervalSessionTrigger<C: Clock> {
     clock: C,
     interval: tokio::time::Interval,

@@ -27,6 +27,7 @@ mod pair_picker_service;
 mod parquet_bar_source;
 pub mod refresh;
 mod replay_clock;
+mod replay_report;
 mod session_trigger;
 mod simulated_broker;
 mod stream;
@@ -227,11 +228,36 @@ struct ReplayArgs {
     #[arg(long, default_value_t = 0.0)]
     slippage_bps: f64,
 
+    /// Per-order probability of simulated rejection (0.0..=1.0, default 0).
+    /// Exercises the `error!("ORDER FAILED")` path in basket_live.
+    #[arg(long, default_value_t = 0.0)]
+    reject_rate: f64,
+
+    /// Per-order probability of partial fill in [0.6, 0.9] of requested
+    /// qty (0.0..=1.0, default 0). Drives BROKER DIVERGENCE on the
+    /// post-submit reconciliation path.
+    #[arg(long, default_value_t = 0.0)]
+    partial_fill_rate: f64,
+
+    /// Per-`get_positions` probability of returning the previous
+    /// snapshot instead of the current one (0.0..=1.0, default 0).
+    #[arg(long, default_value_t = 0.0)]
+    stale_position_rate: f64,
+
+    /// Deterministic seed for failure-injection RNG (default 0).
+    #[arg(long, default_value_t = 0)]
+    failure_seed: u64,
+
+    /// Write a replay report TSV (summary stats + per-day equity / P&L)
+    /// to the given path after replay completes.
+    #[arg(long)]
+    report_tsv: Option<PathBuf>,
+
     /// Resume replay from an existing state snapshot at `--state-path`
     /// instead of starting from empty engine + simulated broker state.
     /// Default: false (fresh start). When false, any existing state
     /// file at the resolved `state_path` is deleted before the replay
-    /// runs so backtest results are deterministic across re-runs.
+    /// runs so replay results are deterministic across re-runs.
     #[arg(long, default_value_t = false)]
     resume_state: bool,
 }
@@ -297,7 +323,7 @@ fn resolve_engine(
         Engine::Metals => ("config/metals.toml", Some("pairs/metals_pairs.json")),
         Engine::Basket => unreachable!(
             "resolve_engine should never be called for --engine basket; \
-             basket paths short-circuit to run_basket_stream / basket_runner"
+             basket paths short-circuit to run_basket_live / run_basket_replay_live_path"
         ),
     };
     let config = config.unwrap_or_else(|| PathBuf::from(default_config));
@@ -1283,14 +1309,9 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     // Replay freshness contract: by default, every replay run starts
     // from empty engine + simulated broker state, regardless of whether
     // a prior replay's snapshot exists at `state_path`. This makes
-    // backtest results deterministic across re-runs. To resume from a
+    // replay results deterministic across re-runs. To resume from a
     // snapshot (e.g., for debugging mid-replay state), pass
     // `--resume-state`.
-    //
-    // Without this, `run_basket_live` would call its normal
-    // `load_snapshot(state_path)` restore path on the second replay
-    // and pick up positions/processed_sessions from the prior run —
-    // a bug Codex caught in #302 review.
     if !args.resume_state && state_path.exists() {
         info!(
             path = %state_path.display(),
@@ -1383,12 +1404,19 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         "========== BASKET REPLAY (LIVE PATH) =========="
     );
 
+    let broker_config = simulated_broker::SimulatedBrokerConfig {
+        slippage_bps: args.slippage_bps,
+        reject_rate: args.reject_rate,
+        partial_fill_rate: args.partial_fill_rate,
+        stale_position_rate: args.stale_position_rate,
+        seed: args.failure_seed,
+    };
     let replay = parquet_bar_source::new_replay_components(
         bars_dir.clone(),
         start,
         end,
         &portfolio_config,
-        args.slippage_bps,
+        broker_config,
     );
     let parquet_bar_source::ReplayComponents {
         bar_source,
@@ -1418,6 +1446,24 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     )
     .await;
 
+    // If the run failed partway through we have a partial daily-equity
+    // history that doesn't represent the requested window. Don't
+    // overwrite an existing report with that — exit non-zero and let
+    // the operator inspect logs. The post-mortem snapshot is still
+    // useful for debugging, so log it before exiting.
+    if let Err(e) = result {
+        let snap = broker.final_snapshot();
+        error!(
+            error = %e,
+            initial_capital = snap.initial_capital,
+            final_cash = %format_args!("{:.2}", snap.cash),
+            final_equity = %format_args!("{:.2}", snap.equity),
+            positions = snap.positions.len(),
+            "basket replay failed; report TSV not written"
+        );
+        std::process::exit(1);
+    }
+
     let snap = broker.final_snapshot();
     info!(
         initial_capital = snap.initial_capital,
@@ -1428,9 +1474,34 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         "REPLAY FINAL SNAPSHOT"
     );
 
-    if let Err(e) = result {
-        error!(error = %e, "basket replay failed");
-        std::process::exit(1);
+    // Replay report: stats from the daily-equity time series the
+    // SimulatedBroker built up via record_eod hooks. Pure
+    // mark-to-market on simulated fills. Only runs on a successful
+    // replay — see the early-exit above.
+    let daily_equity = broker.daily_equity();
+    if let Some(stats) = replay_report::compute_stats(&daily_equity) {
+        info!(
+            cum_return = %format_args!("{:+.4}", stats.cum_return),
+            sharpe = %format_args!("{:.3}", stats.sharpe),
+            max_dd = %format_args!("{:+.4}", stats.max_drawdown),
+            n_days = stats.n_days,
+            "REPLAY PORTFOLIO STATS"
+        );
+
+        if let Some(tsv_path) = args.report_tsv.as_ref() {
+            if let Some(parent) = tsv_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match replay_report::write_tsv(tsv_path, &stats, &daily_equity) {
+                Ok(()) => info!(path = %tsv_path.display(), "wrote replay report TSV"),
+                Err(e) => error!(error = %e, "failed to write replay report TSV"),
+            }
+        }
+    } else if args.report_tsv.is_some() {
+        warn!(
+            n_days = daily_equity.len(),
+            "fewer than 2 daily-equity points — skipping replay report TSV"
+        );
     }
 }
 

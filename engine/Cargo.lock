@@ -1778,6 +1778,7 @@ dependencies = [
  "openquant-core",
  "pair-picker",
  "parquet",
+ "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",
