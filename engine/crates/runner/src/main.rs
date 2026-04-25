@@ -226,6 +226,14 @@ struct ReplayArgs {
     /// One-sided fill slippage in basis points (basket only, default 0).
     #[arg(long, default_value_t = 0.0)]
     slippage_bps: f64,
+
+    /// Resume replay from an existing state snapshot at `--state-path`
+    /// instead of starting from empty engine + simulated broker state.
+    /// Default: false (fresh start). When false, any existing state
+    /// file at the resolved `state_path` is deleted before the replay
+    /// runs so backtest results are deterministic across re-runs.
+    #[arg(long, default_value_t = false)]
+    resume_state: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -1267,6 +1275,32 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
                 error = %e,
                 path = %parent.display(),
                 "failed to create replay state directory"
+            );
+            std::process::exit(1);
+        }
+    }
+
+    // Replay freshness contract: by default, every replay run starts
+    // from empty engine + simulated broker state, regardless of whether
+    // a prior replay's snapshot exists at `state_path`. This makes
+    // backtest results deterministic across re-runs. To resume from a
+    // snapshot (e.g., for debugging mid-replay state), pass
+    // `--resume-state`.
+    //
+    // Without this, `run_basket_live` would call its normal
+    // `load_snapshot(state_path)` restore path on the second replay
+    // and pick up positions/processed_sessions from the prior run —
+    // a bug Codex caught in #302 review.
+    if !args.resume_state && state_path.exists() {
+        info!(
+            path = %state_path.display(),
+            "removing prior replay state for fresh start (use --resume-state to keep)"
+        );
+        if let Err(e) = std::fs::remove_file(&state_path) {
+            error!(
+                error = %e,
+                path = %state_path.display(),
+                "failed to remove prior replay state file"
             );
             std::process::exit(1);
         }
