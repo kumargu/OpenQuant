@@ -19,14 +19,16 @@ mod bar_cache;
 mod bar_source;
 mod basket_fits;
 mod basket_live;
-mod basket_runner;
 mod broker;
 mod clock;
 mod earnings;
 mod market_session;
 mod pair_picker_service;
+mod parquet_bar_source;
 pub mod refresh;
+mod replay_clock;
 mod session_trigger;
+mod simulated_broker;
 mod stream;
 
 use alpaca::ExecutionMode;
@@ -199,13 +201,31 @@ struct ReplayArgs {
     #[arg(long)]
     bars_dir: Option<PathBuf>,
 
-    /// quant-lab baseline.json for parity comparison (optional).
+    /// Frozen basket fit artifact (basket only). Defaults to `<universe>.fits.json`.
     #[arg(long)]
-    baseline: Option<PathBuf>,
+    fit_artifact: Option<PathBuf>,
 
-    /// Output TSV for basket replay metrics (default: data/basket_parity.tsv).
+    /// Persisted basket engine state (basket only). Defaults to an isolated
+    /// path under `<data-dir>/replay/<universe-stem>.state.json` so replay
+    /// never reads or writes the live default `.state.json`.
     #[arg(long)]
-    tsv_out: Option<PathBuf>,
+    state_path: Option<PathBuf>,
+
+    /// Starting capital for the simulated broker (basket only, default 10000).
+    #[arg(long, default_value_t = 10_000.0)]
+    capital: f64,
+
+    /// Leverage multiplier for the simulated broker (basket only, default 4.0).
+    #[arg(long, default_value_t = 4.0)]
+    leverage: f64,
+
+    /// Max active baskets (basket only, default 5).
+    #[arg(long, default_value_t = 5)]
+    n_active_baskets: usize,
+
+    /// One-sided fill slippage in basis points (basket only, default 0).
+    #[arg(long, default_value_t = 0.0)]
+    slippage_bps: f64,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -365,79 +385,8 @@ async fn main() {
             )
         }
         Command::Replay(a) => {
-            // Basket replay uses walk-forward semantics (matches quant-lab backtest).
-            // Reads per-symbol parquets directly; no Alpaca API calls.
             if a.engine.is_basket() {
-                let universe_path = a
-                    .universe
-                    .clone()
-                    .or_else(|| a.engine.universe_path().map(PathBuf::from))
-                    .unwrap_or_else(|| {
-                        error!("--universe is required when --engine basket");
-                        std::process::exit(1);
-                    });
-
-                let bars_dir = a.bars_dir.clone().unwrap_or_else(|| {
-                    std::env::var("QUANT_DATA_DIR")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|_| {
-                            let home = std::env::var("HOME").unwrap_or_default();
-                            PathBuf::from(home)
-                                .join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
-                        })
-                });
-
-                let tsv_out = a
-                    .tsv_out
-                    .clone()
-                    .unwrap_or_else(|| a.data_dir.join("basket_parity.tsv"));
-
-                info!(
-                    universe = %universe_path.display(),
-                    bars_dir = %bars_dir.display(),
-                    "========== BASKET WALK-FORWARD REPLAY =========="
-                );
-
-                match basket_runner::run_basket_replay(&universe_path, &bars_dir) {
-                    Ok(result) => {
-                        // Write TSV
-                        if let Err(e) = basket_runner::write_tsv(
-                            &tsv_out,
-                            &result.stats,
-                            &result.runs,
-                            &result.daily_pnl,
-                        ) {
-                            error!(error = %e, "failed to write TSV");
-                        } else {
-                            info!(path = %tsv_out.display(), rows = result.runs.len(), "wrote TSV");
-                        }
-
-                        // Compare to baseline if provided
-                        if let Some(baseline_path) = &a.baseline {
-                            match std::fs::read_to_string(baseline_path)
-                                .map_err(|e| e.to_string())
-                                .and_then(|s| {
-                                    serde_json::from_str::<basket_runner::BaselineJson>(&s)
-                                        .map_err(|e| e.to_string())
-                                }) {
-                                Ok(bj) => {
-                                    let pass = basket_runner::print_parity_comparison(
-                                        &result.stats,
-                                        &bj.stats,
-                                    );
-                                    if !pass {
-                                        warn!("parity check FAILED — see comparison above");
-                                    }
-                                }
-                                Err(e) => warn!(error = %e, "failed to load baseline"),
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!(error = %e, "basket replay failed");
-                        std::process::exit(1);
-                    }
-                }
+                run_basket_replay_live_path(a).await;
                 return;
             }
 
@@ -1257,6 +1206,184 @@ fn log_intent(intent: &openquant_core::pairs::PairOrderIntent, side: &str) {
         reason = ?intent.reason,
         "INTENT"
     );
+}
+
+// ── Basket replay (live code path) ───────────────────────────────────
+//
+// `replay --engine basket` runs through the *exact same* `run_basket_live`
+// function used by paper/live. The diff is the impls passed in:
+//
+//   - `Broker`        → `SimulatedBroker` (in-process fills + cash, no Alpaca)
+//   - `BarSource`     → `ParquetBarSource` (per-symbol parquet walk)
+//   - `Clock`         → `BarDrivenClock`   (bar-OPEN of latest emitted bar)
+//   - `SessionTrigger`→ `BarDrivenSessionTrigger` (mpsc, fires once per date)
+//
+// State path defaults to an isolated `<data-dir>/replay/<universe-stem>.state.json`
+// so replay never reads or writes the live default `.state.json`. There is
+// no `if replay {}` branch anywhere in `basket_live.rs` — the seam is
+// entirely at the call site.
+
+async fn run_basket_replay_live_path(args: ReplayArgs) {
+    let universe_path = args
+        .universe
+        .clone()
+        .or_else(|| args.engine.universe_path().map(PathBuf::from))
+        .unwrap_or_else(|| {
+            error!("--universe is required when --engine basket");
+            std::process::exit(1);
+        });
+
+    let bars_dir = args.bars_dir.clone().unwrap_or_else(|| {
+        std::env::var("QUANT_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_default();
+                PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
+            })
+    });
+
+    let fit_artifact_path = args
+        .fit_artifact
+        .clone()
+        .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
+
+    // Replay state isolation: never touch the live default state path.
+    let state_path = args.state_path.clone().unwrap_or_else(|| {
+        let stem = universe_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("basket_universe");
+        args.data_dir
+            .join("replay")
+            .join(format!("{stem}.state.json"))
+    });
+
+    // Parse start/end.
+    let parse_date = |s: &str, name: &str| match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(e) => {
+            error!(error = %e, value = %s, "invalid --{name} date (expected YYYY-MM-DD)");
+            std::process::exit(1);
+        }
+    };
+    let start = parse_date(&args.start, "start");
+    let end = parse_date(&args.end, "end");
+    if end < start {
+        error!(start = %start, end = %end, "--end must be on or after --start");
+        std::process::exit(1);
+    }
+
+    let portfolio_config = basket_engine::PortfolioConfig {
+        capital: args.capital,
+        leverage: args.leverage,
+        n_active_baskets: args.n_active_baskets,
+    };
+    if let Err(e) = portfolio_config.validate() {
+        error!(error = %e, "invalid portfolio config");
+        std::process::exit(1);
+    }
+
+    let universe = match basket_picker::load_universe(&universe_path) {
+        Ok(u) => u,
+        Err(e) => {
+            error!(error = %e, "failed to load basket universe");
+            std::process::exit(1);
+        }
+    };
+
+    let fit_artifact = match basket_fits::load_fit_artifact(&fit_artifact_path, &universe) {
+        Ok(a) => a,
+        Err(e) => {
+            error!(
+                error = %e,
+                fit_artifact = %fit_artifact_path.display(),
+                "failed to load frozen basket fit artifact"
+            );
+            error!(
+                "build it first with: openquant-runner freeze-basket-fits --universe {} --bars-dir {} --out {}",
+                universe_path.display(),
+                bars_dir.display(),
+                fit_artifact_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let symbols: Vec<String> = {
+        let mut s: Vec<String> = universe
+            .sectors
+            .values()
+            .flat_map(|sec| sec.members.iter().cloned())
+            .collect();
+        s.sort();
+        s.dedup();
+        s
+    };
+
+    info!(
+        universe = %universe_path.display(),
+        bars_dir = %bars_dir.display(),
+        fit_artifact = %fit_artifact_path.display(),
+        state_path = %state_path.display(),
+        start = %start,
+        end = %end,
+        capital = portfolio_config.capital,
+        leverage = portfolio_config.leverage,
+        n_active_baskets = portfolio_config.n_active_baskets,
+        slippage_bps = args.slippage_bps,
+        symbols = symbols.len(),
+        "========== BASKET REPLAY (LIVE PATH) =========="
+    );
+
+    let replay = parquet_bar_source::new_replay_components(
+        bars_dir.clone(),
+        start,
+        end,
+        &portfolio_config,
+        args.slippage_bps,
+    );
+    let parquet_bar_source::ReplayComponents {
+        bar_source,
+        broker,
+        clock,
+        mut session_trigger,
+    } = replay;
+
+    // Replay always uses Paper execution mode so the Broker contract
+    // (preflight account check, position seeding, post-submit
+    // reconciliation) runs identically to live. The execution flag
+    // never reaches Alpaca because the broker IS our SimulatedBroker.
+    let execution = basket_live::BasketExecution::Paper;
+
+    let result = basket_live::run_basket_live(
+        &broker,
+        &bar_source,
+        &clock,
+        &mut session_trigger,
+        &universe_path,
+        &fit_artifact_path,
+        &state_path,
+        &bars_dir,
+        execution,
+        portfolio_config,
+        &fit_artifact.fits,
+    )
+    .await;
+
+    let snap = broker.final_snapshot();
+    info!(
+        initial_capital = snap.initial_capital,
+        final_cash = %format_args!("{:.2}", snap.cash),
+        final_equity = %format_args!("{:.2}", snap.equity),
+        final_pnl = %format_args!("{:.2}", snap.equity - snap.initial_capital),
+        positions = snap.positions.len(),
+        "REPLAY FINAL SNAPSHOT"
+    );
+
+    if let Err(e) = result {
+        error!(error = %e, "basket replay failed");
+        std::process::exit(1);
+    }
 }
 
 // ── TeeWriter (stderr + file) ────────────────────────────────────────

@@ -567,15 +567,30 @@ pub async fn run_basket_live(
                 );
                 bars_processed_window = 0;
             }
-            today = session_trigger.next() => {
+            session_event = session_trigger.next() => {
                 // Session-close trigger: the trigger has determined that
                 // `today` is past session close + grace. Live uses
                 // `IntervalSessionTrigger` (30s wall-clock poll); replay
-                // (#294c-2) will use a bar-driven trigger so cadence
-                // follows simulated time. The trigger dedups internally,
-                // so `today` is yielded at most once; `processed_sessions`
-                // is the persisted-state dedup that catches restarts
-                // after a session was already processed.
+                // uses `BarDrivenSessionTrigger` so cadence follows bar
+                // timestamps. The trigger dedups internally, so `today`
+                // is yielded at most once; `processed_sessions` is the
+                // persisted-state dedup that catches restarts after a
+                // session was already processed.
+                //
+                // `None` = trigger exhausted (replay drained its
+                // parquet bars). Live's `IntervalSessionTrigger` never
+                // returns `None`; this branch is the replay exit path.
+                let today = match session_event {
+                    Some(d) => d,
+                    None => {
+                        info!(
+                            bars_processed_total,
+                            sessions_processed = processed_sessions.len(),
+                            "========== REPLAY EXHAUSTED — SHUTDOWN =========="
+                        );
+                        break;
+                    }
+                };
                 if !processed_sessions.contains(&today) {
                     let closes_for_day = day_closes.remove(&today).unwrap_or_default();
                     if closes_for_day.is_empty() {
