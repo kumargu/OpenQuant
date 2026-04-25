@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 
 /// Reason for a position transition.
 ///
-/// Deliberately limited to exactly 4 valid transitions per Bertram symmetric.
-/// No stop-loss, time-exit, or de-risk variants.
+/// Bertram symmetric flips plus an adverse-move stop-loss. The stop
+/// fires when the spread has drifted against the trade by more than
+/// `stop_loss_z` z-units (configurable on `BasketEngine`); without it
+/// a basket whose cointegration broke during the walk-forward window
+/// would sit in a losing position indefinitely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransitionReason {
     /// First entry into a long position (from flat).
@@ -16,6 +19,10 @@ pub enum TransitionReason {
     FlipLongToShort,
     /// Flip from short to long.
     FlipShortToLong,
+    /// Long position stopped out (adverse z-move beyond `stop_loss_z`).
+    StopLossLong,
+    /// Short position stopped out (adverse z-move beyond `stop_loss_z`).
+    StopLossShort,
 }
 
 impl TransitionReason {
@@ -26,6 +33,8 @@ impl TransitionReason {
             Self::InitialEntryShort => "initial_entry_short",
             Self::FlipLongToShort => "flip_long_to_short",
             Self::FlipShortToLong => "flip_short_to_long",
+            Self::StopLossLong => "stop_loss_long",
+            Self::StopLossShort => "stop_loss_short",
         }
     }
 }

@@ -221,6 +221,19 @@ struct ReplayArgs {
     #[arg(long, default_value_t = 5)]
     n_active_baskets: usize,
 
+    /// Adverse-move stop-loss in z-units. Position is force-flattened
+    /// when its spread drifts more than this many z-units against the
+    /// trade. Pass `--no-stop-loss` (or set to 0/negative) to disable.
+    /// Lab-validated default: 2.0 (best in
+    /// `quant-lab/statarb/stop_loss_experiment.py` sweep).
+    #[arg(long, default_value_t = 2.0)]
+    stop_loss_z: f64,
+
+    /// Disable the adverse-move stop-loss (degenerates to pure
+    /// Bertram symmetric — useful for A/B comparisons).
+    #[arg(long, default_value_t = false)]
+    no_stop_loss: bool,
+
     /// One-sided fill slippage in basis points (basket only, default 0).
     #[arg(long, default_value_t = 0.0)]
     slippage_bps: f64,
@@ -1344,10 +1357,16 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     // Leverage comes from the universe TOML (`strategy.leverage_assumed`).
     // Replay must use the same leverage the strategy was designed against;
     // that's a config value, not a CLI knob.
+    let stop_loss_z = if args.no_stop_loss || args.stop_loss_z <= 0.0 {
+        None
+    } else {
+        Some(args.stop_loss_z)
+    };
     let portfolio_config = basket_engine::PortfolioConfig {
         capital: args.capital,
         leverage: universe.strategy.leverage_assumed,
         n_active_baskets: args.n_active_baskets,
+        stop_loss_z,
     };
     if let Err(e) = portfolio_config.validate() {
         error!(error = %e, "invalid portfolio config");

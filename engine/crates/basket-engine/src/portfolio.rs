@@ -15,6 +15,15 @@ pub struct PortfolioConfig {
     pub leverage: f64,
     /// Maximum number of active baskets.
     pub n_active_baskets: usize,
+    /// Adverse-move stop-loss in z-units. `None` disables (pure
+    /// Bertram symmetric); `Some(2.0)` is the lab-validated default.
+    /// See the field doc on `BasketEngine::stop_loss_z`.
+    #[serde(default = "default_stop_loss_z")]
+    pub stop_loss_z: Option<f64>,
+}
+
+fn default_stop_loss_z() -> Option<f64> {
+    Some(2.0)
 }
 
 impl Default for PortfolioConfig {
@@ -23,6 +32,7 @@ impl Default for PortfolioConfig {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 10,
+            stop_loss_z: default_stop_loss_z(),
         }
     }
 }
@@ -423,6 +433,7 @@ mod tests {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 10,
+            stop_loss_z: None,
         };
         config.validate().unwrap();
         // 100K * 4x leverage * 90% utilization buffer / 10 baskets = 36K each.
@@ -439,6 +450,7 @@ mod tests {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 10,
+            stop_loss_z: None,
         };
         // Drawdown to 90K equity → notional shrinks proportionally,
         // keeping the actual gross under buying_power = 90K * 4 = 360K.
@@ -460,6 +472,7 @@ mod tests {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 0,
+            stop_loss_z: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.contains("n_active_baskets"));
@@ -531,6 +544,7 @@ mod tests {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 1,
+            stop_loss_z: None,
         };
         let plan = plan_portfolio(&engine, &config);
         assert_eq!(plan.active_baskets, 2);

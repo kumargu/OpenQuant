@@ -423,6 +423,7 @@ mod tests {
             capital: 10_000.0,
             leverage: 4.0,
             n_active_baskets: 5,
+            stop_loss_z: None,
         }
     }
 

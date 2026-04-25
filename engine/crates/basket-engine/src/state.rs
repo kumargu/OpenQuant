@@ -24,6 +24,15 @@ pub struct BasketState {
     pub spread_history: VecDeque<f64>,
     /// Most recent z-score.
     pub last_z: Option<f64>,
+    /// Stop-loss re-arm gate. Set to true after a stop-out; while
+    /// suspended, the engine refuses to enter new positions on this
+    /// basket. Cleared once `|z| < k` (the spread is back inside the
+    /// Bertram band, i.e. the regime has plausibly returned). Mirrors
+    /// quant-lab's `simulate_bertram_with_stop` re-arm logic so a
+    /// stopped-out basket can't immediately re-enter at the same
+    /// adverse z and re-stop on the next bar.
+    #[serde(default)]
+    pub suspended: bool,
 }
 
 impl Default for BasketState {
@@ -35,6 +44,7 @@ impl Default for BasketState {
             entry_z: None,
             spread_history: VecDeque::with_capacity(60),
             last_z: None,
+            suspended: false,
         }
     }
 }
@@ -82,6 +92,14 @@ impl BasketState {
         self.entry_spread = None;
         self.entry_z = None;
     }
+
+    /// Flatten and arm the suspended re-arm gate. Called by the engine
+    /// when an open position breaches its z-score adverse-move stop
+    /// (cointegration plausibly broken).
+    pub fn stop_out(&mut self) {
+        self.flatten();
+        self.suspended = true;
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +145,31 @@ mod tests {
         assert_eq!(state.spread_history.len(), 60);
         assert_eq!(state.spread_history.front(), Some(&40.0));
         assert_eq!(state.spread_history.back(), Some(&99.0));
+    }
+
+    #[test]
+    fn test_stop_out_arms_suspended_gate() {
+        let mut state = BasketState::new();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        state.enter(1, date, 0.05, 1.5);
+        assert!(!state.suspended);
+        state.stop_out();
+        assert_eq!(state.position, 0);
+        assert_eq!(state.entry_date, None);
+        assert!(state.suspended, "stop_out must arm the re-entry gate");
+    }
+
+    #[test]
+    fn test_flatten_does_not_arm_suspended_gate() {
+        // Plain flatten() (used by portfolio admission, snapshot
+        // restore, etc.) must NOT touch suspended — only stop_out()
+        // arms the re-entry gate. Mixing the two would suspend baskets
+        // that simply got demoted by the portfolio cap.
+        let mut state = BasketState::new();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        state.enter(1, date, 0.05, 1.5);
+        state.flatten();
+        assert!(!state.suspended);
     }
 
     #[test]

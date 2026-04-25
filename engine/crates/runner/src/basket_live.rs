@@ -415,6 +415,21 @@ pub async fn run_basket_live(
         "engine configured with entry-time active-basket cap"
     );
 
+    // Adverse-move stop-loss in z-units. Positions whose spread drifts
+    // more than `stop_loss_z` against the trade get force-flattened
+    // and the basket is suspended from re-entry until |z| < k. Without
+    // this, a basket whose cointegration breaks during the walk-
+    // forward window holds indefinitely (Q4 2025: PNC long stuck at
+    // z=-3.91 vs entry z=-1.12, TFC short stuck at z=+4.18 vs entry
+    // z=+0.49, both bleeding the entire quarter). Lab swept
+    // [1.5..4.0] and found 2.0 best — see
+    // `quant-lab/statarb/stop_loss_experiment.py`.
+    engine.set_stop_loss_z(portfolio_config.stop_loss_z);
+    info!(
+        stop_loss_z = ?portfolio_config.stop_loss_z,
+        "engine configured with adverse-move stop-loss"
+    );
+
     // 2. Seed current_shares from Alpaca positions (startup reconciliation).
     //    Without this, a restart with live open positions would trigger
     //    target-minus-zero share deltas, flooding Alpaca with duplicate orders.
