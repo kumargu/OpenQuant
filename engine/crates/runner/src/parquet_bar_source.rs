@@ -64,6 +64,14 @@ pub struct ParquetBarSource {
     start: NaiveDate,
     end: NaiveDate,
     closes: SharedCloses,
+    /// Optional decode cache directory. When set, RTH-filtered
+    /// `Vec<ParquetBar>` for each symbol is cached on first read and
+    /// reused on subsequent calls, skipping the parquet decode +
+    /// alignment work. The cache stores the FULL date range from the
+    /// parquet (no `start`/`end` cutoff baked in) so the same cache
+    /// serves any replay window. Operator manages cache lifetime —
+    /// `rm -rf <cache_dir>` to invalidate.
+    bar_cache_dir: Option<PathBuf>,
     channels: StdRwLock<Option<ReplayChannels>>,
 }
 
@@ -86,10 +94,22 @@ impl BarSource for ParquetBarSource {
         let start = self.start;
         let end = self.end;
         let closes = self.closes.clone();
+        let bar_cache_dir = self.bar_cache_dir.clone();
         let symbols: Vec<String> = symbols.to_vec();
 
         tokio::spawn(async move {
-            if let Err(e) = emit_loop(&bars_dir, start, end, &symbols, tx, channels, closes).await {
+            if let Err(e) = emit_loop(
+                &bars_dir,
+                start,
+                end,
+                &symbols,
+                tx,
+                channels,
+                closes,
+                bar_cache_dir.as_deref(),
+            )
+            .await
+            {
                 warn!(error = %e, "parquet replay emitter terminated with error");
             }
         });
@@ -101,12 +121,20 @@ impl BarSource for ParquetBarSource {
 /// One-shot constructor that builds every replay-side component. The
 /// returned `ReplayComponents` are designed to be unpacked at the
 /// `replay --engine basket` call site.
+///
+/// `bar_cache_dir` (optional): if set, decoded RTH-filtered bars for
+/// each symbol are cached as `<bar_cache_dir>/<symbol>.bin`. On a
+/// cache hit subsequent replays skip parquet decode entirely. Cache
+/// stores the parquet's full date range; the per-replay window slice
+/// happens in memory after the cache load. Operator owns the cache
+/// lifetime — `rm -rf <bar_cache_dir>` to invalidate.
 pub fn new_replay_components(
     bars_dir: PathBuf,
     start: NaiveDate,
     end: NaiveDate,
     portfolio_config: &PortfolioConfig,
     broker_config: crate::simulated_broker::SimulatedBrokerConfig,
+    bar_cache_dir: Option<PathBuf>,
 ) -> ReplayComponents {
     // Initial clock = start of the first session in the window. Updated
     // by the emitter task as bars flow.
@@ -121,6 +149,7 @@ pub fn new_replay_components(
         start,
         end,
         closes,
+        bar_cache_dir,
         channels: StdRwLock::new(Some(channels)),
     };
 
@@ -192,12 +221,14 @@ async fn emit_loop(
     bar_tx: mpsc::Sender<StreamBar>,
     channels: ReplayChannels,
     closes: SharedCloses,
+    bar_cache_dir: Option<&std::path::Path>,
 ) -> Result<(), String> {
     info!(
         bars_dir = %bars_dir.display(),
         start = %start,
         end = %end,
         symbol_count = symbols.len(),
+        bar_cache = ?bar_cache_dir.map(|p| p.display().to_string()),
         "replay emit loop starting"
     );
 
@@ -205,13 +236,10 @@ async fn emit_loop(
     // sorted vecs. Memory cost ≈ symbols × days × 390 rows × ~64B; for
     // 50 symbols × 250 trading days that's ~1GB worst case but in
     // practice we replay ~3 months at a time so well under that.
-    //
-    // For very long replay windows we'd want streaming reads; that's
-    // a follow-up.
     let mut per_symbol: BTreeMap<String, Vec<ParquetBar>> = BTreeMap::new();
     for symbol in symbols {
         let path = bars_dir.join(format!("{symbol}.parquet"));
-        match read_symbol_bars(&path, symbol, start, end) {
+        match read_symbol_bars(&path, symbol, start, end, bar_cache_dir) {
             Ok(bars) if !bars.is_empty() => {
                 debug!(symbol = %symbol, count = bars.len(), "loaded parquet bars");
                 per_symbol.insert(symbol.clone(), bars);
@@ -340,16 +368,25 @@ async fn drain_then_signal(
     }
 }
 
+/// Read RTH-filtered bars for a symbol within `[start, end]`.
+///
+/// When `cache_dir` is provided, decoded bars for the symbol's FULL
+/// parquet date range are cached as `<cache_dir>/<symbol>.bin` after
+/// the first decode. Subsequent calls slice the cached vec in memory
+/// by `start`/`end` instead of re-reading the parquet. Operator owns
+/// the cache lifetime — `rm -rf <cache_dir>` to invalidate when the
+/// upstream parquets change.
 fn read_symbol_bars(
     path: &std::path::Path,
-    _symbol: &str,
+    symbol: &str,
     start: NaiveDate,
     end: NaiveDate,
+    cache_dir: Option<&std::path::Path>,
 ) -> Result<Vec<ParquetBar>, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
-    let builder =
-        ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| format!("reader: {e}"))?;
-    let reader = builder.build().map_err(|e| format!("build: {e}"))?;
+    let all_bars = match cache_dir {
+        Some(dir) => read_or_build_full_cache(path, symbol, dir)?,
+        None => read_full_parquet_rth(path)?,
+    };
 
     let start_us = Utc
         .from_utc_datetime(&start.and_hms_opt(0, 0, 0).expect("hms"))
@@ -357,6 +394,19 @@ fn read_symbol_bars(
     let end_us = Utc
         .from_utc_datetime(&end.and_hms_opt(23, 59, 59).expect("hms"))
         .timestamp_micros();
+    Ok(all_bars
+        .into_iter()
+        .filter(|b| b.ts_us >= start_us && b.ts_us <= end_us)
+        .collect())
+}
+
+/// Read every RTH bar from the parquet (no date-range filter).
+/// Used both as the no-cache hot path and as the cache-builder source.
+fn read_full_parquet_rth(path: &std::path::Path) -> Result<Vec<ParquetBar>, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| format!("reader: {e}"))?;
+    let reader = builder.build().map_err(|e| format!("build: {e}"))?;
 
     let mut out = Vec::new();
     for batch in reader {
@@ -389,9 +439,6 @@ fn read_symbol_bars(
 
         for i in 0..batch.num_rows() {
             let ts_us = ts.value(i);
-            if ts_us < start_us || ts_us > end_us {
-                continue;
-            }
             let dt = match DateTime::from_timestamp(ts_us / 1_000_000, 0) {
                 Some(d) => d,
                 None => continue,
@@ -417,4 +464,173 @@ fn read_symbol_bars(
     }
     out.sort_by_key(|b| b.ts_us);
     Ok(out)
+}
+
+// ── Decode cache (binary, custom format, no extra deps) ──────────────
+//
+// Layout per file:
+//   [magic: 4 bytes "OBQB"]
+//   [version: u32 LE = 1]
+//   [count: u64 LE]
+//   [bars: count × (i64 ts_us + 5 × f64 OHLCV) LE = 48 bytes each]
+//
+// We rejected bincode/serde to avoid pulling another dep for a few
+// hundred lines of read/write. Format is dead-simple, byte-exact
+// reproducible across runs, and survives Rust struct field reorders
+// because the layout is explicit.
+
+const CACHE_MAGIC: [u8; 4] = *b"OBQB";
+const CACHE_VERSION: u32 = 1;
+const CACHE_BAR_BYTES: usize = 48;
+
+fn read_or_build_full_cache(
+    parquet_path: &std::path::Path,
+    symbol: &str,
+    cache_dir: &std::path::Path,
+) -> Result<Vec<ParquetBar>, String> {
+    let cache_path = cache_dir.join(format!("{symbol}.bin"));
+    if cache_path.exists() {
+        match read_cache(&cache_path) {
+            Ok(bars) => {
+                debug!(
+                    symbol = %symbol,
+                    cached_bars = bars.len(),
+                    path = %cache_path.display(),
+                    "bar cache hit"
+                );
+                return Ok(bars);
+            }
+            Err(e) => {
+                warn!(
+                    symbol = %symbol,
+                    error = %e,
+                    "bar cache read failed; rebuilding from parquet"
+                );
+            }
+        }
+    }
+
+    let bars = read_full_parquet_rth(parquet_path)?;
+    if let Err(e) = std::fs::create_dir_all(cache_dir) {
+        warn!(error = %e, "failed to create bar cache dir; skipping cache write");
+        return Ok(bars);
+    }
+    if let Err(e) = write_cache(&cache_path, &bars) {
+        warn!(symbol = %symbol, error = %e, "bar cache write failed; continuing without cache");
+    } else {
+        debug!(
+            symbol = %symbol,
+            cached_bars = bars.len(),
+            path = %cache_path.display(),
+            "bar cache built"
+        );
+    }
+    Ok(bars)
+}
+
+fn write_cache(path: &std::path::Path, bars: &[ParquetBar]) -> Result<(), String> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path).map_err(|e| format!("create: {e}"))?;
+    let mut buf = Vec::with_capacity(16 + bars.len() * CACHE_BAR_BYTES);
+    buf.extend_from_slice(&CACHE_MAGIC);
+    buf.extend_from_slice(&CACHE_VERSION.to_le_bytes());
+    buf.extend_from_slice(&(bars.len() as u64).to_le_bytes());
+    for b in bars {
+        buf.extend_from_slice(&b.ts_us.to_le_bytes());
+        buf.extend_from_slice(&b.open.to_le_bytes());
+        buf.extend_from_slice(&b.high.to_le_bytes());
+        buf.extend_from_slice(&b.low.to_le_bytes());
+        buf.extend_from_slice(&b.close.to_le_bytes());
+        buf.extend_from_slice(&b.volume.to_le_bytes());
+    }
+    f.write_all(&buf).map_err(|e| format!("write: {e}"))?;
+    Ok(())
+}
+
+fn read_cache(path: &std::path::Path) -> Result<Vec<ParquetBar>, String> {
+    let buf = std::fs::read(path).map_err(|e| format!("read: {e}"))?;
+    if buf.len() < 16 {
+        return Err("cache file truncated (header)".into());
+    }
+    if buf[0..4] != CACHE_MAGIC {
+        return Err(format!("cache magic mismatch: {:?}", &buf[0..4]));
+    }
+    let version = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+    if version != CACHE_VERSION {
+        return Err(format!(
+            "cache version mismatch: got {version}, want {CACHE_VERSION}"
+        ));
+    }
+    let count = u64::from_le_bytes(buf[8..16].try_into().unwrap()) as usize;
+    let body = &buf[16..];
+    let expected_body_len = count * CACHE_BAR_BYTES;
+    if body.len() != expected_body_len {
+        return Err(format!(
+            "cache body length mismatch: got {}, want {}",
+            body.len(),
+            expected_body_len
+        ));
+    }
+    let mut out = Vec::with_capacity(count);
+    for chunk in body.chunks_exact(CACHE_BAR_BYTES) {
+        out.push(ParquetBar {
+            ts_us: i64::from_le_bytes(chunk[0..8].try_into().unwrap()),
+            open: f64::from_le_bytes(chunk[8..16].try_into().unwrap()),
+            high: f64::from_le_bytes(chunk[16..24].try_into().unwrap()),
+            low: f64::from_le_bytes(chunk[24..32].try_into().unwrap()),
+            close: f64::from_le_bytes(chunk[32..40].try_into().unwrap()),
+            volume: f64::from_le_bytes(chunk[40..48].try_into().unwrap()),
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip() {
+        let bars = vec![
+            ParquetBar {
+                ts_us: 1_700_000_000_000_000,
+                open: 100.0,
+                high: 101.5,
+                low: 99.5,
+                close: 100.75,
+                volume: 0.0,
+            },
+            ParquetBar {
+                ts_us: 1_700_000_060_000_000,
+                open: 100.75,
+                high: 102.0,
+                low: 100.25,
+                close: 101.5,
+                volume: 0.0,
+            },
+        ];
+        let tmp = std::env::temp_dir().join("oq_cache_roundtrip_test.bin");
+        write_cache(&tmp, &bars).unwrap();
+        let read = read_cache(&tmp).unwrap();
+        assert_eq!(read.len(), bars.len());
+        for (a, b) in bars.iter().zip(read.iter()) {
+            assert_eq!(a.ts_us, b.ts_us);
+            assert!((a.open - b.open).abs() < 1e-12);
+            assert!((a.close - b.close).abs() < 1e-12);
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn rejects_bad_magic() {
+        let tmp = std::env::temp_dir().join("oq_cache_bad_magic.bin");
+        std::fs::write(
+            &tmp,
+            b"XXXX\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        )
+        .unwrap();
+        let err = read_cache(&tmp).unwrap_err();
+        assert!(err.contains("magic"));
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
