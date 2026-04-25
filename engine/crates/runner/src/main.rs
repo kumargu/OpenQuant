@@ -202,10 +202,6 @@ struct ReplayArgs {
     #[arg(long)]
     bars_dir: Option<PathBuf>,
 
-    /// Frozen basket fit artifact (basket only). Defaults to `<universe>.fits.json`.
-    #[arg(long)]
-    fit_artifact: Option<PathBuf>,
-
     /// Persisted basket engine state (basket only). Defaults to an isolated
     /// path under `<data-dir>/replay/<universe-stem>.state.json` so replay
     /// never reads or writes the live default `.state.json`.
@@ -215,10 +211,6 @@ struct ReplayArgs {
     /// Starting capital for the simulated broker (basket only, default 10000).
     #[arg(long, default_value_t = 10_000.0)]
     capital: f64,
-
-    /// Leverage multiplier for the simulated broker (basket only, default 4.0).
-    #[arg(long, default_value_t = 4.0)]
-    leverage: f64,
 
     /// Max active baskets (basket only, default 5).
     #[arg(long, default_value_t = 5)]
@@ -595,7 +587,6 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         &clock,
         &mut session_trigger,
         &universe_path,
-        &fit_artifact_path,
         &state_path,
         &bars_dir,
         execution,
@@ -1276,11 +1267,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             })
     });
 
-    let fit_artifact_path = args
-        .fit_artifact
-        .clone()
-        .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
-
     // Replay state isolation: never touch the live default state path.
     let state_path = args.state_path.clone().unwrap_or_else(|| {
         let stem = universe_path
@@ -1342,16 +1328,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         std::process::exit(1);
     }
 
-    let portfolio_config = basket_engine::PortfolioConfig {
-        capital: args.capital,
-        leverage: args.leverage,
-        n_active_baskets: args.n_active_baskets,
-    };
-    if let Err(e) = portfolio_config.validate() {
-        error!(error = %e, "invalid portfolio config");
-        std::process::exit(1);
-    }
-
     let universe = match basket_picker::load_universe(&universe_path) {
         Ok(u) => u,
         Err(e) => {
@@ -1360,23 +1336,38 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         }
     };
 
-    let fit_artifact = match basket_fits::load_fit_artifact(&fit_artifact_path, &universe) {
-        Ok(a) => a,
-        Err(e) => {
-            error!(
-                error = %e,
-                fit_artifact = %fit_artifact_path.display(),
-                "failed to load frozen basket fit artifact"
-            );
-            error!(
-                "build it first with: openquant-runner freeze-basket-fits --universe {} --bars-dir {} --out {}",
-                universe_path.display(),
-                bars_dir.display(),
-                fit_artifact_path.display()
-            );
-            std::process::exit(1);
-        }
+    // Leverage comes from the universe TOML (`strategy.leverage_assumed`).
+    // Replay must use the same leverage the strategy was designed against;
+    // that's a config value, not a CLI knob.
+    let portfolio_config = basket_engine::PortfolioConfig {
+        capital: args.capital,
+        leverage: universe.strategy.leverage_assumed,
+        n_active_baskets: args.n_active_baskets,
     };
+    if let Err(e) = portfolio_config.validate() {
+        error!(error = %e, "invalid portfolio config");
+        std::process::exit(1);
+    }
+
+    // Walk-forward fit: build the basket fit using data STRICTLY BEFORE
+    // the replay window (`--start`). Without this, replay leaks future
+    // information into the fit and produces fantasy Sharpe numbers
+    // (#306 finding: a fit that overlapped the replay window by ~40%
+    // produced Sharpe 10.66; with strict OOS data the same window
+    // dropped to a realistic single-digit number).
+    info!(
+        as_of = %start,
+        residual_window_days = universe.strategy.residual_window_days,
+        "building replay fit from data strictly before --start"
+    );
+    let fit_artifact =
+        match basket_fits::build_replay_fit_artifact_as_of(&universe_path, &bars_dir, start) {
+            Ok(a) => a,
+            Err(e) => {
+                error!(error = %e, "failed to build replay fit artifact");
+                std::process::exit(1);
+            }
+        };
 
     let symbols: Vec<String> = {
         let mut s: Vec<String> = universe
@@ -1392,7 +1383,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     info!(
         universe = %universe_path.display(),
         bars_dir = %bars_dir.display(),
-        fit_artifact = %fit_artifact_path.display(),
         state_path = %state_path.display(),
         start = %start,
         end = %end,
@@ -1437,7 +1427,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         &clock,
         &mut session_trigger,
         &universe_path,
-        &fit_artifact_path,
         &state_path,
         &bars_dir,
         execution,
