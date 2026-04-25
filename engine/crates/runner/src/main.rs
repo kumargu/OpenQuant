@@ -188,8 +188,13 @@ struct ReplayArgs {
     #[arg(long)]
     end: String,
 
-    /// Bar cache directory. When set, bars are read from cache and fetched
-    /// bars are written to cache for future runs.
+    /// Bar cache directory. Two distinct uses depending on engine.
+    /// Pair engines (snp500/metals): caches Alpaca REST minute bars
+    /// (JSONL per (symbol, day)) so repeated runs don't refetch. Basket:
+    /// caches RTH-filtered decoded ParquetBar vectors per symbol (binary,
+    /// `<dir>/<symbol>.bin`). On hit, replay skips the parquet decode +
+    /// RTH filter at startup. Operator manages cache lifetime — `rm -rf
+    /// <dir>` to invalidate when upstream data changes.
     #[arg(long)]
     bar_cache: Option<PathBuf>,
 
@@ -215,6 +220,21 @@ struct ReplayArgs {
     /// Max active baskets (basket only, default 5).
     #[arg(long, default_value_t = 5)]
     n_active_baskets: usize,
+
+    /// Adverse-move stop-loss in z-units. Position is force-flattened
+    /// when its spread drifts more than this many z-units against the
+    /// trade. Default 0.0 = disabled (pure Bertram symmetric); pass
+    /// `--stop-loss-z 2.0` (or any positive value) to enable. Q4 2025
+    /// A/B showed stop@2.0 hurts at cap=5; revisit once cap/
+    /// diversification is tuned.
+    #[arg(long, default_value_t = 0.0)]
+    stop_loss_z: f64,
+
+    /// Force-disable the adverse-move stop-loss regardless of
+    /// `--stop-loss-z`. Convenience flag for scripts that always set
+    /// a value but want to A/B test no-stop variants.
+    #[arg(long, default_value_t = false)]
+    no_stop_loss: bool,
 
     /// One-sided fill slippage in basis points (basket only, default 0).
     #[arg(long, default_value_t = 0.0)]
@@ -1339,10 +1359,16 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     // Leverage comes from the universe TOML (`strategy.leverage_assumed`).
     // Replay must use the same leverage the strategy was designed against;
     // that's a config value, not a CLI knob.
+    let stop_loss_z = if args.no_stop_loss || args.stop_loss_z <= 0.0 {
+        None
+    } else {
+        Some(args.stop_loss_z)
+    };
     let portfolio_config = basket_engine::PortfolioConfig {
         capital: args.capital,
         leverage: universe.strategy.leverage_assumed,
         n_active_baskets: args.n_active_baskets,
+        stop_loss_z,
     };
     if let Err(e) = portfolio_config.validate() {
         error!(error = %e, "invalid portfolio config");
@@ -1407,6 +1433,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         end,
         &portfolio_config,
         broker_config,
+        args.bar_cache.clone(),
     );
     let parquet_bar_source::ReplayComponents {
         bar_source,

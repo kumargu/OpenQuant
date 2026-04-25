@@ -29,8 +29,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use basket_engine::{
-    diff_to_orders, plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig,
-    PositionIntent, Side,
+    diff_to_orders, plan_portfolio_for_equity, BasketEngine, DailyBar, OrderIntent,
+    PortfolioConfig, PositionIntent, Side,
 };
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -136,6 +136,22 @@ fn parse_buying_power(account: &crate::alpaca::AlpacaAccount) -> Result<f64, Str
         ));
     }
     Ok(buying_power)
+}
+
+/// Parse account equity from the broker snapshot. Used at session-close
+/// time to size per-basket notionals dynamically from current equity
+/// instead of static initial capital — defends against the Q4 2024
+/// feedback loop where a drawdown left target gross above buying power
+/// and the broker rejected orders piecemeal, lopsiding the hedge book.
+fn parse_equity(account: &crate::alpaca::AlpacaAccount) -> Result<f64, String> {
+    let equity = account
+        .equity
+        .parse::<f64>()
+        .map_err(|e| format!("invalid Alpaca equity '{}': {e}", account.equity))?;
+    if !equity.is_finite() || equity <= 0.0 {
+        return Err(format!("Alpaca equity is not positive: {}", account.equity));
+    }
+    Ok(equity)
 }
 
 async fn check_order_set_affordability(
@@ -384,6 +400,35 @@ pub async fn run_basket_live(
         info!(baskets = fresh.num_baskets(), "basket engine initialized");
         fresh
     };
+
+    // Push the active-basket cap into the engine so it can self-enforce
+    // at entry time. Without this, all 43 baskets generated initial
+    // entries every session and the portfolio cap flattened the
+    // lower-|z| ones — including baskets that were *mid-mean-reversion*
+    // (smaller |z|) at exactly the moment they were about to pay off.
+    // Q4 2025 telemetry confirmed: 2,153 transitions, 0 flips. Moving
+    // the cap to entry time (FCFS-style admission) lets entered
+    // positions live until their own engine-level exit signal fires.
+    engine.set_max_active_positions(portfolio_config.n_active_baskets);
+    info!(
+        max_active_positions = portfolio_config.n_active_baskets,
+        "engine configured with entry-time active-basket cap"
+    );
+
+    // Adverse-move stop-loss in z-units. Positions whose spread drifts
+    // more than `stop_loss_z` against the trade get force-flattened
+    // and the basket is suspended from re-entry until |z| < k. Without
+    // this, a basket whose cointegration breaks during the walk-
+    // forward window holds indefinitely (Q4 2025: PNC long stuck at
+    // z=-3.91 vs entry z=-1.12, TFC short stuck at z=+4.18 vs entry
+    // z=+0.49, both bleeding the entire quarter). Lab swept
+    // [1.5..4.0] and found 2.0 best — see
+    // `quant-lab/statarb/stop_loss_experiment.py`.
+    engine.set_stop_loss_z(portfolio_config.stop_loss_z);
+    info!(
+        stop_loss_z = ?portfolio_config.stop_loss_z,
+        "engine configured with adverse-move stop-loss"
+    );
 
     // 2. Seed current_shares from Alpaca positions (startup reconciliation).
     //    Without this, a restart with live open positions would trigger
@@ -844,9 +889,55 @@ async fn process_session_close(
         );
     }
 
+    // Query current account equity from the broker so portfolio sizing
+    // tracks live capital instead of the static `config.capital`. This
+    // is the load-bearing fix for the Q4 2024 feedback-loop bug:
+    // sizing off initial capital meant a drawdown made `target_gross >
+    // buying_power`, broker rejected orders piecemeal, hedge book ended
+    // up lopsided, next day's losses widened the gap further.
+    //
+    // Noop mode (no broker connection in shadow runs) falls back to
+    // `config.capital` so the planning math stays valid.
+    let sizing_equity = match execution.alpaca_mode() {
+        Some(mode) => match broker.get_account(mode).await {
+            Ok(account) => match parse_equity(&account) {
+                Ok(equity) => {
+                    info!(
+                        date = %date,
+                        equity = %format_args!("{:.2}", equity),
+                        "sized portfolio off live broker equity"
+                    );
+                    equity
+                }
+                Err(e) => {
+                    warn!(
+                        date = %date,
+                        error = %e,
+                        fallback = %format_args!("{:.2}", portfolio_config.capital),
+                        "failed to parse broker equity; falling back to config.capital"
+                    );
+                    portfolio_config.capital
+                }
+            },
+            Err(e) => {
+                warn!(
+                    date = %date,
+                    error = %e,
+                    fallback = %format_args!("{:.2}", portfolio_config.capital),
+                    "failed to fetch broker account; falling back to config.capital"
+                );
+                portfolio_config.capital
+            }
+        },
+        None => portfolio_config.capital,
+    };
+
     // Portfolio layer: apply active-basket admission first, then convert
-    // admitted target notionals to target shares.
-    let plan = plan_portfolio(engine, portfolio_config);
+    // admitted target notionals to target shares. Dynamic sizing off
+    // current equity (via plan_portfolio_for_equity) leaves a 10%
+    // buying-power buffer so per-symbol rounding + plan/submit drift
+    // can't push the actual gross over the broker cap.
+    let plan = plan_portfolio_for_equity(engine, portfolio_config, sizing_equity);
     let target_notionals = plan.symbol_notionals;
     if !plan.excluded_baskets.is_empty() {
         engine.flatten_baskets(&plan.excluded_baskets);
@@ -866,7 +957,14 @@ async fn process_session_close(
         sorted_abs[sorted_abs.len() / 2]
     };
     let gross_notional = gross_long + gross_short.abs();
-    let gross_cap = portfolio_config.capital * portfolio_config.leverage;
+    // Cap is `current equity × leverage`, NOT `initial capital ×
+    // leverage`. The strategy's actual buying power tracks live equity
+    // — gating on the static initial value would falsely error out
+    // once the strategy has gained ~10%+ (equity rises but the static
+    // cap stays put). Tolerance of 1.0 absorbs sub-share rounding;
+    // structural over-runs trip the planner instead of waiting for
+    // the broker to reject orders.
+    let gross_cap = sizing_equity * portfolio_config.leverage;
     info!(
         date = %date,
         targets = target_notionals.len(),
@@ -883,8 +981,8 @@ async fn process_session_close(
     );
     if gross_notional > gross_cap + 1.0 {
         return Err(format!(
-            "target gross notional {:.2} exceeds configured cap {:.2}",
-            gross_notional, gross_cap
+            "target gross notional {:.2} exceeds buying-power cap {:.2} (equity {:.2})",
+            gross_notional, gross_cap, sizing_equity
         ));
     }
     if !plan.excluded_baskets.is_empty() {

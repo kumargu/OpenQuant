@@ -1,6 +1,6 @@
 //! Main basket engine with Bertram symmetric state machine.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -53,8 +53,11 @@ impl BasketParams {
 pub struct EngineSnapshot {
     /// Per-basket parameters (frozen).
     pub params: Vec<BasketParams>,
-    /// Per-basket runtime state.
-    pub states: HashMap<String, BasketState>,
+    /// Per-basket runtime state. `BTreeMap` so reload preserves the
+    /// engine's deterministic iteration order (#315). JSON-on-disk
+    /// shape is unchanged — `BTreeMap` and `HashMap` serialize
+    /// identically to `{"key": value, ...}`.
+    pub states: BTreeMap<String, BasketState>,
     /// Last trading day that the runner fully processed. Optional so older
     /// snapshots remain readable.
     #[serde(default)]
@@ -62,18 +65,65 @@ pub struct EngineSnapshot {
 }
 
 /// The basket engine: manages state machines for all active baskets.
+///
+/// `params` and `states` are `BTreeMap`s — not `HashMap`s — because
+/// any iteration over them feeds into f64 sums (see
+/// `portfolio::plan_portfolio`'s `symbol_notionals += leg.notional`
+/// and the per-bar update loop in `on_bars`). `HashMap` iteration is
+/// randomized per-process in Rust; ordering-dependent f64 sums then
+/// drift across runs and break replay reproducibility (#315).
+/// `BTreeMap`'s sorted iteration gives us bit-exact reproducibility
+/// at the cost of O(log N) lookups, which is negligible at N ≈ 50.
 pub struct BasketEngine {
     /// Per-basket parameters (frozen after construction).
-    params: HashMap<String, BasketParams>,
+    params: BTreeMap<String, BasketParams>,
     /// Per-basket runtime state.
-    states: HashMap<String, BasketState>,
+    states: BTreeMap<String, BasketState>,
+    /// Hard cap on how many baskets can be in a non-flat position
+    /// simultaneously. `None` = unlimited (test default). When set,
+    /// `on_bars` rejects new initial entries (flat → long or flat →
+    /// short) once the cap is reached. Flips of existing positions
+    /// are always allowed because they don't grow the active set.
+    ///
+    /// This used to be enforced after the fact by
+    /// `plan_portfolio.flatten_baskets`, which ranked all in-position
+    /// baskets by current `|z|` and flattened the lower-ranked ones.
+    /// That was anti-mean-reversion: a position whose spread was
+    /// reverting toward zero would have a SHRINKING `|z|`, get
+    /// out-ranked by a freshly dislocated basket with bigger `|z|`,
+    /// and be flattened — exactly when it was about to be profitable.
+    /// Q4 2025 telemetry showed this directly: 2,153 transitions, 0
+    /// of which were flips. Every transition was either an initial
+    /// entry or a flatten-by-rank. Moving the cap to entry time
+    /// (FCFS-style admission) lets entered positions live until
+    /// their own engine-level exit signal fires.
+    max_active_positions: Option<usize>,
+    /// Adverse-move stop in z-units. If `Some(s)`, an open position
+    /// is force-flattened when the spread has moved against the trade
+    /// by more than `s` z-units beyond its entry z (long-stop:
+    /// `entry_z - z > s`; short-stop: `z - entry_z > s`).
+    ///
+    /// Without this, a basket whose cointegration breaks during the
+    /// walk-forward window sits in a losing position indefinitely —
+    /// Bertram's symmetric-flip exit only fires when the spread
+    /// returns to the opposite ±k threshold, which never happens once
+    /// the OU model no longer describes the data. Q4 2025 replay
+    /// observed PNC long entered at z=-1.12 drift to z=-3.91, TFC
+    /// short entered at z=+0.49 drift to z=+4.18 — both far from any
+    /// flip threshold, both bleeding the entire quarter.
+    ///
+    /// Lab `stop_loss_experiment.py` swept `[1.5, 2.0, 2.5, 3.0, 4.0,
+    /// inf]` across 49 baskets / 9 sectors and found 2.0σ best
+    /// (Sharpe 3.36 vs no_stop's much lower terminal equity and
+    /// deeper drawdowns). Default here matches.
+    stop_loss_z: Option<f64>,
 }
 
 impl BasketEngine {
     /// Create a new engine from validated basket fits.
     pub fn new(fits: &[BasketFit]) -> Self {
-        let mut params = HashMap::new();
-        let mut states = HashMap::new();
+        let mut params = BTreeMap::new();
+        let mut states = BTreeMap::new();
 
         for fit in fits {
             if let Some(p) = BasketParams::from_fit(fit) {
@@ -83,7 +133,27 @@ impl BasketEngine {
             }
         }
 
-        Self { params, states }
+        Self {
+            params,
+            states,
+            max_active_positions: None,
+            stop_loss_z: None,
+        }
+    }
+
+    /// Set the maximum number of baskets that can be in a non-flat
+    /// position simultaneously. Live/paper/replay should call this
+    /// once at startup with `PortfolioConfig.n_active_baskets` so the
+    /// engine self-enforces the cap at entry time.
+    pub fn set_max_active_positions(&mut self, max: usize) {
+        self.max_active_positions = Some(max);
+    }
+
+    /// Set the adverse-move stop-loss threshold in z-units. See the
+    /// field doc on `stop_loss_z` for behavior. Pass `None` to disable
+    /// (degenerates to pure Bertram symmetric-flip).
+    pub fn set_stop_loss_z(&mut self, stop_z: Option<f64>) {
+        self.stop_loss_z = stop_z;
     }
 
     /// Get the number of active baskets.
@@ -131,6 +201,17 @@ impl BasketEngine {
         let mut skipped_nan_z = 0usize;
         let mut near_threshold = 0usize;
         let mut transitioned = 0usize;
+        let mut skipped_at_cap = 0usize;
+        let mut stopped_out = 0usize;
+        let mut suspended_re_armed = 0usize;
+        let mut skipped_suspended = 0usize;
+
+        // Snapshot how many baskets are currently in a non-flat
+        // position at the start of this `on_bars`. Updated locally as
+        // we admit new entries below; flips don't change the count.
+        let mut active_position_count = self.states.values().filter(|s| s.position != 0).count();
+        let cap = self.max_active_positions;
+        let stop_z = self.stop_loss_z;
 
         for (basket_id, params) in &self.params {
             let state = match self.states.get_mut(basket_id) {
@@ -217,6 +298,27 @@ impl BasketEngine {
             let k = params.threshold_k;
             let old_pos = state.position;
 
+            // Lazy backfill of `entry_z` for legacy in-position states.
+            // Pre-stop-loss snapshots persisted before `entry_z` existed
+            // — Serde rehydrates those open positions with `entry_z =
+            // None`. The stop-loss check below would then compute
+            // `adverse = 0.0` and never fire, leaving upgraded
+            // operators with effectively no stop on already-open
+            // trades (Codex P1 #318). Anchor the stop to the first
+            // post-upgrade z so the protection kicks in from now
+            // forward — the alternative (pretend the trade was just
+            // opened at z=0) understates adverse drift, the option of
+            // exempting legacy state is what the bug report flags.
+            if old_pos != 0 && state.entry_z.is_none() {
+                state.entry_z = Some(z);
+                warn!(
+                    basket_id = %basket_id,
+                    z = %format!("{:.4}", z),
+                    pos = old_pos,
+                    "legacy in-position snapshot lacks entry_z; anchoring stop-loss to current z"
+                );
+            }
+
             // Near-threshold counter — any basket with |z| > 0.75k is "close
             // to firing." Tracking this gives us a pulse on whether the
             // strategy is actually seeing opportunity vs. sitting flat.
@@ -247,29 +349,94 @@ impl BasketEngine {
                 "basket z-check"
             );
 
-            // Bertram symmetric state machine
+            // Re-arm the entry gate: a previously stopped-out basket
+            // becomes eligible again only once the spread is back
+            // inside the Bertram band (`|z| < k`). This prevents the
+            // pathology where a basket stops out at z=±s_stop, the
+            // very next bar still has |z| > k, and the engine
+            // immediately re-enters at the same adverse z and
+            // re-stops. Mirrors quant-lab `simulate_bertram_with_stop`.
+            if state.suspended && z.abs() < k {
+                state.suspended = false;
+                suspended_re_armed += 1;
+                debug!(
+                    basket_id = %basket_id,
+                    z = %format!("{:.4}", z),
+                    k = %format!("{:.4}", k),
+                    "stop-loss re-armed (spread back inside band)"
+                );
+            }
+
+            // Bertram symmetric state machine + adverse-move stop.
+            // The stop check runs FIRST when in a position, so a stop
+            // takes precedence over a flip on the same bar.
+            let mut at_cap_skip = false;
+            let mut stop_triggered = false;
             let (new_pos, reason) = match old_pos {
                 0 => {
-                    // Flat: enter on threshold breach
-                    if z < -k {
+                    // Flat: enter on threshold breach. Entry-time cap
+                    // gates new admissions — see the field doc on
+                    // `BasketEngine::max_active_positions`. We count
+                    // current active positions BEFORE this branch
+                    // mutates `active_position_count`.
+                    let entry_allowed = match cap {
+                        Some(max) => active_position_count < max,
+                        None => true,
+                    };
+                    if state.suspended {
+                        // Still locked out from a prior stop; the band
+                        // hasn't re-armed yet. Don't admit even if
+                        // |z| > k.
+                        if z < -k || z > k {
+                            skipped_suspended += 1;
+                        }
+                        (0, None)
+                    } else if !entry_allowed {
+                        if z < -k || z > k {
+                            // Real signal we're declining due to cap;
+                            // log so the operator can see if the cap
+                            // is starving the strategy.
+                            at_cap_skip = true;
+                        }
+                        (0, None)
+                    } else if z < -k {
+                        active_position_count += 1;
                         (1, Some(TransitionReason::InitialEntryLong))
                     } else if z > k {
+                        active_position_count += 1;
                         (-1, Some(TransitionReason::InitialEntryShort))
                     } else {
                         (0, None)
                     }
                 }
                 1 => {
-                    // Long: flip to short when z > k
-                    if z > k {
+                    // Long: stop out if z has drifted adversely below
+                    // entry by more than `stop_z`. Otherwise flip to
+                    // short on z > +k. Flips don't grow the active
+                    // set (still 1 position) so the cap doesn't apply.
+                    let adverse = state.entry_z.map(|ez| ez - z).unwrap_or(0.0);
+                    let stopped = stop_z.is_some_and(|s| adverse > s);
+                    if stopped {
+                        stop_triggered = true;
+                        active_position_count = active_position_count.saturating_sub(1);
+                        (0, Some(TransitionReason::StopLossLong))
+                    } else if z > k {
                         (-1, Some(TransitionReason::FlipLongToShort))
                     } else {
                         (1, None)
                     }
                 }
                 -1 => {
-                    // Short: flip to long when z < -k
-                    if z < -k {
+                    // Short: stop out if z has drifted adversely above
+                    // entry by more than `stop_z`. Otherwise flip to
+                    // long on z < -k.
+                    let adverse = state.entry_z.map(|ez| z - ez).unwrap_or(0.0);
+                    let stopped = stop_z.is_some_and(|s| adverse > s);
+                    if stopped {
+                        stop_triggered = true;
+                        active_position_count = active_position_count.saturating_sub(1);
+                        (0, Some(TransitionReason::StopLossShort))
+                    } else if z < -k {
                         (1, Some(TransitionReason::FlipShortToLong))
                     } else {
                         (-1, None)
@@ -277,23 +444,60 @@ impl BasketEngine {
                 }
                 _ => (old_pos, None),
             };
+            if at_cap_skip {
+                skipped_at_cap += 1;
+            }
+            if stop_triggered {
+                stopped_out += 1;
+            }
 
             // Apply state transition if any
             if let Some(reason) = reason {
+                // Capture the prior position's entry context BEFORE we
+                // overwrite it, so the transition log can compare
+                // entry-z vs exit-z, entry-spread vs current spread, and
+                // compute a holding-period in trading days. This is the
+                // load-bearing telemetry for "is the strategy doing
+                // mean-reversion or whipsawing on noise?"
+                let entry_z = state.entry_z;
+                let entry_spread = state.entry_spread;
+                let entry_date = state.entry_date;
                 if old_pos == 0 {
-                    state.enter(new_pos, date, spread);
+                    state.enter(new_pos, date, spread, z);
+                } else if new_pos == 0 {
+                    // Stop-out path: flatten and arm the re-entry gate
+                    // so we don't immediately re-enter at the same
+                    // adverse z on the next bar.
+                    state.stop_out();
                 } else {
-                    state.flip(date, spread);
+                    state.flip(date, spread, z);
                 }
 
                 transitioned += 1;
 
+                let holding_days = entry_date.and_then(|d| (date - d).num_days().into());
+                let spread_move = entry_spread.map(|es| spread - es);
+                // Sign convention: spread = log(target) - mean(log(peers)).
+                // A LONG basket (position=+1) holds target long and peers
+                // short via `basket_to_legs`, so it profits when target
+                // outperforms peers — i.e. when spread RISES. SHORT (-1)
+                // profits when spread falls. Per-unit-notional P&L is
+                // therefore (Δspread) × old_pos. The previous formula
+                // negated old_pos and flipped every gain/loss in the
+                // telemetry log — masking that flips at z≈±k were
+                // actually winning trades while the aggregated portfolio
+                // was bleeding from a different cause.
+                let pnl_per_unit_notional = entry_spread.map(|es| (spread - es) * (old_pos as f64));
                 info!(
                     basket_id = %basket_id,
                     z_score = %format!("{:.4}", z),
+                    entry_z = ?entry_z.map(|v| format!("{:.4}", v)),
                     old_pos = old_pos,
                     new_pos = new_pos,
                     spread = %format!("{:.6}", spread),
+                    spread_move = ?spread_move.map(|v| format!("{:.6}", v)),
+                    pnl_per_unit = ?pnl_per_unit_notional.map(|v| format!("{:.6}", v)),
+                    holding_days = ?holding_days,
                     reason = %reason.as_str(),
                     "position_transition"
                 );
@@ -322,6 +526,13 @@ impl BasketEngine {
             skipped_nan_z,
             near_threshold,
             transitioned,
+            skipped_at_cap,
+            stopped_out,
+            suspended_re_armed,
+            skipped_suspended,
+            active_after = active_position_count,
+            cap = ?cap,
+            stop_z = ?stop_z,
             intents_emitted = intents.len(),
             "on_bars summary"
         );
@@ -366,7 +577,7 @@ impl BasketEngine {
     pub fn load_state(path: &Path) -> Result<Self, String> {
         let snapshot = Self::load_snapshot(path)?;
 
-        let mut params = HashMap::new();
+        let mut params = BTreeMap::new();
         for p in snapshot.params {
             params.insert(p.basket_id.clone(), p);
         }
@@ -374,11 +585,13 @@ impl BasketEngine {
         Ok(Self {
             params,
             states: snapshot.states,
+            max_active_positions: None,
+            stop_loss_z: None,
         })
     }
 
     /// Replace runtime states while preserving the engine's current params.
-    pub fn apply_states(&mut self, states: HashMap<String, BasketState>) -> Result<(), String> {
+    pub fn apply_states(&mut self, states: BTreeMap<String, BasketState>) -> Result<(), String> {
         let snapshot = EngineSnapshot {
             params: self.params.values().cloned().collect(),
             states,
@@ -694,6 +907,255 @@ mod tests {
         let loaded_state = loaded.get_state(&test_basket_id()).unwrap();
         assert_eq!(orig_state.position, loaded_state.position);
         assert_eq!(orig_state.entry_date, loaded_state.entry_date);
+    }
+
+    #[test]
+    fn test_stop_loss_long_triggers_then_re_arms() {
+        // Walk through the full stop-loss lifecycle on a long basket:
+        //   1. Enter long when z dips below -k.
+        //   2. Spread keeps drifting more negative — z exceeds the
+        //      adverse-move stop → flatten + suspend.
+        //   3. Spread recovers inside the band (|z| < k) → re-arm.
+        //   4. Spread dips below -k again → re-enter long.
+        // Without re-arm, step 4 would either re-enter immediately at
+        // a still-adverse z (and re-stop) or never re-enter at all.
+        let fit = make_test_fit(); // mu=0, sigma_eq=0.032, k=1.25
+        let mut engine = BasketEngine::new(&[fit]);
+        engine.set_stop_loss_z(Some(2.0));
+        let basket_id = test_basket_id();
+
+        // Day 1 — strong dislocation, log spread ≈ -0.105 → z ≈ -3.3.
+        // z < -k → enter long. Entry z is captured for the stop check.
+        let date1 = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        let bars_day1 = vec![
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date1,
+                close: 90.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date1,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date1,
+                close: 100.0,
+            },
+        ];
+        let intents1 = engine.on_bars(&bars_day1);
+        assert_eq!(intents1.len(), 1);
+        assert_eq!(intents1[0].reason, TransitionReason::InitialEntryLong);
+        assert_eq!(engine.get_state(&basket_id).unwrap().position, 1);
+        let entry_z = engine.get_state(&basket_id).unwrap().entry_z.unwrap();
+        assert!(entry_z < -1.25, "should have entered with z < -k");
+
+        // Day 2 — spread further away from mean: log(80/100) = -0.223
+        // → z ≈ -7.0. adverse = entry_z(-3.3) - z(-7.0) ≈ +3.7 > 2.0.
+        // Stop-out fires. State flattens, suspended=true.
+        let date2 = NaiveDate::from_ymd_opt(2026, 4, 22).unwrap();
+        let bars_day2 = vec![
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date2,
+                close: 80.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date2,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date2,
+                close: 100.0,
+            },
+        ];
+        let intents2 = engine.on_bars(&bars_day2);
+        assert_eq!(intents2.len(), 1);
+        assert_eq!(intents2[0].reason, TransitionReason::StopLossLong);
+        assert_eq!(intents2[0].target_position, 0);
+        let st2 = engine.get_state(&basket_id).unwrap();
+        assert_eq!(st2.position, 0);
+        assert!(st2.suspended, "stop-out must arm the re-entry gate");
+
+        // Day 3 — spread back well inside the band (z ≈ 0). Suspended
+        // is cleared the moment |z| < k. No new entry yet.
+        let date3 = NaiveDate::from_ymd_opt(2026, 4, 23).unwrap();
+        let bars_day3 = vec![
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date3,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date3,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date3,
+                close: 100.0,
+            },
+        ];
+        let intents3 = engine.on_bars(&bars_day3);
+        assert!(intents3.is_empty(), "no entry while z is inside the band");
+        let st3 = engine.get_state(&basket_id).unwrap();
+        assert!(!st3.suspended, "must re-arm once |z| < k");
+
+        // Day 4 — fresh dislocation. Re-entry fires.
+        let date4 = NaiveDate::from_ymd_opt(2026, 4, 24).unwrap();
+        let bars_day4 = bars_day1
+            .iter()
+            .map(|b| DailyBar {
+                date: date4,
+                ..b.clone()
+            })
+            .collect::<Vec<_>>();
+        let intents4 = engine.on_bars(&bars_day4);
+        assert_eq!(intents4.len(), 1);
+        assert_eq!(intents4[0].reason, TransitionReason::InitialEntryLong);
+    }
+
+    #[test]
+    fn test_stop_loss_disabled_by_default() {
+        // No `set_stop_loss_z` call → no stop. Position rides through
+        // an arbitrarily large adverse move (Bertram baseline behavior).
+        let fit = make_test_fit();
+        let mut engine = BasketEngine::new(&[fit]);
+        let basket_id = test_basket_id();
+
+        let date1 = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        let _ = engine.on_bars(&[
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date1,
+                close: 90.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date1,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date1,
+                close: 100.0,
+            },
+        ]);
+        assert_eq!(engine.get_state(&basket_id).unwrap().position, 1);
+
+        // Far-adverse move that WOULD have stopped at 2.0σ.
+        let date2 = NaiveDate::from_ymd_opt(2026, 4, 22).unwrap();
+        let intents2 = engine.on_bars(&[
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date2,
+                close: 60.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date2,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date2,
+                close: 100.0,
+            },
+        ]);
+        assert!(
+            intents2.is_empty(),
+            "no transitions should fire without stop set"
+        );
+        assert_eq!(
+            engine.get_state(&basket_id).unwrap().position,
+            1,
+            "position must persist with stop disabled"
+        );
+    }
+
+    #[test]
+    fn test_legacy_state_without_entry_z_arms_stop_on_first_bar() {
+        // Pre-stop-loss snapshots persisted in-position baskets without
+        // an `entry_z` field. Without explicit handling, the stop-loss
+        // check would unwrap that `None` to 0.0 and never fire —
+        // operators upgrading their state.json silently lose stop
+        // protection on every already-open trade until it next flips.
+        // After lazy backfill, the FIRST `on_bars` call seeds
+        // `entry_z` from the current z so the stop is armed from now
+        // forward. Codex P1 review on PR #318.
+        let fit = make_test_fit();
+        let mut engine = BasketEngine::new(&[fit]);
+        engine.set_stop_loss_z(Some(2.0));
+        let basket_id = test_basket_id();
+
+        // Manually force the engine into a legacy in-position state:
+        // long, but `entry_z = None` (mimicking deserialization of an
+        // older snapshot).
+        {
+            let st = engine.states.get_mut(&basket_id).unwrap();
+            st.position = 1;
+            st.entry_date = Some(NaiveDate::from_ymd_opt(2026, 4, 20).unwrap());
+            st.entry_spread = Some(0.0);
+            st.entry_z = None;
+        }
+
+        // First post-upgrade bar — z is mildly negative but inside
+        // the band. Backfill should anchor entry_z to this z so the
+        // stop is armed; no transition fires this bar.
+        let date1 = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        let intents1 = engine.on_bars(&[
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date1,
+                close: 99.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date1,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date1,
+                close: 100.0,
+            },
+        ]);
+        assert!(intents1.is_empty());
+        let st_after_backfill = engine.get_state(&basket_id).unwrap();
+        assert_eq!(st_after_backfill.position, 1);
+        assert!(
+            st_after_backfill.entry_z.is_some(),
+            "engine must lazy-backfill entry_z on first bar"
+        );
+
+        // Second bar — far adverse move beyond stop_z=2.0. Now that
+        // entry_z is anchored, the stop-loss MUST fire (the bug pre-
+        // fix was that this would compute adverse=0 and stay open).
+        let date2 = NaiveDate::from_ymd_opt(2026, 4, 22).unwrap();
+        let intents2 = engine.on_bars(&[
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date2,
+                close: 60.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date2,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date2,
+                close: 100.0,
+            },
+        ]);
+        assert_eq!(intents2.len(), 1);
+        assert_eq!(intents2[0].reason, TransitionReason::StopLossLong);
+        assert_eq!(engine.get_state(&basket_id).unwrap().position, 0);
     }
 
     #[test]

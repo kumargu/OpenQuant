@@ -176,10 +176,21 @@ impl SimulatedBroker {
     }
 
     fn equity_unlocked(&self, positions: &HashMap<String, (f64, f64)>, cash: f64) -> f64 {
+        // Sort by symbol before summing — `HashMap` iteration order is
+        // randomized per-process in Rust (anti-hash-collision defense),
+        // and f64 addition isn't associative, so summing the same set
+        // of values in different orders yields different floats.
+        // Without this we'd get small (~1%) P&L drift between
+        // identical replay runs, breaking reproducibility (#315).
         let closes = self.state.closes.read().unwrap();
-        let pos_val: f64 = positions
-            .iter()
-            .filter_map(|(sym, (qty, _))| closes.get(sym).map(|p| qty * p))
+        let mut keys: Vec<&String> = positions.keys().collect();
+        keys.sort();
+        let pos_val: f64 = keys
+            .into_iter()
+            .filter_map(|sym| {
+                let (qty, _) = positions.get(sym)?;
+                closes.get(sym.as_str()).map(|p| qty * p)
+            })
             .sum();
         cash + pos_val
     }
@@ -254,7 +265,12 @@ impl Broker for SimulatedBroker {
         let new_qty_signed_full = prev_qty_signed + signed_qty_full;
         let mut projected_gross: f64 = 0.0;
         let mut traded_symbol_seen = false;
-        for (sym, (q, _)) in positions.iter() {
+        // Sort by symbol so the f64 sum is deterministic across runs
+        // — see equity_unlocked for the same reason (#315).
+        let mut sorted_keys: Vec<&String> = positions.keys().collect();
+        sorted_keys.sort();
+        for sym in sorted_keys {
+            let (q, _) = positions.get(sym).expect("key from iterator");
             if sym == symbol {
                 projected_gross += new_qty_signed_full.abs() * price;
                 traded_symbol_seen = true;
@@ -407,6 +423,7 @@ mod tests {
             capital: 10_000.0,
             leverage: 4.0,
             n_active_baskets: 5,
+            stop_loss_z: None,
         }
     }
 
@@ -635,6 +652,62 @@ mod tests {
             }
         }
         assert_eq!(rejects_a, rejects_b);
+    }
+
+    /// Two brokers with the same starting state and the same call
+    /// sequence must produce identical equity numbers — even when the
+    /// `HashMap` iteration order would otherwise drift between
+    /// process invocations. Regression for #315.
+    #[tokio::test]
+    async fn equity_is_deterministic_across_runs() {
+        let symbols = [
+            "AAPL", "AMD", "GOOGL", "INTC", "META", "MSFT", "NVDA", "TSLA",
+        ];
+        let mut prices: Vec<(&str, f64)> = symbols
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (*s, 100.0 + (i as f64) * 7.3))
+            .collect();
+        // Run twice with different shuffle orders for the closes input
+        // — the broker's own iteration must not depend on insertion order.
+        // Run with insertion order A.
+        let broker_a = SimulatedBroker::with_config(
+            &portfolio_config(),
+            shared_closes(&prices),
+            SimulatedBrokerConfig::default(),
+        );
+        for sym in &symbols {
+            let _ = broker_a
+                .place_order(sym, 1.0, "buy", ExecutionMode::Paper)
+                .await
+                .unwrap();
+        }
+        let snap_a = broker_a.final_snapshot();
+
+        // Same calls, reversed insertion order — `HashMap` iteration
+        // depends on hash + insertion, so this differs from run A in
+        // the buggy implementation.
+        prices.reverse();
+        let broker_b = SimulatedBroker::with_config(
+            &portfolio_config(),
+            shared_closes(&prices),
+            SimulatedBrokerConfig::default(),
+        );
+        for sym in &symbols {
+            let _ = broker_b
+                .place_order(sym, 1.0, "buy", ExecutionMode::Paper)
+                .await
+                .unwrap();
+        }
+        let snap_b = broker_b.final_snapshot();
+        assert_eq!(
+            snap_a.equity.to_bits(),
+            snap_b.equity.to_bits(),
+            "equity drifted across HashMap orderings: {} vs {}",
+            snap_a.equity,
+            snap_b.equity
+        );
+        assert_eq!(snap_a.cash.to_bits(), snap_b.cash.to_bits());
     }
 
     #[tokio::test]
