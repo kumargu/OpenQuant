@@ -16,14 +16,25 @@ pub struct PortfolioConfig {
     /// Maximum number of active baskets.
     pub n_active_baskets: usize,
     /// Adverse-move stop-loss in z-units. `None` disables (pure
-    /// Bertram symmetric); `Some(2.0)` is the lab-validated default.
-    /// See the field doc on `BasketEngine::stop_loss_z`.
+    /// Bertram symmetric).
+    ///
+    /// Default is `None`. Lab swept `[1.5..4.0]` over 49 baskets
+    /// / 9 sectors and found 2.0 best — but Q4 2025 A/B with the
+    /// OQ replay setup (cap=5, single-basket-per-target) showed
+    /// stop@2.0 makes things WORSE: cum_return=-9.7% vs no-stop
+    /// -2.5%, Sharpe -1.67 vs -0.54. Crystallizing the loss + re-
+    /// entering at adverse z added losses on top of the unrealized
+    /// drawdown that would have eventually mean-reverted. The cap
+    /// concentrates positions enough that the lab's diversification
+    /// argument doesn't carry over. Operators can opt in via
+    /// `--stop-loss-z N` once the cap/diversification mismatch is
+    /// understood.
     #[serde(default = "default_stop_loss_z")]
     pub stop_loss_z: Option<f64>,
 }
 
 fn default_stop_loss_z() -> Option<f64> {
-    Some(2.0)
+    None
 }
 
 impl Default for PortfolioConfig {

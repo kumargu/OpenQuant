@@ -223,14 +223,16 @@ struct ReplayArgs {
 
     /// Adverse-move stop-loss in z-units. Position is force-flattened
     /// when its spread drifts more than this many z-units against the
-    /// trade. Pass `--no-stop-loss` (or set to 0/negative) to disable.
-    /// Lab-validated default: 2.0 (best in
-    /// `quant-lab/statarb/stop_loss_experiment.py` sweep).
-    #[arg(long, default_value_t = 2.0)]
+    /// trade. Default 0.0 = disabled (pure Bertram symmetric); pass
+    /// `--stop-loss-z 2.0` (or any positive value) to enable. Q4 2025
+    /// A/B showed stop@2.0 hurts at cap=5; revisit once cap/
+    /// diversification is tuned.
+    #[arg(long, default_value_t = 0.0)]
     stop_loss_z: f64,
 
-    /// Disable the adverse-move stop-loss (degenerates to pure
-    /// Bertram symmetric — useful for A/B comparisons).
+    /// Force-disable the adverse-move stop-loss regardless of
+    /// `--stop-loss-z`. Convenience flag for scripts that always set
+    /// a value but want to A/B test no-stop variants.
     #[arg(long, default_value_t = false)]
     no_stop_loss: bool,
 
