@@ -188,8 +188,13 @@ struct ReplayArgs {
     #[arg(long)]
     end: String,
 
-    /// Bar cache directory. When set, bars are read from cache and fetched
-    /// bars are written to cache for future runs.
+    /// Bar cache directory. Two distinct uses depending on engine.
+    /// Pair engines (snp500/metals): caches Alpaca REST minute bars
+    /// (JSONL per (symbol, day)) so repeated runs don't refetch. Basket:
+    /// caches RTH-filtered decoded ParquetBar vectors per symbol (binary,
+    /// `<dir>/<symbol>.bin`). On hit, replay skips the parquet decode +
+    /// RTH filter at startup. Operator manages cache lifetime — `rm -rf
+    /// <dir>` to invalidate when upstream data changes.
     #[arg(long)]
     bar_cache: Option<PathBuf>,
 
@@ -1407,6 +1412,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         end,
         &portfolio_config,
         broker_config,
+        args.bar_cache.clone(),
     );
     let parquet_bar_source::ReplayComponents {
         bar_source,
