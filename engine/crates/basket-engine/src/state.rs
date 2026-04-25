@@ -13,6 +13,12 @@ pub struct BasketState {
     pub entry_date: Option<NaiveDate>,
     /// Spread value when position was entered.
     pub entry_spread: Option<f64>,
+    /// z-score at the moment we entered the current position. Lets the
+    /// transition log compare entry_z vs exit_z so we can tell
+    /// "real mean-reversion (entered at +k, exited at -k)" from
+    /// "whipsaw (entered at +k, exited at +k+epsilon)".
+    #[serde(default)]
+    pub entry_z: Option<f64>,
     /// Ring buffer of recent spread observations (for diagnostics).
     #[serde(default)]
     pub spread_history: VecDeque<f64>,
@@ -26,6 +32,7 @@ impl Default for BasketState {
             position: 0,
             entry_date: None,
             entry_spread: None,
+            entry_z: None,
             spread_history: VecDeque::with_capacity(60),
             last_z: None,
         }
@@ -53,17 +60,19 @@ impl BasketState {
     }
 
     /// Enter a position.
-    pub fn enter(&mut self, position: i8, date: NaiveDate, spread: f64) {
+    pub fn enter(&mut self, position: i8, date: NaiveDate, spread: f64, z: f64) {
         self.position = position;
         self.entry_date = Some(date);
         self.entry_spread = Some(spread);
+        self.entry_z = Some(z);
     }
 
     /// Flip to opposite position.
-    pub fn flip(&mut self, date: NaiveDate, spread: f64) {
+    pub fn flip(&mut self, date: NaiveDate, spread: f64, z: f64) {
         self.position = -self.position;
         self.entry_date = Some(date);
         self.entry_spread = Some(spread);
+        self.entry_z = Some(z);
     }
 
     /// Flatten the position while preserving diagnostics.
@@ -71,6 +80,7 @@ impl BasketState {
         self.position = 0;
         self.entry_date = None;
         self.entry_spread = None;
+        self.entry_z = None;
     }
 }
 
@@ -89,7 +99,7 @@ mod tests {
     fn test_enter_position() {
         let mut state = BasketState::new();
         let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
-        state.enter(1, date, 0.05);
+        state.enter(1, date, 0.05, 1.5);
         assert_eq!(state.position, 1);
         assert!(state.is_in_position());
         assert_eq!(state.entry_date, Some(date));
@@ -101,8 +111,8 @@ mod tests {
         let mut state = BasketState::new();
         let date1 = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
         let date2 = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
-        state.enter(1, date1, 0.05);
-        state.flip(date2, 0.08);
+        state.enter(1, date1, 0.05, 1.6);
+        state.flip(date2, 0.08, -1.7);
         assert_eq!(state.position, -1);
         assert_eq!(state.entry_date, Some(date2));
         assert_eq!(state.entry_spread, Some(0.08));
@@ -123,7 +133,7 @@ mod tests {
     fn test_flatten_clears_position_fields() {
         let mut state = BasketState::new();
         let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
-        state.enter(1, date, 0.05);
+        state.enter(1, date, 0.05, 1.5);
         state.flatten();
         assert_eq!(state.position, 0);
         assert_eq!(state.entry_date, None);

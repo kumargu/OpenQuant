@@ -1,6 +1,6 @@
 //! Main basket engine with Bertram symmetric state machine.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -53,8 +53,11 @@ impl BasketParams {
 pub struct EngineSnapshot {
     /// Per-basket parameters (frozen).
     pub params: Vec<BasketParams>,
-    /// Per-basket runtime state.
-    pub states: HashMap<String, BasketState>,
+    /// Per-basket runtime state. `BTreeMap` so reload preserves the
+    /// engine's deterministic iteration order (#315). JSON-on-disk
+    /// shape is unchanged — `BTreeMap` and `HashMap` serialize
+    /// identically to `{"key": value, ...}`.
+    pub states: BTreeMap<String, BasketState>,
     /// Last trading day that the runner fully processed. Optional so older
     /// snapshots remain readable.
     #[serde(default)]
@@ -62,18 +65,46 @@ pub struct EngineSnapshot {
 }
 
 /// The basket engine: manages state machines for all active baskets.
+///
+/// `params` and `states` are `BTreeMap`s — not `HashMap`s — because
+/// any iteration over them feeds into f64 sums (see
+/// `portfolio::plan_portfolio`'s `symbol_notionals += leg.notional`
+/// and the per-bar update loop in `on_bars`). `HashMap` iteration is
+/// randomized per-process in Rust; ordering-dependent f64 sums then
+/// drift across runs and break replay reproducibility (#315).
+/// `BTreeMap`'s sorted iteration gives us bit-exact reproducibility
+/// at the cost of O(log N) lookups, which is negligible at N ≈ 50.
 pub struct BasketEngine {
     /// Per-basket parameters (frozen after construction).
-    params: HashMap<String, BasketParams>,
+    params: BTreeMap<String, BasketParams>,
     /// Per-basket runtime state.
-    states: HashMap<String, BasketState>,
+    states: BTreeMap<String, BasketState>,
+    /// Hard cap on how many baskets can be in a non-flat position
+    /// simultaneously. `None` = unlimited (test default). When set,
+    /// `on_bars` rejects new initial entries (flat → long or flat →
+    /// short) once the cap is reached. Flips of existing positions
+    /// are always allowed because they don't grow the active set.
+    ///
+    /// This used to be enforced after the fact by
+    /// `plan_portfolio.flatten_baskets`, which ranked all in-position
+    /// baskets by current `|z|` and flattened the lower-ranked ones.
+    /// That was anti-mean-reversion: a position whose spread was
+    /// reverting toward zero would have a SHRINKING `|z|`, get
+    /// out-ranked by a freshly dislocated basket with bigger `|z|`,
+    /// and be flattened — exactly when it was about to be profitable.
+    /// Q4 2025 telemetry showed this directly: 2,153 transitions, 0
+    /// of which were flips. Every transition was either an initial
+    /// entry or a flatten-by-rank. Moving the cap to entry time
+    /// (FCFS-style admission) lets entered positions live until
+    /// their own engine-level exit signal fires.
+    max_active_positions: Option<usize>,
 }
 
 impl BasketEngine {
     /// Create a new engine from validated basket fits.
     pub fn new(fits: &[BasketFit]) -> Self {
-        let mut params = HashMap::new();
-        let mut states = HashMap::new();
+        let mut params = BTreeMap::new();
+        let mut states = BTreeMap::new();
 
         for fit in fits {
             if let Some(p) = BasketParams::from_fit(fit) {
@@ -83,7 +114,19 @@ impl BasketEngine {
             }
         }
 
-        Self { params, states }
+        Self {
+            params,
+            states,
+            max_active_positions: None,
+        }
+    }
+
+    /// Set the maximum number of baskets that can be in a non-flat
+    /// position simultaneously. Live/paper/replay should call this
+    /// once at startup with `PortfolioConfig.n_active_baskets` so the
+    /// engine self-enforces the cap at entry time.
+    pub fn set_max_active_positions(&mut self, max: usize) {
+        self.max_active_positions = Some(max);
     }
 
     /// Get the number of active baskets.
@@ -131,6 +174,13 @@ impl BasketEngine {
         let mut skipped_nan_z = 0usize;
         let mut near_threshold = 0usize;
         let mut transitioned = 0usize;
+        let mut skipped_at_cap = 0usize;
+
+        // Snapshot how many baskets are currently in a non-flat
+        // position at the start of this `on_bars`. Updated locally as
+        // we admit new entries below; flips don't change the count.
+        let mut active_position_count = self.states.values().filter(|s| s.position != 0).count();
+        let cap = self.max_active_positions;
 
         for (basket_id, params) in &self.params {
             let state = match self.states.get_mut(basket_id) {
@@ -248,19 +298,40 @@ impl BasketEngine {
             );
 
             // Bertram symmetric state machine
+            let mut at_cap_skip = false;
             let (new_pos, reason) = match old_pos {
                 0 => {
-                    // Flat: enter on threshold breach
-                    if z < -k {
+                    // Flat: enter on threshold breach. Entry-time cap
+                    // gates new admissions — see the field doc on
+                    // `BasketEngine::max_active_positions`. We count
+                    // current active positions BEFORE this branch
+                    // mutates `active_position_count`.
+                    let entry_allowed = match cap {
+                        Some(max) => active_position_count < max,
+                        None => true,
+                    };
+                    if !entry_allowed {
+                        if z < -k || z > k {
+                            // Real signal we're declining due to cap;
+                            // log so the operator can see if the cap
+                            // is starving the strategy.
+                            at_cap_skip = true;
+                        }
+                        (0, None)
+                    } else if z < -k {
+                        active_position_count += 1;
                         (1, Some(TransitionReason::InitialEntryLong))
                     } else if z > k {
+                        active_position_count += 1;
                         (-1, Some(TransitionReason::InitialEntryShort))
                     } else {
                         (0, None)
                     }
                 }
                 1 => {
-                    // Long: flip to short when z > k
+                    // Long: flip to short when z > k. Flips don't grow
+                    // the active set (still 1 position) so the cap
+                    // doesn't apply.
                     if z > k {
                         (-1, Some(TransitionReason::FlipLongToShort))
                     } else {
@@ -268,7 +339,7 @@ impl BasketEngine {
                     }
                 }
                 -1 => {
-                    // Short: flip to long when z < -k
+                    // Short: flip to long when z < -k.
                     if z < -k {
                         (1, Some(TransitionReason::FlipShortToLong))
                     } else {
@@ -277,23 +348,52 @@ impl BasketEngine {
                 }
                 _ => (old_pos, None),
             };
+            if at_cap_skip {
+                skipped_at_cap += 1;
+            }
 
             // Apply state transition if any
             if let Some(reason) = reason {
+                // Capture the prior position's entry context BEFORE we
+                // overwrite it, so the transition log can compare
+                // entry-z vs exit-z, entry-spread vs current spread, and
+                // compute a holding-period in trading days. This is the
+                // load-bearing telemetry for "is the strategy doing
+                // mean-reversion or whipsawing on noise?"
+                let entry_z = state.entry_z;
+                let entry_spread = state.entry_spread;
+                let entry_date = state.entry_date;
                 if old_pos == 0 {
-                    state.enter(new_pos, date, spread);
+                    state.enter(new_pos, date, spread, z);
                 } else {
-                    state.flip(date, spread);
+                    state.flip(date, spread, z);
                 }
 
                 transitioned += 1;
 
+                let holding_days = entry_date.and_then(|d| (date - d).num_days().into());
+                let spread_move = entry_spread.map(|es| spread - es);
+                // Sign convention: spread = log(target) - mean(log(peers)).
+                // A LONG basket (position=+1) holds target long and peers
+                // short via `basket_to_legs`, so it profits when target
+                // outperforms peers — i.e. when spread RISES. SHORT (-1)
+                // profits when spread falls. Per-unit-notional P&L is
+                // therefore (Δspread) × old_pos. The previous formula
+                // negated old_pos and flipped every gain/loss in the
+                // telemetry log — masking that flips at z≈±k were
+                // actually winning trades while the aggregated portfolio
+                // was bleeding from a different cause.
+                let pnl_per_unit_notional = entry_spread.map(|es| (spread - es) * (old_pos as f64));
                 info!(
                     basket_id = %basket_id,
                     z_score = %format!("{:.4}", z),
+                    entry_z = ?entry_z.map(|v| format!("{:.4}", v)),
                     old_pos = old_pos,
                     new_pos = new_pos,
                     spread = %format!("{:.6}", spread),
+                    spread_move = ?spread_move.map(|v| format!("{:.6}", v)),
+                    pnl_per_unit = ?pnl_per_unit_notional.map(|v| format!("{:.6}", v)),
+                    holding_days = ?holding_days,
                     reason = %reason.as_str(),
                     "position_transition"
                 );
@@ -322,6 +422,9 @@ impl BasketEngine {
             skipped_nan_z,
             near_threshold,
             transitioned,
+            skipped_at_cap,
+            active_after = active_position_count,
+            cap = ?cap,
             intents_emitted = intents.len(),
             "on_bars summary"
         );
@@ -366,7 +469,7 @@ impl BasketEngine {
     pub fn load_state(path: &Path) -> Result<Self, String> {
         let snapshot = Self::load_snapshot(path)?;
 
-        let mut params = HashMap::new();
+        let mut params = BTreeMap::new();
         for p in snapshot.params {
             params.insert(p.basket_id.clone(), p);
         }
@@ -374,11 +477,12 @@ impl BasketEngine {
         Ok(Self {
             params,
             states: snapshot.states,
+            max_active_positions: None,
         })
     }
 
     /// Replace runtime states while preserving the engine's current params.
-    pub fn apply_states(&mut self, states: HashMap<String, BasketState>) -> Result<(), String> {
+    pub fn apply_states(&mut self, states: BTreeMap<String, BasketState>) -> Result<(), String> {
         let snapshot = EngineSnapshot {
             params: self.params.values().cloned().collect(),
             states,

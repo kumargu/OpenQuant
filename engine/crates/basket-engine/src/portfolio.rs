@@ -48,9 +48,41 @@ impl PortfolioConfig {
         Ok(())
     }
 
-    /// Notional per basket = (capital * leverage) / n_active_baskets.
+    /// Fraction of buying power the strategy is willing to deploy.
+    /// 0.90 = leave a 10% safety buffer so per-symbol rounding,
+    /// price drift between plan and submit, and the per-basket
+    /// allocation skew don't push the actual submitted gross over
+    /// the broker's `equity × leverage` cap. Without this buffer,
+    /// borderline orders get rejected and the hedge book ends up
+    /// lopsided — a feedback-loop bug we observed in Q4 2024.
+    pub const BUYING_POWER_UTILIZATION: f64 = 0.90;
+
+    /// Notional per basket sized off the static `capital` field.
+    /// **Live use should prefer [`Self::notional_per_basket_for_equity`]**
+    /// — initial capital ignores wins (under-sizes after rallies)
+    /// and ignores losses (over-sizes after drawdowns, causing the
+    /// rejection feedback loop). This method is kept for tests and
+    /// as a fallback when live equity isn't yet available.
     pub fn notional_per_basket(&self) -> f64 {
-        (self.capital * self.leverage) / self.n_active_baskets as f64
+        self.notional_per_basket_for_equity(self.capital)
+    }
+
+    /// Notional per basket sized off **current equity** (queried from
+    /// the broker each session) instead of initial capital. Applies
+    /// the [`BUYING_POWER_UTILIZATION`] buffer so the per-symbol sum
+    /// of gross exposures stays under the broker's cap even after
+    /// rounding to whole shares.
+    ///
+    /// `equity` should be the broker's reported account equity at
+    /// session-close time — the same value the broker uses internally
+    /// to compute `buying_power = equity × leverage`.
+    pub fn notional_per_basket_for_equity(&self, equity: f64) -> f64 {
+        // Floor at zero — a drawdown to negative equity (impossible
+        // with the current broker but worth defending) shouldn't
+        // produce a negative notional.
+        let safe_equity = equity.max(0.0);
+        (safe_equity * self.leverage * Self::BUYING_POWER_UTILIZATION)
+            / self.n_active_baskets as f64
     }
 }
 
@@ -115,8 +147,24 @@ pub fn basket_to_legs(params: &BasketParams, position: i8, notional: f64) -> Vec
 
 /// Aggregate all basket positions into symbol-level notionals after applying
 /// the configured active-basket cap.
+///
+/// Sized off `config.capital` (initial). Use [`plan_portfolio_for_equity`]
+/// in production to size off current account equity instead — that's the
+/// path that avoids the buying-power-rejection feedback loop.
 pub fn plan_portfolio(engine: &BasketEngine, config: &PortfolioConfig) -> PortfolioPlan {
-    let notional_per_basket = config.notional_per_basket();
+    plan_portfolio_for_equity(engine, config, config.capital)
+}
+
+/// Same as [`plan_portfolio`] but sizes per-basket notional off the
+/// supplied `equity` instead of `config.capital`. Live/paper/replay
+/// callers should pass the broker's current equity at session-close
+/// time; tests and one-off experiments may pass `config.capital`.
+pub fn plan_portfolio_for_equity(
+    engine: &BasketEngine,
+    config: &PortfolioConfig,
+    equity: f64,
+) -> PortfolioPlan {
+    let notional_per_basket = config.notional_per_basket_for_equity(equity);
     let mut symbol_notionals: HashMap<String, f64> = HashMap::new();
     let mut active: Vec<(String, f64)> = Vec::new();
 
@@ -377,7 +425,33 @@ mod tests {
             n_active_baskets: 10,
         };
         config.validate().unwrap();
-        assert_eq!(config.notional_per_basket(), 40_000.0);
+        // 100K * 4x leverage * 90% utilization buffer / 10 baskets = 36K each.
+        // The 90% factor leaves headroom for per-symbol rounding +
+        // plan/submit price drift; without it, borderline orders get
+        // rejected by the broker's `equity * leverage` cap and the
+        // hedge book ends up lopsided (Q4 2024 feedback-loop bug).
+        assert_eq!(config.notional_per_basket(), 36_000.0);
+    }
+
+    #[test]
+    fn test_notional_scales_with_dynamic_equity() {
+        let config = PortfolioConfig {
+            capital: 100_000.0,
+            leverage: 4.0,
+            n_active_baskets: 10,
+        };
+        // Drawdown to 90K equity → notional shrinks proportionally,
+        // keeping the actual gross under buying_power = 90K * 4 = 360K.
+        // 90K * 4 * 0.90 / 10 = 32_400.
+        assert_eq!(config.notional_per_basket_for_equity(90_000.0), 32_400.0);
+        // At full initial equity, parity with the static method.
+        assert_eq!(
+            config.notional_per_basket_for_equity(100_000.0),
+            config.notional_per_basket()
+        );
+        // Negative or zero equity floors at 0 — defensive.
+        assert_eq!(config.notional_per_basket_for_equity(-1.0), 0.0);
+        assert_eq!(config.notional_per_basket_for_equity(0.0), 0.0);
     }
 
     #[test]
