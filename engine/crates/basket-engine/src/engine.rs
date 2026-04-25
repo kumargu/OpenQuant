@@ -1,6 +1,6 @@
 //! Main basket engine with Bertram symmetric state machine.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -53,8 +53,11 @@ impl BasketParams {
 pub struct EngineSnapshot {
     /// Per-basket parameters (frozen).
     pub params: Vec<BasketParams>,
-    /// Per-basket runtime state.
-    pub states: HashMap<String, BasketState>,
+    /// Per-basket runtime state. `BTreeMap` so reload preserves the
+    /// engine's deterministic iteration order (#315). JSON-on-disk
+    /// shape is unchanged — `BTreeMap` and `HashMap` serialize
+    /// identically to `{"key": value, ...}`.
+    pub states: BTreeMap<String, BasketState>,
     /// Last trading day that the runner fully processed. Optional so older
     /// snapshots remain readable.
     #[serde(default)]
@@ -62,18 +65,27 @@ pub struct EngineSnapshot {
 }
 
 /// The basket engine: manages state machines for all active baskets.
+///
+/// `params` and `states` are `BTreeMap`s — not `HashMap`s — because
+/// any iteration over them feeds into f64 sums (see
+/// `portfolio::plan_portfolio`'s `symbol_notionals += leg.notional`
+/// and the per-bar update loop in `on_bars`). `HashMap` iteration is
+/// randomized per-process in Rust; ordering-dependent f64 sums then
+/// drift across runs and break replay reproducibility (#315).
+/// `BTreeMap`'s sorted iteration gives us bit-exact reproducibility
+/// at the cost of O(log N) lookups, which is negligible at N ≈ 50.
 pub struct BasketEngine {
     /// Per-basket parameters (frozen after construction).
-    params: HashMap<String, BasketParams>,
+    params: BTreeMap<String, BasketParams>,
     /// Per-basket runtime state.
-    states: HashMap<String, BasketState>,
+    states: BTreeMap<String, BasketState>,
 }
 
 impl BasketEngine {
     /// Create a new engine from validated basket fits.
     pub fn new(fits: &[BasketFit]) -> Self {
-        let mut params = HashMap::new();
-        let mut states = HashMap::new();
+        let mut params = BTreeMap::new();
+        let mut states = BTreeMap::new();
 
         for fit in fits {
             if let Some(p) = BasketParams::from_fit(fit) {
@@ -366,7 +378,7 @@ impl BasketEngine {
     pub fn load_state(path: &Path) -> Result<Self, String> {
         let snapshot = Self::load_snapshot(path)?;
 
-        let mut params = HashMap::new();
+        let mut params = BTreeMap::new();
         for p in snapshot.params {
             params.insert(p.basket_id.clone(), p);
         }
@@ -378,7 +390,7 @@ impl BasketEngine {
     }
 
     /// Replace runtime states while preserving the engine's current params.
-    pub fn apply_states(&mut self, states: HashMap<String, BasketState>) -> Result<(), String> {
+    pub fn apply_states(&mut self, states: BTreeMap<String, BasketState>) -> Result<(), String> {
         let snapshot = EngineSnapshot {
             params: self.params.values().cloned().collect(),
             states,
