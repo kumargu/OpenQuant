@@ -257,7 +257,7 @@ struct ReplayArgs {
     /// instead of starting from empty engine + simulated broker state.
     /// Default: false (fresh start). When false, any existing state
     /// file at the resolved `state_path` is deleted before the replay
-    /// runs so backtest results are deterministic across re-runs.
+    /// runs so replay results are deterministic across re-runs.
     #[arg(long, default_value_t = false)]
     resume_state: bool,
 }
@@ -323,7 +323,7 @@ fn resolve_engine(
         Engine::Metals => ("config/metals.toml", Some("pairs/metals_pairs.json")),
         Engine::Basket => unreachable!(
             "resolve_engine should never be called for --engine basket; \
-             basket paths short-circuit to run_basket_stream / basket_runner"
+             basket paths short-circuit to run_basket_live / run_basket_replay_live_path"
         ),
     };
     let config = config.unwrap_or_else(|| PathBuf::from(default_config));
@@ -1309,14 +1309,9 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     // Replay freshness contract: by default, every replay run starts
     // from empty engine + simulated broker state, regardless of whether
     // a prior replay's snapshot exists at `state_path`. This makes
-    // backtest results deterministic across re-runs. To resume from a
+    // replay results deterministic across re-runs. To resume from a
     // snapshot (e.g., for debugging mid-replay state), pass
     // `--resume-state`.
-    //
-    // Without this, `run_basket_live` would call its normal
-    // `load_snapshot(state_path)` restore path on the second replay
-    // and pick up positions/processed_sessions from the prior run —
-    // a bug Codex caught in #302 review.
     if !args.resume_state && state_path.exists() {
         info!(
             path = %state_path.display(),

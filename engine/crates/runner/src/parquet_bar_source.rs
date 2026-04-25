@@ -207,8 +207,7 @@ async fn emit_loop(
     // practice we replay ~3 months at a time so well under that.
     //
     // For very long replay windows we'd want streaming reads; that's
-    // a follow-up. Today the scan-once-into-vec pattern matches what
-    // `basket_runner.rs` already does.
+    // a follow-up.
     let mut per_symbol: BTreeMap<String, Vec<ParquetBar>> = BTreeMap::new();
     for symbol in symbols {
         let path = bars_dir.join(format!("{symbol}.parquet"));
