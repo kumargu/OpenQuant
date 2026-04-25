@@ -106,7 +106,7 @@ pub fn new_replay_components(
     start: NaiveDate,
     end: NaiveDate,
     portfolio_config: &PortfolioConfig,
-    slippage_bps: f64,
+    broker_config: crate::simulated_broker::SimulatedBrokerConfig,
 ) -> ReplayComponents {
     // Initial clock = start of the first session in the window. Updated
     // by the emitter task as bars flow.
@@ -114,7 +114,7 @@ pub fn new_replay_components(
     let (clock, session_trigger, channels) = make_replay_clock_and_trigger(initial_dt);
 
     let closes: SharedCloses = Arc::new(StdRwLock::new(HashMap::new()));
-    let broker = SimulatedBroker::new(portfolio_config, closes.clone(), slippage_bps);
+    let broker = SimulatedBroker::with_config(portfolio_config, closes.clone(), broker_config);
 
     let bar_source = ParquetBarSource {
         bars_dir,
@@ -183,6 +183,7 @@ impl PartialOrd for HeapEntry {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn emit_loop(
     bars_dir: &std::path::Path,
     start: NaiveDate,

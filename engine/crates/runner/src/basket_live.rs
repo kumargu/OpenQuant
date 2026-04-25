@@ -436,6 +436,8 @@ pub async fn run_basket_live(
             execution,
         )
         .await?;
+        // Hook for replay's daily-equity time series. Noop on AlpacaClient.
+        broker.record_eod(today).await;
         last_processed_trading_day = Some(today);
         engine.save_state_with_day(state_path, last_processed_trading_day)?;
         processed_sessions.insert(today);
@@ -655,6 +657,9 @@ pub async fn run_basket_live(
                         execution,
                     )
                     .await?;
+                    // Hook for replay's daily-equity time series.
+                    // Noop on AlpacaClient.
+                    broker.record_eod(today).await;
                     last_processed_trading_day = Some(today);
                     engine.save_state_with_day(state_path, last_processed_trading_day)?;
                     info!(

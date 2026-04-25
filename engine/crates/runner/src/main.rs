@@ -24,6 +24,7 @@ mod clock;
 mod earnings;
 mod market_session;
 mod pair_picker_service;
+mod parity;
 mod parquet_bar_source;
 pub mod refresh;
 mod replay_clock;
@@ -226,6 +227,36 @@ struct ReplayArgs {
     /// One-sided fill slippage in basis points (basket only, default 0).
     #[arg(long, default_value_t = 0.0)]
     slippage_bps: f64,
+
+    /// Per-order probability of simulated rejection (0.0..=1.0, default 0).
+    /// Exercises the `error!("ORDER FAILED")` path in basket_live.
+    #[arg(long, default_value_t = 0.0)]
+    reject_rate: f64,
+
+    /// Per-order probability of partial fill in [0.6, 0.9] of requested
+    /// qty (0.0..=1.0, default 0). Drives BROKER DIVERGENCE on the
+    /// post-submit reconciliation path.
+    #[arg(long, default_value_t = 0.0)]
+    partial_fill_rate: f64,
+
+    /// Per-`get_positions` probability of returning the previous
+    /// snapshot instead of the current one (0.0..=1.0, default 0).
+    #[arg(long, default_value_t = 0.0)]
+    stale_position_rate: f64,
+
+    /// Deterministic seed for failure-injection RNG (default 0).
+    #[arg(long, default_value_t = 0)]
+    failure_seed: u64,
+
+    /// Write a parity TSV (cum_return, sharpe, max_dd, daily P&L) to
+    /// the given path after replay completes.
+    #[arg(long)]
+    parity_tsv: Option<PathBuf>,
+
+    /// quant-lab baseline.json to compare the replay's PortfolioStats
+    /// against. Prints PARITY COMPARISON on completion if provided.
+    #[arg(long)]
+    baseline: Option<PathBuf>,
 
     /// Resume replay from an existing state snapshot at `--state-path`
     /// instead of starting from empty engine + simulated broker state.
@@ -1383,12 +1414,19 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         "========== BASKET REPLAY (LIVE PATH) =========="
     );
 
+    let broker_config = simulated_broker::SimulatedBrokerConfig {
+        slippage_bps: args.slippage_bps,
+        reject_rate: args.reject_rate,
+        partial_fill_rate: args.partial_fill_rate,
+        stale_position_rate: args.stale_position_rate,
+        seed: args.failure_seed,
+    };
     let replay = parquet_bar_source::new_replay_components(
         bars_dir.clone(),
         start,
         end,
         &portfolio_config,
-        args.slippage_bps,
+        broker_config,
     );
     let parquet_bar_source::ReplayComponents {
         bar_source,
@@ -1427,6 +1465,53 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         positions = snap.positions.len(),
         "REPLAY FINAL SNAPSHOT"
     );
+
+    // Parity reporting: stats from the daily-equity time series the
+    // SimulatedBroker built up via record_eod hooks. No closed-form
+    // P&L formula — this is pure mark-to-market on simulated fills.
+    let daily_equity = broker.daily_equity();
+    if let Some(stats) = parity::compute_stats(&daily_equity) {
+        info!(
+            cum_return = %format_args!("{:+.4}", stats.cum_return),
+            sharpe = %format_args!("{:.3}", stats.sharpe),
+            max_dd = %format_args!("{:+.4}", stats.max_drawdown),
+            n_days = stats.n_days,
+            "REPLAY PORTFOLIO STATS"
+        );
+
+        if let Some(tsv_path) = args.parity_tsv.as_ref() {
+            if let Some(parent) = tsv_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match parity::write_tsv(tsv_path, &stats, &daily_equity) {
+                Ok(()) => info!(path = %tsv_path.display(), "wrote parity TSV"),
+                Err(e) => error!(error = %e, "failed to write parity TSV"),
+            }
+        }
+
+        if let Some(baseline_path) = args.baseline.as_ref() {
+            match std::fs::read_to_string(baseline_path)
+                .map_err(|e| e.to_string())
+                .and_then(|s| {
+                    serde_json::from_str::<parity::BaselineJson>(&s).map_err(|e| e.to_string())
+                }) {
+                Ok(bj) => {
+                    let pass = parity::print_parity_comparison(&stats, &bj.stats);
+                    if !pass {
+                        warn!("parity tolerance check FAILED — see comparison above");
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, path = %baseline_path.display(), "failed to load baseline")
+                }
+            }
+        }
+    } else if args.parity_tsv.is_some() || args.baseline.is_some() {
+        warn!(
+            n_days = daily_equity.len(),
+            "fewer than 2 daily-equity points — skipping parity TSV / baseline comparison"
+        );
+    }
 
     if let Err(e) = result {
         error!(error = %e, "basket replay failed");

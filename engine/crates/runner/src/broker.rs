@@ -1,10 +1,11 @@
 //! Broker abstraction for order placement and account queries.
 //!
-//! [`AlpacaClient`] is the production implementation. A `SimulatedBroker`
-//! (follow-up PR) will implement this trait for replay against a synthetic
-//! fill model, letting the live code path run without hitting Alpaca.
+//! [`AlpacaClient`] is the production implementation. The replay-side
+//! `SimulatedBroker` in `simulated_broker.rs` is the other.
 
 use std::collections::HashMap;
+
+use chrono::NaiveDate;
 
 use crate::alpaca::{AlpacaAccount, AlpacaClient, AlpacaOrder, ExecutionMode};
 
@@ -31,6 +32,13 @@ pub trait Broker: Send + Sync {
 
     /// Fetch the account snapshot (status, buying power, equity, gate flags).
     async fn get_account(&self, execution: ExecutionMode) -> Result<AlpacaAccount, String>;
+
+    /// Optional end-of-day equity snapshot hook. Called by `basket_live`
+    /// after `process_session_close` finishes for a trading day. The
+    /// production `AlpacaClient` ignores it (Alpaca already exposes
+    /// historical equity); the replay `SimulatedBroker` records into
+    /// its own time series so the parity TSV writer can read it back.
+    async fn record_eod(&self, _date: NaiveDate) {}
 }
 
 impl Broker for AlpacaClient {
