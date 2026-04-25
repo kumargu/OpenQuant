@@ -10,7 +10,14 @@ use crate::basket_live::{align_basket_history, collect_symbols, load_warmup_clos
 
 const FIT_ARTIFACT_SCHEMA: &str = "basket_fit_artifact";
 const FIT_ARTIFACT_VERSION: &str = "v1";
-const WARMUP_DAYS: i64 = 90;
+// 180 calendar days ≈ 126 trading days. The validator needs at least
+// `residual_window_days = 60` aligned spread points (target + all peers
+// present on the same day). Tight bounds (90 cal days ≈ 62 trading days)
+// fall below that minimum after alignment drops any day with a single
+// missing symbol — which is what made replay's auto-fit reject all 49
+// baskets at first run. Doubling the budget is cheap and removes the
+// edge case entirely.
+const WARMUP_DAYS: i64 = 180;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BasketFitArtifact {
@@ -45,6 +52,22 @@ pub fn build_live_fit_artifact(
     let universe = load_universe(universe_path)?;
     let symbols = collect_symbols(&universe);
     let closes = load_warmup_closes(bars_dir, &symbols, WARMUP_DAYS)?;
+    build_live_fit_artifact_from_inputs(&universe, &closes)
+}
+
+/// Build a fit artifact using data **strictly before** `as_of`.
+///
+/// Used by the replay path so the fit can't peek at data it's about to
+/// trade against. `as_of` should be the replay window's `--start` date.
+pub fn build_replay_fit_artifact_as_of(
+    universe_path: &Path,
+    bars_dir: &Path,
+    as_of: chrono::NaiveDate,
+) -> Result<BasketFitArtifact, String> {
+    let universe = load_universe(universe_path)?;
+    let symbols = collect_symbols(&universe);
+    let closes =
+        crate::basket_live::load_warmup_closes_as_of(bars_dir, &symbols, WARMUP_DAYS, as_of)?;
     build_live_fit_artifact_from_inputs(&universe, &closes)
 }
 

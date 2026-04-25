@@ -279,7 +279,6 @@ pub async fn run_basket_live(
     clock: &impl Clock,
     session_trigger: &mut impl SessionTrigger,
     universe_path: &Path,
-    fit_artifact_path: &Path,
     state_path: &Path,
     bars_dir: &Path,
     execution: BasketExecution,
@@ -296,10 +295,10 @@ pub async fn run_basket_live(
 
     info!(
         universe = %universe_path.display(),
-        fit_artifact = %fit_artifact_path.display(),
         state_path = %state_path.display(),
         bars_dir = %bars_dir.display(),
         execution = execution.label(),
+        n_fits = fits.len(),
         "========== BASKET LIVE RUNNER =========="
     );
     portfolio_config.validate()?;
@@ -333,6 +332,22 @@ pub async fn run_basket_live(
         "loaded basket fits"
     );
     if valid_count == 0 {
+        // Tally rejection reasons so the operator can see WHY all
+        // baskets failed — vital when replay's auto-fit produces 0
+        // valid fits and you don't know whether it's a data window
+        // problem, a numerical fit problem, or a config problem.
+        let mut reasons: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for f in fits {
+            let reason = f
+                .reject_reason
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            *reasons.entry(reason).or_insert(0) += 1;
+        }
+        for (reason, count) in &reasons {
+            error!(reason = %reason, count, "fit rejected");
+        }
         return Err("no valid baskets in fit artifact".to_string());
     }
 
@@ -1158,6 +1173,20 @@ pub(crate) fn load_warmup_closes(
     load_daily_closes(bars_dir, symbols, window_days, today.pred_opt())
 }
 
+/// Same as [`load_warmup_closes`] but with an explicit "as-of" cutoff.
+///
+/// Used by the replay path to build a fit using data **strictly before**
+/// the replay window, so the fit can't peek at the data it's about to
+/// trade against.
+pub(crate) fn load_warmup_closes_as_of(
+    bars_dir: &Path,
+    symbols: &[String],
+    window_days: i64,
+    as_of: NaiveDate,
+) -> Result<HashMap<String, Vec<(NaiveDate, f64)>>, String> {
+    load_daily_closes(bars_dir, symbols, window_days, as_of.pred_opt())
+}
+
 fn load_daily_closes(
     bars_dir: &Path,
     symbols: &[String],
@@ -1189,7 +1218,14 @@ fn load_daily_closes_with_timestamps(
 ) -> Result<HashMap<String, Vec<(NaiveDate, i64, f64)>>, String> {
     use arrow::array::{Array, Float64Array, TimestampMicrosecondArray};
     use std::collections::BTreeMap;
-    let cutoff = Utc::now().date_naive() - chrono::Duration::days(window_days);
+    // The window anchor is the most recent date the caller wants to
+    // include — `max_day_inclusive` if provided (replay's "as-of"
+    // cutoff), or "today" otherwise (live warm-up). The lower bound
+    // is `anchor - window_days`. Anchoring on `Utc::now()` here would
+    // make `as_of`-based callers fail silently when their requested
+    // window doesn't overlap "now − window_days" (#306 finding).
+    let anchor = max_day_inclusive.unwrap_or_else(|| Utc::now().date_naive());
+    let cutoff = anchor - chrono::Duration::days(window_days);
 
     let mut out = HashMap::new();
     for symbol in symbols {
