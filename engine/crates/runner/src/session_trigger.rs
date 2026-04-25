@@ -19,10 +19,16 @@ use crate::market_session;
 /// maintains its own `processed_sessions` set against persisted state, so
 /// duplicate yields are filtered there too, but the trigger is the
 /// primary scheduler.
+///
+/// Returns `None` when the trigger source has been exhausted (replay
+/// finished walking its parquet bars). The live `IntervalSessionTrigger`
+/// never returns `None`. Returning `None` is the replay loop's exit
+/// signal.
 pub trait SessionTrigger: Send + Sync {
     /// Block until the next session-close event. Returns the trading
-    /// date that just closed.
-    async fn next(&mut self) -> NaiveDate;
+    /// date that just closed, or `None` if no further sessions will
+    /// arrive (replay exhausted).
+    async fn next(&mut self) -> Option<NaiveDate>;
 }
 
 /// Production trigger — polls the clock on a 30s wall-clock interval.
@@ -49,7 +55,7 @@ impl<C: Clock> IntervalSessionTrigger<C> {
 }
 
 impl<C: Clock> SessionTrigger for IntervalSessionTrigger<C> {
-    async fn next(&mut self) -> NaiveDate {
+    async fn next(&mut self) -> Option<NaiveDate> {
         loop {
             self.interval.tick().await;
             let now = self.clock.now();
@@ -58,7 +64,7 @@ impl<C: Clock> SessionTrigger for IntervalSessionTrigger<C> {
                 && self.last_yielded != Some(today)
             {
                 self.last_yielded = Some(today);
-                return today;
+                return Some(today);
             }
         }
     }
@@ -97,7 +103,10 @@ mod tests {
         let mut trig = IntervalSessionTrigger::new(clock, 2);
 
         let first = trig.next().await;
-        assert_eq!(first, chrono::NaiveDate::from_ymd_opt(2026, 4, 24).unwrap());
+        assert_eq!(
+            first,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 24).unwrap())
+        );
 
         // Same wall time → second call must NOT immediately resolve.
         // Use timeout to assert it's pending.
@@ -112,7 +121,7 @@ mod tests {
         let second = trig.next().await;
         assert_eq!(
             second,
-            chrono::NaiveDate::from_ymd_opt(2026, 4, 27).unwrap()
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 27).unwrap())
         );
     }
 }
