@@ -957,7 +957,14 @@ async fn process_session_close(
         sorted_abs[sorted_abs.len() / 2]
     };
     let gross_notional = gross_long + gross_short.abs();
-    let gross_cap = portfolio_config.capital * portfolio_config.leverage;
+    // Cap is `current equity × leverage`, NOT `initial capital ×
+    // leverage`. The strategy's actual buying power tracks live equity
+    // — gating on the static initial value would falsely error out
+    // once the strategy has gained ~10%+ (equity rises but the static
+    // cap stays put). Tolerance of 1.0 absorbs sub-share rounding;
+    // structural over-runs trip the planner instead of waiting for
+    // the broker to reject orders.
+    let gross_cap = sizing_equity * portfolio_config.leverage;
     info!(
         date = %date,
         targets = target_notionals.len(),
@@ -974,8 +981,8 @@ async fn process_session_close(
     );
     if gross_notional > gross_cap + 1.0 {
         return Err(format!(
-            "target gross notional {:.2} exceeds configured cap {:.2}",
-            gross_notional, gross_cap
+            "target gross notional {:.2} exceeds buying-power cap {:.2} (equity {:.2})",
+            gross_notional, gross_cap, sizing_equity
         ));
     }
     if !plan.excluded_baskets.is_empty() {
