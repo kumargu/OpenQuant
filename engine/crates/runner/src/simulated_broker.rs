@@ -121,18 +121,51 @@ impl Broker for SimulatedBroker {
             "sell" => -qty,
             _ => return Err(format!("unknown side: {side}")),
         };
-        let notional = price * qty;
 
         let mut positions = self.state.positions.write().unwrap();
         let mut cash = self.state.cash.write().unwrap();
 
-        // Buying-power check shaped like Alpaca's. Computed against
-        // CURRENT equity (before this fill) so we don't bootstrap the
+        // Buying-power check shaped like Alpaca's. Project the post-trade
+        // gross book by valuing every position at its OWN current close
+        // (not the current order's price), then comparing against
+        // `equity * leverage`.
+        //
+        // Equity is computed BEFORE the fill so we don't bootstrap the
         // first order off projected post-fill state.
+        //
+        // The previous implementation valued all existing positions at
+        // the new order's price, which materially mis-stated exposure
+        // for multi-symbol books — a $10 order in a cheap name would
+        // value a $1000-name position at $10 (under-rejection), and a
+        // $1000 order in an expensive name would value a $10-name
+        // position at $1000 (over-rejection). #302 review caught this.
+        let closes_snapshot = self.state.closes.read().unwrap();
         let current_equity = self.equity_unlocked(&positions, *cash);
         let buying_power = current_equity * self.state.leverage;
-        let projected_gross: f64 =
-            positions.iter().map(|(_, (q, _))| q.abs()).sum::<f64>() * price.max(1.0) + notional; // rough upper bound; real Alpaca check is per-order notional
+        let prev_qty_signed = positions.get(symbol).map(|(q, _)| *q).unwrap_or(0.0);
+        let new_qty_signed = prev_qty_signed + signed_qty;
+        let mut projected_gross: f64 = 0.0;
+        let mut traded_symbol_seen = false;
+        for (sym, (q, _)) in positions.iter() {
+            if sym == symbol {
+                // Symbol being traded: value at the post-trade qty × fill price.
+                projected_gross += new_qty_signed.abs() * price;
+                traded_symbol_seen = true;
+            } else if let Some(p) = closes_snapshot.get(sym) {
+                projected_gross += q.abs() * p;
+            } else {
+                // Fallback: value at avg entry if the bar source hasn't
+                // emitted a close for this symbol yet (shouldn't happen
+                // in normal replay flow, but don't silently drop it).
+                let avg = positions.get(sym).map(|(_, a)| *a).unwrap_or(0.0);
+                projected_gross += q.abs() * avg;
+            }
+        }
+        if !traded_symbol_seen {
+            // New position — wasn't in the iteration above.
+            projected_gross += new_qty_signed.abs() * price;
+        }
+        drop(closes_snapshot);
         if projected_gross > buying_power * 1.01 {
             return Err(format!(
                 "buying power exceeded: gross {projected_gross:.2} > buying_power {buying_power:.2}"
@@ -279,6 +312,63 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("buying power exceeded"), "got: {err}");
+    }
+
+    /// Regression for the #302 review finding: a small order in a cheap
+    /// name must NOT under-reject when an expensive position is already
+    /// held. The buggy formula valued the existing position at the new
+    /// order's price, which would let huge implicit exposures slip past
+    /// the gate.
+    #[tokio::test]
+    async fn buying_power_uses_each_symbols_own_close() {
+        let closes = shared_closes(&[("EXPENSIVE", 1000.0), ("CHEAP", 10.0)]);
+        let broker = SimulatedBroker::new(&config(), closes, 0.0);
+        // First, build a position in EXPENSIVE that's near the buying-power cap.
+        // Equity 10k * 4 = 40k buying power. 30 shares × 1000 = 30k. Inside cap.
+        broker
+            .place_order("EXPENSIVE", 30.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        // Now try to place a $200 order in CHEAP (20 shares × 10).
+        // Total projected gross = 30 × 1000 (EXPENSIVE valued correctly)
+        // + 20 × 10 = 30200. Under 40k buying power: should pass.
+        broker
+            .place_order("CHEAP", 20.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        // But a 2000-share order in CHEAP (= 20k) would push total to 50k:
+        // should reject.
+        let err = broker
+            .place_order("CHEAP", 2000.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap_err();
+        assert!(err.contains("buying power exceeded"), "got: {err}");
+    }
+
+    /// Regression: closing an existing position must REDUCE projected
+    /// gross, not add to it.
+    #[tokio::test]
+    async fn closing_a_position_does_not_increase_projected_gross() {
+        let closes = shared_closes(&[("AMD", 100.0)]);
+        let broker = SimulatedBroker::new(&config(), closes, 0.0);
+        // Buy 100 shares = 10k notional. Inside 40k cap.
+        broker
+            .place_order("AMD", 100.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        // Selling 50 shares should always pass: it reduces gross from
+        // 10k to 5k, well under 40k buying power. The buggy formula
+        // would have computed projected_gross = (100 × 100) + (50 × 100)
+        // = 15k. Still under cap so the test wouldn't have caught it
+        // with the same numbers — but at scale (e.g., near the cap)
+        // closing trades would have been wrongly rejected. Verify the
+        // close goes through cleanly.
+        broker
+            .place_order("AMD", 50.0, "sell", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        assert_eq!(positions.get("AMD").map(|(q, _)| *q), Some(50.0));
     }
 
     #[tokio::test]

@@ -1257,6 +1257,20 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             .join("replay")
             .join(format!("{stem}.state.json"))
     });
+    // `BasketEngine::save_state_with_day` calls `fs::write(path, ...)`
+    // which fails if the parent directory does not exist. Ensure it
+    // does up front so the first session-close persistence in a clean
+    // checkout doesn't blow up mid-replay (#302 review finding).
+    if let Some(parent) = state_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            error!(
+                error = %e,
+                path = %parent.display(),
+                "failed to create replay state directory"
+            );
+            std::process::exit(1);
+        }
+    }
 
     // Parse start/end.
     let parse_date = |s: &str, name: &str| match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
