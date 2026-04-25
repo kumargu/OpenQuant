@@ -37,7 +37,9 @@ use tracing::{debug, error, info, warn};
 use crate::alpaca::ExecutionMode;
 use crate::bar_source::BarSource;
 use crate::broker::Broker;
+use crate::clock::Clock;
 use crate::market_session;
+use crate::session_trigger::SessionTrigger;
 use crate::stream;
 
 /// Execution mode for basket live/paper.
@@ -271,6 +273,8 @@ fn classify_startup_phase(
 pub async fn run_basket_live(
     broker: &impl Broker,
     bar_source: &impl BarSource,
+    clock: &impl Clock,
+    session_trigger: &mut impl SessionTrigger,
     universe_path: &Path,
     fit_artifact_path: &Path,
     state_path: &Path,
@@ -281,6 +285,10 @@ pub async fn run_basket_live(
 ) -> Result<(), String> {
     // Grace period after session close before firing the engine. Lets late-arriving
     // final-RTH-minute bars land in the buffer.
+    //
+    // The `clock` and `session_trigger` parameters MUST agree on this value:
+    // `IntervalSessionTrigger` is constructed with the same constant in
+    // `main.rs`. If they diverge, replay/live cadence drifts.
     const CLOSE_GRACE_MIN: u32 = 2;
 
     info!(
@@ -367,7 +375,7 @@ pub async fn run_basket_live(
     //    we refuse to start. Trading from an empty share map would diff
     //    targets against zero and flood Alpaca with duplicate orders against
     //    already-open broker positions, potentially double-sizing every leg.
-    let now = Utc::now();
+    let now = clock.now();
     let today = market_session::trading_day_utc(now);
     let mut current_shares = match execution.alpaca_mode() {
         None => {
@@ -474,10 +482,9 @@ pub async fn run_basket_live(
         }
     }
 
-    let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
-    // Dedicated 60s heartbeat that summarizes buffer state. Separate from the
-    // 30s wall-clock tick so we get clean one-per-minute INFO lines
-    // regardless of how often the close-firing check runs.
+    // Dedicated 60s heartbeat that summarizes buffer state. The session-close
+    // schedule is owned by `session_trigger` (see `SessionTrigger` trait); the
+    // heartbeat is observability only.
     let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(60));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Skip first fire so we don't heartbeat with zero data.
@@ -536,7 +543,7 @@ pub async fn run_basket_live(
                 // this goes silent while `stream heartbeat` shows activity,
                 // the channel is backed up or the RTH filter is rejecting
                 // everything.
-                let now = Utc::now();
+                let now = clock.now();
                 let today = market_session::trading_day_utc(now);
                 let in_rth = market_session::is_rth_utc(now);
                 let past_close = market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN);
@@ -560,14 +567,16 @@ pub async fn run_basket_live(
                 );
                 bars_processed_window = 0;
             }
-            _ = tick.tick() => {
-                // Wall-clock trigger: if we are past session close + grace for a
-                // given date and haven't processed it yet, fire now — regardless
-                // of which symbols' final-RTH bars landed.
-                let now = Utc::now();
-                let today = market_session::trading_day_utc(now);
-                let past_close = market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN);
-                if past_close && !processed_sessions.contains(&today) {
+            today = session_trigger.next() => {
+                // Session-close trigger: the trigger has determined that
+                // `today` is past session close + grace. Live uses
+                // `IntervalSessionTrigger` (30s wall-clock poll); replay
+                // (#294c-2) will use a bar-driven trigger so cadence
+                // follows simulated time. The trigger dedups internally,
+                // so `today` is yielded at most once; `processed_sessions`
+                // is the persisted-state dedup that catches restarts
+                // after a session was already processed.
+                if !processed_sessions.contains(&today) {
                     let closes_for_day = day_closes.remove(&today).unwrap_or_default();
                     if closes_for_day.is_empty() {
                         if !market_session::is_trading_day(today) {

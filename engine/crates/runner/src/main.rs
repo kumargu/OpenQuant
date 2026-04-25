@@ -21,10 +21,12 @@ mod basket_fits;
 mod basket_live;
 mod basket_runner;
 mod broker;
+mod clock;
 mod earnings;
 mod market_session;
 mod pair_picker_service;
 pub mod refresh;
+mod session_trigger;
 mod stream;
 
 use alpaca::ExecutionMode;
@@ -598,9 +600,17 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     let bar_source =
         bar_source::AlpacaBarSource::new(alpaca.api_key.clone(), alpaca.api_secret.clone());
 
+    // Live/paper use wall-clock time and a 30s polling session trigger.
+    // Replay (#294c-2) will swap these for bar-driven equivalents. Keep
+    // the grace constant in sync with `basket_live::CLOSE_GRACE_MIN`.
+    let clock = clock::SystemClock;
+    let mut session_trigger = session_trigger::IntervalSessionTrigger::new(clock::SystemClock, 2);
+
     if let Err(e) = basket_live::run_basket_live(
         &alpaca,
         &bar_source,
+        &clock,
+        &mut session_trigger,
         &universe_path,
         &fit_artifact_path,
         &state_path,
