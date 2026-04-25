@@ -298,6 +298,27 @@ impl BasketEngine {
             let k = params.threshold_k;
             let old_pos = state.position;
 
+            // Lazy backfill of `entry_z` for legacy in-position states.
+            // Pre-stop-loss snapshots persisted before `entry_z` existed
+            // — Serde rehydrates those open positions with `entry_z =
+            // None`. The stop-loss check below would then compute
+            // `adverse = 0.0` and never fire, leaving upgraded
+            // operators with effectively no stop on already-open
+            // trades (Codex P1 #318). Anchor the stop to the first
+            // post-upgrade z so the protection kicks in from now
+            // forward — the alternative (pretend the trade was just
+            // opened at z=0) understates adverse drift, the option of
+            // exempting legacy state is what the bug report flags.
+            if old_pos != 0 && state.entry_z.is_none() {
+                state.entry_z = Some(z);
+                warn!(
+                    basket_id = %basket_id,
+                    z = %format!("{:.4}", z),
+                    pos = old_pos,
+                    "legacy in-position snapshot lacks entry_z; anchoring stop-loss to current z"
+                );
+            }
+
             // Near-threshold counter — any basket with |z| > 0.75k is "close
             // to firing." Tracking this gives us a pulse on whether the
             // strategy is actually seeing opportunity vs. sitting flat.
@@ -1054,6 +1075,87 @@ mod tests {
             1,
             "position must persist with stop disabled"
         );
+    }
+
+    #[test]
+    fn test_legacy_state_without_entry_z_arms_stop_on_first_bar() {
+        // Pre-stop-loss snapshots persisted in-position baskets without
+        // an `entry_z` field. Without explicit handling, the stop-loss
+        // check would unwrap that `None` to 0.0 and never fire —
+        // operators upgrading their state.json silently lose stop
+        // protection on every already-open trade until it next flips.
+        // After lazy backfill, the FIRST `on_bars` call seeds
+        // `entry_z` from the current z so the stop is armed from now
+        // forward. Codex P1 review on PR #318.
+        let fit = make_test_fit();
+        let mut engine = BasketEngine::new(&[fit]);
+        engine.set_stop_loss_z(Some(2.0));
+        let basket_id = test_basket_id();
+
+        // Manually force the engine into a legacy in-position state:
+        // long, but `entry_z = None` (mimicking deserialization of an
+        // older snapshot).
+        {
+            let st = engine.states.get_mut(&basket_id).unwrap();
+            st.position = 1;
+            st.entry_date = Some(NaiveDate::from_ymd_opt(2026, 4, 20).unwrap());
+            st.entry_spread = Some(0.0);
+            st.entry_z = None;
+        }
+
+        // First post-upgrade bar — z is mildly negative but inside
+        // the band. Backfill should anchor entry_z to this z so the
+        // stop is armed; no transition fires this bar.
+        let date1 = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        let intents1 = engine.on_bars(&[
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date1,
+                close: 99.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date1,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date1,
+                close: 100.0,
+            },
+        ]);
+        assert!(intents1.is_empty());
+        let st_after_backfill = engine.get_state(&basket_id).unwrap();
+        assert_eq!(st_after_backfill.position, 1);
+        assert!(
+            st_after_backfill.entry_z.is_some(),
+            "engine must lazy-backfill entry_z on first bar"
+        );
+
+        // Second bar — far adverse move beyond stop_z=2.0. Now that
+        // entry_z is anchored, the stop-loss MUST fire (the bug pre-
+        // fix was that this would compute adverse=0 and stay open).
+        let date2 = NaiveDate::from_ymd_opt(2026, 4, 22).unwrap();
+        let intents2 = engine.on_bars(&[
+            DailyBar {
+                symbol: "AMD".into(),
+                date: date2,
+                close: 60.0,
+            },
+            DailyBar {
+                symbol: "NVDA".into(),
+                date: date2,
+                close: 100.0,
+            },
+            DailyBar {
+                symbol: "INTC".into(),
+                date: date2,
+                close: 100.0,
+            },
+        ]);
+        assert_eq!(intents2.len(), 1);
+        assert_eq!(intents2[0].reason, TransitionReason::StopLossLong);
+        assert_eq!(engine.get_state(&basket_id).unwrap().position, 0);
     }
 
     #[test]
