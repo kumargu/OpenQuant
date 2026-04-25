@@ -1446,6 +1446,24 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     )
     .await;
 
+    // If the run failed partway through we have a partial daily-equity
+    // history that doesn't represent the requested window. Don't
+    // overwrite an existing report with that — exit non-zero and let
+    // the operator inspect logs. The post-mortem snapshot is still
+    // useful for debugging, so log it before exiting.
+    if let Err(e) = result {
+        let snap = broker.final_snapshot();
+        error!(
+            error = %e,
+            initial_capital = snap.initial_capital,
+            final_cash = %format_args!("{:.2}", snap.cash),
+            final_equity = %format_args!("{:.2}", snap.equity),
+            positions = snap.positions.len(),
+            "basket replay failed; report TSV not written"
+        );
+        std::process::exit(1);
+    }
+
     let snap = broker.final_snapshot();
     info!(
         initial_capital = snap.initial_capital,
@@ -1458,7 +1476,8 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
 
     // Replay report: stats from the daily-equity time series the
     // SimulatedBroker built up via record_eod hooks. Pure
-    // mark-to-market on simulated fills.
+    // mark-to-market on simulated fills. Only runs on a successful
+    // replay — see the early-exit above.
     let daily_equity = broker.daily_equity();
     if let Some(stats) = replay_report::compute_stats(&daily_equity) {
         info!(
@@ -1483,11 +1502,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             n_days = daily_equity.len(),
             "fewer than 2 daily-equity points — skipping replay report TSV"
         );
-    }
-
-    if let Err(e) = result {
-        error!(error = %e, "basket replay failed");
-        std::process::exit(1);
     }
 }
 
