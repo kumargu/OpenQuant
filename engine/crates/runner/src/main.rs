@@ -217,8 +217,17 @@ struct ReplayArgs {
     #[arg(long, default_value_t = 10_000.0)]
     capital: f64,
 
-    /// Max active baskets (basket only, default 5).
-    #[arg(long, default_value_t = 5)]
+    /// Max active baskets (basket only, default 15). Three-quarter
+    /// walk-forward A/B (Q3 2025 + Q4 2025 + Q1 2026) on the
+    /// no-mining v1 universe (43 baskets) showed cap=15 turns the
+    /// strategy from net-losing across regime-fragile quarters into
+    /// reliably profitable: cap=5 net 9-month return -0.75%
+    /// (Sharpe -2.08 / -0.54 / +3.63), cap=15 net +27.66% (Sharpe
+    /// +1.97 / +1.23 / +4.02). The lab's own sweep used 49 baskets
+    /// active simultaneously; cap=5 was OQ's port that
+    /// over-concentrated risk and made individual cointegration
+    /// breaks dominate the portfolio.
+    #[arg(long, default_value_t = 15)]
     n_active_baskets: usize,
 
     /// One-sided fill slippage in basis points (basket only, default 0).
