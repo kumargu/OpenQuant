@@ -26,7 +26,7 @@
 //!   - `Live`: api.alpaca.markets (real money). Gated behind explicit opt-in.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use basket_engine::{
     diff_to_orders, plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig,
@@ -38,6 +38,10 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tracing::{debug, error, info, warn};
 
 use crate::alpaca::ExecutionMode;
+use crate::basket_journal::{
+    serialize_shares_map, serialize_string_vec, BasketJournal, BasketOrderEvent,
+    BasketRunRecord, BasketSessionCloseRecord,
+};
 use crate::bar_source::BarSource;
 use crate::broker::Broker;
 use crate::clock::Clock;
@@ -96,6 +100,12 @@ impl StartupPhase {
             Self::PostCloseProcessed => "post_close_processed",
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BasketRunOptions {
+    pub fit_artifact_path: Option<PathBuf>,
+    pub journal_path: Option<PathBuf>,
 }
 
 async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> Result<(), String> {
@@ -284,6 +294,7 @@ pub async fn run_basket_live(
     execution: BasketExecution,
     portfolio_config: PortfolioConfig,
     fits: &[BasketFit],
+    options: BasketRunOptions,
 ) -> Result<(), String> {
     // Grace period after session close before firing the engine. Lets late-arriving
     // final-RTH-minute bars land in the buffer.
@@ -414,6 +425,15 @@ pub async fn run_basket_live(
         ));
     }
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
+    let journal = match options.journal_path.as_deref() {
+        Some(path) => Some(BasketJournal::open(path)?),
+        None => None,
+    };
+    let run_id = format!(
+        "{}-{}",
+        execution.label().to_ascii_lowercase().replace([' ', '(', ')'], "-"),
+        now.timestamp_millis()
+    );
     info!(
         now_utc = %now.to_rfc3339(),
         trading_day = %today,
@@ -423,7 +443,30 @@ pub async fn run_basket_live(
         broker_positions = current_shares.len(),
         "basket startup phase evaluated"
     );
-
+    if let Some(journal) = &journal {
+        let universe_path_str = universe_path.display().to_string();
+        let state_path_str = state_path.display().to_string();
+        let fit_artifact_path_str = options
+            .fit_artifact_path
+            .as_ref()
+            .map(|p| p.display().to_string());
+        journal.record_run(&BasketRunRecord {
+            run_id: run_id.as_str(),
+            started_at_utc: now,
+            execution_mode: execution.label(),
+            universe_path: universe_path_str.as_str(),
+            fit_artifact_path: fit_artifact_path_str.as_deref(),
+            state_path: state_path_str.as_str(),
+            startup_phase: startup_phase.as_str(),
+            symbols: symbols.len(),
+            baskets: engine.num_baskets(),
+            capital: portfolio_config.capital,
+            leverage: portfolio_config.leverage,
+            n_active_baskets: portfolio_config.n_active_baskets,
+            broker_positions: current_shares.len(),
+            last_processed_trading_day,
+        })?;
+    }
     // 3. Bar loop: buffer per (symbol, date) → last RTH bar.
     //    Engine is triggered by a wall-clock timer (not by one symbol's final RTH bar
     //    arrival) so that no single symbol becoming a data source-of-failure can
@@ -452,6 +495,8 @@ pub async fn run_basket_live(
             &portfolio_config,
             &mut current_shares,
             execution,
+            journal.as_ref(),
+            run_id.as_str(),
         )
         .await?;
         // Hook for replay's daily-equity time series. Noop on AlpacaClient.
@@ -673,6 +718,8 @@ pub async fn run_basket_live(
                         &portfolio_config,
                         &mut current_shares,
                         execution,
+                        journal.as_ref(),
+                        run_id.as_str(),
                     )
                     .await?;
                     // Hook for replay's daily-equity time series.
@@ -802,6 +849,8 @@ async fn process_session_close(
     portfolio_config: &PortfolioConfig,
     current_shares: &mut HashMap<String, f64>,
     execution: BasketExecution,
+    journal: Option<&BasketJournal>,
+    run_id: &str,
 ) -> Result<(), String> {
     debug_assert!(
         portfolio_config.validate().is_ok(),
@@ -843,6 +892,7 @@ async fn process_session_close(
             "refreshed broker share inventory before computing basket order deltas"
         );
     }
+    let current_shares_before = current_shares.clone();
 
     // Portfolio layer: apply active-basket admission first, then convert
     // admitted target notionals to target shares.
@@ -867,6 +917,10 @@ async fn process_session_close(
     };
     let gross_notional = gross_long + gross_short.abs();
     let gross_cap = portfolio_config.capital * portfolio_config.leverage;
+    let selected_baskets_json = serialize_string_vec(&plan.selected_baskets);
+    let excluded_baskets_json = serialize_string_vec(&plan.excluded_baskets);
+    let target_shares_json = serialize_shares_map(&target_shares);
+    let target_positions_len = target_shares.len();
     info!(
         date = %date,
         targets = target_notionals.len(),
@@ -910,6 +964,45 @@ async fn process_session_close(
     let orders = diff_to_orders(current_shares, &target_shares);
     if orders.is_empty() {
         info!(date = %date, "no orders to emit — targets already match current");
+        if let Some(journal) = journal {
+            journal.record_session_close(&BasketSessionCloseRecord {
+                run_id,
+                trading_day: date,
+                status: "aligned",
+                closes_received: closes.len(),
+                symbols_expected: closes.len(),
+                active_baskets: plan.active_baskets,
+                admitted_baskets: plan.selected_baskets.len(),
+                excluded_baskets: plan.excluded_baskets.len(),
+                gross_long,
+                gross_short,
+                gross_notional,
+                gross_cap,
+                net_notional: gross_long + gross_short,
+                max_abs_leg: max_abs,
+                median_abs_leg: median_abs,
+                target_positions: target_positions_len,
+                current_positions_before: current_shares_before.len(),
+                current_positions_after: current_shares.len(),
+                buy_orders: 0,
+                sell_orders: 0,
+                buy_notional: 0.0,
+                sell_notional: 0.0,
+                order_gross_notional: 0.0,
+                order_max_notional: 0.0,
+                accepted_orders: 0,
+                failed_orders: 0,
+                target_gross: Some(gross_notional),
+                actual_gross: None,
+                divergence_pct: None,
+                selected_baskets_json: selected_baskets_json.clone(),
+                excluded_baskets_json: excluded_baskets_json.clone(),
+                current_shares_before_json: serialize_shares_map(&current_shares_before),
+                target_shares_json: target_shares_json.clone(),
+                current_shares_after_json: Some(serialize_shares_map(current_shares)),
+                error_text: None,
+            })?;
+        }
         return Ok(());
     }
 
@@ -944,13 +1037,75 @@ async fn process_session_close(
         None => {
             // Noop — log only, then advance the simulated share state directly
             // to the target so shadow mode stays deterministic across sessions.
-            for order in &orders {
+            for (seq, order) in orders.iter().enumerate() {
                 log_order(order, "NOOP");
+                if let Some(journal) = journal {
+                    let (reason, basket_id) = order_reason_fields(&order.reason);
+                    journal.record_order_event(&BasketOrderEvent {
+                        run_id,
+                        trading_day: date,
+                        seq,
+                        symbol: order.symbol.as_str(),
+                        side: match order.side {
+                            Side::Buy => "buy",
+                            Side::Sell => "sell",
+                        },
+                        requested_qty: order.qty as f64,
+                        intended_notional: closes
+                            .get(&order.symbol)
+                            .map(|price| *price * order.qty as f64),
+                        reason,
+                        basket_id,
+                        broker_order_id: None,
+                        broker_status: None,
+                        submission_status: "noop",
+                        error_text: None,
+                    })?;
+                }
             }
-            *current_shares = target_shares;
+            *current_shares = target_shares.clone();
+            if let Some(journal) = journal {
+                journal.record_session_close(&BasketSessionCloseRecord {
+                    run_id,
+                    trading_day: date,
+                    status: "noop",
+                    closes_received: closes.len(),
+                    symbols_expected: closes.len(),
+                    active_baskets: plan.active_baskets,
+                    admitted_baskets: plan.selected_baskets.len(),
+                    excluded_baskets: plan.excluded_baskets.len(),
+                    gross_long,
+                    gross_short,
+                    gross_notional,
+                    gross_cap,
+                    net_notional: gross_long + gross_short,
+                    max_abs_leg: max_abs,
+                    median_abs_leg: median_abs,
+                    target_positions: target_positions_len,
+                    current_positions_before: current_shares_before.len(),
+                    current_positions_after: current_shares.len(),
+                    buy_orders,
+                    sell_orders,
+                    buy_notional,
+                    sell_notional,
+                    order_gross_notional: order_gross,
+                    order_max_notional: order_max,
+                    accepted_orders: orders.len(),
+                    failed_orders: 0,
+                    target_gross: Some(gross_notional),
+                    actual_gross: Some(gross_notional),
+                    divergence_pct: Some(0.0),
+                    selected_baskets_json: selected_baskets_json.clone(),
+                    excluded_baskets_json: excluded_baskets_json.clone(),
+                    current_shares_before_json: serialize_shares_map(&current_shares_before),
+                    target_shares_json: target_shares_json.clone(),
+                    current_shares_after_json: Some(serialize_shares_map(current_shares)),
+                    error_text: None,
+                })?;
+            }
         }
         Some(mode) => {
-            check_order_set_affordability(
+            if let Err(e) = check_order_set_affordability(
                 broker,
                 mode,
                 date,
@@ -959,7 +1114,49 @@ async fn process_session_close(
                 &orders,
                 closes,
             )
-            .await?;
+            .await
+            {
+                if let Some(journal) = journal {
+                    journal.record_session_close(&BasketSessionCloseRecord {
+                        run_id,
+                        trading_day: date,
+                        status: "affordability_error",
+                        closes_received: closes.len(),
+                        symbols_expected: closes.len(),
+                        active_baskets: plan.active_baskets,
+                        admitted_baskets: plan.selected_baskets.len(),
+                        excluded_baskets: plan.excluded_baskets.len(),
+                        gross_long,
+                        gross_short,
+                        gross_notional,
+                        gross_cap,
+                        net_notional: gross_long + gross_short,
+                        max_abs_leg: max_abs,
+                        median_abs_leg: median_abs,
+                        target_positions: target_positions_len,
+                        current_positions_before: current_shares_before.len(),
+                        current_positions_after: current_shares.len(),
+                        buy_orders,
+                        sell_orders,
+                        buy_notional,
+                        sell_notional,
+                        order_gross_notional: order_gross,
+                        order_max_notional: order_max,
+                        accepted_orders: 0,
+                        failed_orders: orders.len(),
+                        target_gross: Some(gross_notional),
+                        actual_gross: None,
+                        divergence_pct: None,
+                        selected_baskets_json: selected_baskets_json.clone(),
+                        excluded_baskets_json: excluded_baskets_json.clone(),
+                        current_shares_before_json: serialize_shares_map(&current_shares_before),
+                        target_shares_json: target_shares_json.clone(),
+                        current_shares_after_json: Some(serialize_shares_map(current_shares)),
+                        error_text: Some(e.clone()),
+                    })?;
+                }
+                return Err(e);
+            }
             let mut ordered_refs: Vec<&OrderIntent> = orders.iter().collect();
             ordered_refs.sort_by_key(|o| match o.side {
                 Side::Sell => 0_u8,
@@ -967,7 +1164,7 @@ async fn process_session_close(
             });
             let mut accepted_orders = 0usize;
             let mut failed_orders = 0usize;
-            for order in ordered_refs {
+            for (seq, order) in ordered_refs.into_iter().enumerate() {
                 log_order(order, execution.label());
                 let side_str = match order.side {
                     Side::Buy => "buy",
@@ -990,6 +1187,25 @@ async fn process_session_close(
                             "ORDER PLACED"
                         );
                         accepted_orders += 1;
+                        if let Some(journal) = journal {
+                            journal.record_order_event(&BasketOrderEvent {
+                                run_id,
+                                trading_day: date,
+                                seq,
+                                symbol: order.symbol.as_str(),
+                                side: side_str,
+                                requested_qty: order.qty as f64,
+                                intended_notional: closes
+                                    .get(&order.symbol)
+                                    .map(|price| *price * order.qty as f64),
+                                reason,
+                                basket_id,
+                                broker_order_id: Some(o.id.as_str()),
+                                broker_status: Some(o.status.as_str()),
+                                submission_status: "accepted",
+                                error_text: None,
+                            })?;
+                        }
                     }
                     Err(e) => {
                         failed_orders += 1;
@@ -1002,6 +1218,25 @@ async fn process_session_close(
                             error = e.as_str(),
                             "ORDER FAILED"
                         );
+                        if let Some(journal) = journal {
+                            journal.record_order_event(&BasketOrderEvent {
+                                run_id,
+                                trading_day: date,
+                                seq,
+                                symbol: order.symbol.as_str(),
+                                side: side_str,
+                                requested_qty: order.qty as f64,
+                                intended_notional: closes
+                                    .get(&order.symbol)
+                                    .map(|price| *price * order.qty as f64),
+                                reason,
+                                basket_id,
+                                broker_order_id: None,
+                                broker_status: None,
+                                submission_status: "failed",
+                                error_text: Some(e.as_str()),
+                            })?;
+                        }
                     }
                 }
             }
@@ -1018,24 +1253,32 @@ async fn process_session_close(
             // that turned yesterday's $100K config into a $341K lopsided book).
             if accepted_orders + failed_orders > 0 {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                let mut current_shares_after_json = None;
+                let mut current_positions_after = current_shares.len();
+                let mut actual_gross = None;
+                let mut divergence_pct = None;
                 match seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await {
                     Ok(actual_shares) => {
-                        let actual_gross: f64 = actual_shares
+                        let actual_gross_value: f64 = actual_shares
                             .iter()
                             .filter_map(|(sym, qty)| closes.get(sym).map(|p| (qty * p).abs()))
                             .sum();
                         let target_gross = gross_notional;
-                        let divergence_pct = if target_gross > 0.0 {
-                            ((actual_gross - target_gross).abs() / target_gross) * 100.0
+                        let divergence_pct_value = if target_gross > 0.0 {
+                            ((actual_gross_value - target_gross).abs() / target_gross) * 100.0
                         } else {
                             0.0
                         };
-                        if divergence_pct > 10.0 {
+                        actual_gross = Some(actual_gross_value);
+                        divergence_pct = Some(divergence_pct_value);
+                        current_positions_after = actual_shares.len();
+                        current_shares_after_json = Some(serialize_shares_map(&actual_shares));
+                        if divergence_pct_value > 10.0 {
                             error!(
                                 date = %date,
                                 target_gross = %format!("{:.0}", target_gross),
-                                actual_gross = %format!("{:.0}", actual_gross),
-                                divergence_pct = %format!("{:.1}", divergence_pct),
+                                actual_gross = %format!("{:.0}", actual_gross_value),
+                                divergence_pct = %format!("{:.1}", divergence_pct_value),
                                 accepted_orders,
                                 failed_orders,
                                 broker_positions = actual_shares.len(),
@@ -1045,8 +1288,8 @@ async fn process_session_close(
                             info!(
                                 date = %date,
                                 target_gross = %format!("{:.0}", target_gross),
-                                actual_gross = %format!("{:.0}", actual_gross),
-                                divergence_pct = %format!("{:.1}", divergence_pct),
+                                actual_gross = %format!("{:.0}", actual_gross_value),
+                                divergence_pct = %format!("{:.1}", divergence_pct_value),
                                 broker_positions = actual_shares.len(),
                                 "post-submission reconciliation OK"
                             );
@@ -1059,6 +1302,45 @@ async fn process_session_close(
                             "post-submission reconciliation failed — could not refetch broker positions"
                         );
                     }
+                }
+                if let Some(journal) = journal {
+                    journal.record_session_close(&BasketSessionCloseRecord {
+                        run_id,
+                        trading_day: date,
+                        status: if failed_orders == 0 { "submitted" } else { "partial_failure" },
+                        closes_received: closes.len(),
+                        symbols_expected: closes.len(),
+                        active_baskets: plan.active_baskets,
+                        admitted_baskets: plan.selected_baskets.len(),
+                        excluded_baskets: plan.excluded_baskets.len(),
+                        gross_long,
+                        gross_short,
+                        gross_notional,
+                        gross_cap,
+                        net_notional: gross_long + gross_short,
+                        max_abs_leg: max_abs,
+                        median_abs_leg: median_abs,
+                        target_positions: target_positions_len,
+                        current_positions_before: current_shares_before.len(),
+                        current_positions_after,
+                        buy_orders,
+                        sell_orders,
+                        buy_notional,
+                        sell_notional,
+                        order_gross_notional: order_gross,
+                        order_max_notional: order_max,
+                        accepted_orders,
+                        failed_orders,
+                        target_gross: Some(gross_notional),
+                        actual_gross,
+                        divergence_pct,
+                        selected_baskets_json: selected_baskets_json.clone(),
+                        excluded_baskets_json: excluded_baskets_json.clone(),
+                        current_shares_before_json: serialize_shares_map(&current_shares_before),
+                        target_shares_json: target_shares_json.clone(),
+                        current_shares_after_json,
+                        error_text: None,
+                    })?;
                 }
             }
         }

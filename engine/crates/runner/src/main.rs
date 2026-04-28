@@ -18,6 +18,7 @@ mod alpaca;
 mod bar_cache;
 mod bar_source;
 mod basket_fits;
+mod basket_journal;
 mod basket_live;
 mod broker;
 mod clock;
@@ -151,6 +152,19 @@ struct StreamArgs {
     /// Persisted basket engine state. Defaults to `<fit-artifact>.state.json`.
     #[arg(long)]
     state_path: Option<PathBuf>,
+
+    /// Starting capital for basket paper/live sizing (basket only).
+    #[arg(long, default_value_t = 10_000.0)]
+    capital: f64,
+
+    /// Max active baskets for basket paper/live sizing (basket only).
+    #[arg(long, default_value_t = 15)]
+    n_active_baskets: usize,
+
+    /// Override the durable basket paper/live journal path.
+    /// Defaults to `<data-dir>/journal/basket_live.sqlite3`.
+    #[arg(long)]
+    basket_journal_path: Option<PathBuf>,
 }
 
 /// Args for replay (adds date range).
@@ -544,9 +558,6 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
     }
 
-    // Portfolio config: use sensible defaults for now. Capital & leverage can
-    // be surfaced to CLI/config in a follow-up; defaults match baseline config.
-    let portfolio_config = basket_engine::PortfolioConfig::default();
     let universe = match basket_picker::load_universe(&universe_path) {
         Ok(u) => u,
         Err(e) => {
@@ -554,6 +565,15 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             std::process::exit(1);
         }
     };
+    let portfolio_config = basket_engine::PortfolioConfig {
+        capital: args.capital,
+        leverage: universe.strategy.leverage_assumed,
+        n_active_baskets: args.n_active_baskets,
+    };
+    if let Err(e) = portfolio_config.validate() {
+        error!(error = %e, "invalid basket portfolio config");
+        std::process::exit(1);
+    }
     let fit_artifact = match basket_fits::load_fit_artifact(&fit_artifact_path, &universe) {
         Ok(a) => a,
         Err(e) => {
@@ -580,6 +600,10 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     // the grace constant in sync with `basket_live::CLOSE_GRACE_MIN`.
     let clock = clock::SystemClock;
     let mut session_trigger = session_trigger::IntervalSessionTrigger::new(clock::SystemClock, 2);
+    let basket_journal_path = args
+        .basket_journal_path
+        .clone()
+        .unwrap_or_else(|| args.data_dir.join("journal").join("basket_live.sqlite3"));
 
     if let Err(e) = basket_live::run_basket_live(
         &alpaca,
@@ -592,6 +616,10 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         execution,
         portfolio_config,
         &fit_artifact.fits,
+        basket_live::BasketRunOptions {
+            fit_artifact_path: Some(fit_artifact_path.clone()),
+            journal_path: Some(basket_journal_path),
+        },
     )
     .await
     {
@@ -1432,6 +1460,10 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         execution,
         portfolio_config,
         &fit_artifact.fits,
+        basket_live::BasketRunOptions {
+            fit_artifact_path: None,
+            journal_path: None,
+        },
     )
     .await;
 
