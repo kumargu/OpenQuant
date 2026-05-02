@@ -48,6 +48,37 @@ pub struct SectorConfig {
     pub traded_targets: Vec<String>,
 }
 
+/// Runner-side knobs that affect HOW the runner samples and acts at
+/// session close, not WHAT the strategy is. Kept separate from
+/// [`StrategyConfig`] so the strategy fingerprint stays clean across
+/// research-only timing/snapshot experiments.
+///
+/// Intentionally permissive on missing values — every field has a
+/// `serde(default)` so the existing frozen v1 universe TOML (which
+/// has no `[runner]` section) parses unchanged and produces
+/// byte-identical behavior to the pre-#321 runtime.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RunnerConfig {
+    /// Snapshot cutoff for the once-per-day basket decision: keep the
+    /// most-recent intraday bar whose OPEN minute (NY local) is at or
+    /// before `(RTH_CLOSE_MINUTE − decision_offset_minutes_before_close)`.
+    ///
+    /// `0` = last RTH bar (current production behavior).
+    /// `5` = "t-5m" snapshot — last bar opening at or before 15:55 ET.
+    /// `15` = "t-15m" — at or before 15:45 ET.
+    /// `30` = "t-30m" — at or before 15:30 ET.
+    ///
+    /// In replay this is the only meaningful timing knob — bars are
+    /// drained chronologically before the session-close trigger fires,
+    /// so the live distinction between "close" and "close + grace" (when
+    /// the runner reacts) collapses onto "which bar's close did you
+    /// keep" (what this knob controls).
+    ///
+    /// Live's `CLOSE_GRACE_MIN` is independent and unaffected.
+    #[serde(default)]
+    pub decision_offset_minutes_before_close: u32,
+}
+
 /// Constraints on what NOT to do.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DontDoConfig {
@@ -77,6 +108,8 @@ struct RawUniverse {
     sectors: HashMap<String, SectorConfig>,
     #[serde(default)]
     dont_do: DontDoConfig,
+    #[serde(default)]
+    runner: RunnerConfig,
 }
 
 /// The complete basket universe.
@@ -86,6 +119,7 @@ pub struct Universe {
     pub strategy: StrategyConfig,
     pub sectors: HashMap<String, SectorConfig>,
     pub dont_do: DontDoConfig,
+    pub runner: RunnerConfig,
     /// All basket candidates derived from sectors.
     pub candidates: Vec<BasketCandidate>,
 }
@@ -203,11 +237,24 @@ pub fn load_universe_from_str(content: &str) -> Result<Universe, String> {
     // Sort for deterministic ordering
     candidates.sort_by_key(|a| a.id());
 
+    // Validate runner config bounds. RTH is 6.5h = 390 minutes, so an
+    // offset >= 390 would push the cutoff before the open and reject
+    // every bar — fail fast instead of producing an empty snapshot.
+    const RTH_MINUTES: u32 = 390;
+    if raw.runner.decision_offset_minutes_before_close >= RTH_MINUTES {
+        return Err(format!(
+            "[runner].decision_offset_minutes_before_close must be < {RTH_MINUTES} \
+             (got {}); the cutoff would push before RTH open",
+            raw.runner.decision_offset_minutes_before_close
+        ));
+    }
+
     Ok(Universe {
         version: raw.version,
         strategy: raw.strategy,
         sectors: raw.sectors,
         dont_do: raw.dont_do,
+        runner: raw.runner,
         candidates,
     })
 }

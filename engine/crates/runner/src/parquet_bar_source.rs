@@ -64,6 +64,14 @@ pub struct ParquetBarSource {
     start: NaiveDate,
     end: NaiveDate,
     closes: SharedCloses,
+    /// Snapshot cutoff for the once-per-day decision (issue #321):
+    /// drop bars whose OPEN minute (NY local) is past
+    /// `RTH_CLOSE − decision_offset_min`. `0` accepts every RTH bar
+    /// (production behavior, byte-identical). Applied at emission time
+    /// so the engine's bar buffer, `SharedCloses` (which the
+    /// SimulatedBroker reads for fills), and the BarDrivenClock all
+    /// see exactly the same per-day snapshot.
+    decision_offset_min: u32,
     channels: StdRwLock<Option<ReplayChannels>>,
 }
 
@@ -86,10 +94,22 @@ impl BarSource for ParquetBarSource {
         let start = self.start;
         let end = self.end;
         let closes = self.closes.clone();
+        let decision_offset_min = self.decision_offset_min;
         let symbols: Vec<String> = symbols.to_vec();
 
         tokio::spawn(async move {
-            if let Err(e) = emit_loop(&bars_dir, start, end, &symbols, tx, channels, closes).await {
+            if let Err(e) = emit_loop(
+                &bars_dir,
+                start,
+                end,
+                &symbols,
+                tx,
+                channels,
+                closes,
+                decision_offset_min,
+            )
+            .await
+            {
                 warn!(error = %e, "parquet replay emitter terminated with error");
             }
         });
@@ -101,12 +121,17 @@ impl BarSource for ParquetBarSource {
 /// One-shot constructor that builds every replay-side component. The
 /// returned `ReplayComponents` are designed to be unpacked at the
 /// `replay --engine basket` call site.
+///
+/// `decision_offset_min` (issue #321): drop bars opening past
+/// `RTH_CLOSE − offset`. `0` is byte-identical to "every RTH bar" —
+/// the existing production behavior.
 pub fn new_replay_components(
     bars_dir: PathBuf,
     start: NaiveDate,
     end: NaiveDate,
     portfolio_config: &PortfolioConfig,
     broker_config: crate::simulated_broker::SimulatedBrokerConfig,
+    decision_offset_min: u32,
 ) -> ReplayComponents {
     // Initial clock = start of the first session in the window. Updated
     // by the emitter task as bars flow.
@@ -121,6 +146,7 @@ pub fn new_replay_components(
         start,
         end,
         closes,
+        decision_offset_min,
         channels: StdRwLock::new(Some(channels)),
     };
 
@@ -192,12 +218,14 @@ async fn emit_loop(
     bar_tx: mpsc::Sender<StreamBar>,
     mut channels: ReplayChannels,
     closes: SharedCloses,
+    decision_offset_min: u32,
 ) -> Result<(), String> {
     info!(
         bars_dir = %bars_dir.display(),
         start = %start,
         end = %end,
         symbol_count = symbols.len(),
+        decision_offset_min,
         "replay emit loop starting"
     );
 
@@ -268,6 +296,17 @@ async fn emit_loop(
             None => continue,
         };
         let bar_date = market_session::trading_day_utc(dt_open);
+
+        // Snapshot-cutoff gate (issue #321): drop bars opening past
+        // `RTH_CLOSE − decision_offset_min`. Filter BEFORE the
+        // date-crossing check so we never await on a bar we're going
+        // to discard — the next emitted bar on a new date will fire
+        // `drain_then_signal` for the prior date as usual. With
+        // `offset < 390` (validator-enforced), every trading day still
+        // has its 9:30 first bar, so date-crossing never gets stuck.
+        if !market_session::is_open_at_or_before_cutoff_utc(dt_open, decision_offset_min) {
+            continue;
+        }
 
         // If we've crossed a date boundary, signal the previous date's
         // session close, then BLOCK on the consumer's ack before

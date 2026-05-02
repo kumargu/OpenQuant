@@ -619,6 +619,9 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         basket_live::BasketRunOptions {
             fit_artifact_path: Some(fit_artifact_path.clone()),
             journal_path: Some(basket_journal_path),
+            decision_offset_minutes_before_close: universe
+                .runner
+                .decision_offset_minutes_before_close,
         },
     )
     .await
@@ -1429,12 +1432,18 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         stale_position_rate: args.stale_position_rate,
         seed: args.failure_seed,
     };
+    let decision_offset_min = universe.runner.decision_offset_minutes_before_close;
+    info!(
+        decision_offset_min,
+        "decision snapshot offset (issue #321) — `[runner].decision_offset_minutes_before_close`"
+    );
     let replay = parquet_bar_source::new_replay_components(
         bars_dir.clone(),
         start,
         end,
         &portfolio_config,
         broker_config,
+        decision_offset_min,
     );
     let parquet_bar_source::ReplayComponents {
         bar_source,
@@ -1463,6 +1472,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         basket_live::BasketRunOptions {
             fit_artifact_path: None,
             journal_path: None,
+            decision_offset_minutes_before_close: decision_offset_min,
         },
     )
     .await;

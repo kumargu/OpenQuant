@@ -51,7 +51,12 @@ pub fn build_live_fit_artifact(
 ) -> Result<BasketFitArtifact, String> {
     let universe = load_universe(universe_path)?;
     let symbols = collect_symbols(&universe);
-    let closes = load_warmup_closes(bars_dir, &symbols, WARMUP_DAYS)?;
+    // Fit history must use the same per-day snapshot the runner sees,
+    // otherwise the fit's mean/std are computed on different prices
+    // than the engine is asked to trade against. Sourced from the same
+    // `[runner]` section of the universe TOML the runner reads.
+    let decision_offset_min = universe.runner.decision_offset_minutes_before_close;
+    let closes = load_warmup_closes(bars_dir, &symbols, WARMUP_DAYS, decision_offset_min)?;
     build_live_fit_artifact_from_inputs(&universe, &closes)
 }
 
@@ -66,8 +71,14 @@ pub fn build_replay_fit_artifact_as_of(
 ) -> Result<BasketFitArtifact, String> {
     let universe = load_universe(universe_path)?;
     let symbols = collect_symbols(&universe);
-    let closes =
-        crate::basket_live::load_warmup_closes_as_of(bars_dir, &symbols, WARMUP_DAYS, as_of)?;
+    let decision_offset_min = universe.runner.decision_offset_minutes_before_close;
+    let closes = crate::basket_live::load_warmup_closes_as_of(
+        bars_dir,
+        &symbols,
+        WARMUP_DAYS,
+        as_of,
+        decision_offset_min,
+    )?;
     build_live_fit_artifact_from_inputs(&universe, &closes)
 }
 

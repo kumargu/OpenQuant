@@ -16,7 +16,8 @@ pub use ou::{fit_ou_ar1, OuFit};
 pub use schema::{BasketCandidate, BasketFit};
 pub use spread::build_spread;
 pub use universe::{
-    load_universe, load_universe_from_str, SectorConfig, StrategyConfig, Universe, VersionInfo,
+    load_universe, load_universe_from_str, RunnerConfig, SectorConfig, StrategyConfig, Universe,
+    VersionInfo,
 };
 pub use validator::{validate, ValidatorConfig};
 

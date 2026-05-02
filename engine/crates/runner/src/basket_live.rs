@@ -106,6 +106,13 @@ impl StartupPhase {
 pub struct BasketRunOptions {
     pub fit_artifact_path: Option<PathBuf>,
     pub journal_path: Option<PathBuf>,
+    /// Snapshot cutoff for the once-per-day decision: drop intraday
+    /// bars whose OPEN minute (NY local) is past `RTH_CLOSE − offset`.
+    /// `0` = last RTH bar (current production behavior). Sourced from
+    /// `[runner].decision_offset_minutes_before_close` in the universe
+    /// TOML at the call site. Defaults to 0 so existing call sites
+    /// without `[runner]` configured stay byte-identical.
+    pub decision_offset_minutes_before_close: u32,
 }
 
 async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> Result<(), String> {
@@ -425,6 +432,7 @@ pub async fn run_basket_live(
         ));
     }
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
+    let decision_offset_min = options.decision_offset_minutes_before_close;
     let journal = match options.journal_path.as_deref() {
         Some(path) => Some(BasketJournal::open(path)?),
         None => None,
@@ -484,7 +492,8 @@ pub async fn run_basket_live(
         && market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN)
         && last_processed_trading_day != Some(today)
     {
-        let catchup_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
+        let catchup_closes =
+            load_close_snapshot_for_day(bars_dir, &symbols, today, decision_offset_min)?;
         info!(
             date = %today,
             symbols = catchup_closes.len(),
@@ -525,6 +534,7 @@ pub async fn run_basket_live(
                 let bar_open_ts_ms = startup_bar.timestamp - 60_000;
                 if let Some(dt) = DateTime::<Utc>::from_timestamp_millis(bar_open_ts_ms) {
                     if market_session::is_rth_utc(dt)
+                        && market_session::is_open_at_or_before_cutoff_utc(dt, decision_offset_min)
                         && startup_bar.close.is_finite()
                         && startup_bar.close > 0.0
                     {
@@ -585,6 +595,20 @@ pub async fn run_basket_live(
                         symbol = bar.symbol.as_str(),
                         ts = bar.timestamp,
                         "bar outside RTH — discarded"
+                    );
+                    continue;
+                }
+                // Snapshot-cutoff gate (issue #321): when the universe
+                // TOML pins `decision_offset_minutes_before_close = N`,
+                // drop bars whose OPEN minute (NY local) is past
+                // `RTH_CLOSE − N`. Default `N = 0` preserves the
+                // last-RTH-bar snapshot byte-for-byte.
+                if !market_session::is_open_at_or_before_cutoff_utc(dt, decision_offset_min) {
+                    debug!(
+                        symbol = bar.symbol.as_str(),
+                        ts = bar.timestamp,
+                        offset_min = decision_offset_min,
+                        "bar past decision cutoff — discarded"
                     );
                     continue;
                 }
@@ -827,12 +851,18 @@ fn load_close_snapshot_for_day(
     bars_dir: &Path,
     symbols: &[String],
     day: NaiveDate,
+    decision_offset_min: u32,
 ) -> Result<HashMap<String, f64>, String> {
-    let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 10, Some(day))?;
+    let closes =
+        load_daily_closes_with_timestamps(bars_dir, symbols, 10, Some(day), decision_offset_min)?;
     let mut snapshot = HashMap::new();
     let mut missing = Vec::new();
+    // The last accepted bar opens `max(1, offset)` minutes before
+    // RTH close (offset=0 → 15:59 open; offset=15 → 15:45 open).
+    // `is_rth_utc`'s strict `< 960` minute boundary forces the `max(1, _)`.
+    let lookback_min = decision_offset_min.max(1) as i64;
     let expected_last_bar_ts_us =
-        (market_session::close_timestamp_utc_for_day(day) - 60_000) * 1_000;
+        (market_session::close_timestamp_utc_for_day(day) - lookback_min * 60_000) * 1_000;
     for symbol in symbols {
         match closes.get(symbol).and_then(|series| {
             series.iter().find_map(|(d, ts_us, c)| {
@@ -1478,14 +1508,24 @@ pub(crate) fn collect_symbols(universe: &basket_picker::Universe) -> Vec<String>
 }
 
 /// Read the last `window_days` trading days of daily closes for each symbol.
-/// Aggregates 1-min parquets to RTH-last-bar closes (same rule as replay).
+/// Aggregates 1-min parquets to per-day "last bar at or before
+/// `RTH_CLOSE − decision_offset_min`" closes — same rule the runner
+/// applies in the bar buffer. Pass `0` for the default last-RTH-bar
+/// snapshot.
 pub(crate) fn load_warmup_closes(
     bars_dir: &Path,
     symbols: &[String],
     window_days: i64,
+    decision_offset_min: u32,
 ) -> Result<HashMap<String, Vec<(NaiveDate, f64)>>, String> {
     let today = Utc::now().date_naive();
-    load_daily_closes(bars_dir, symbols, window_days, today.pred_opt())
+    load_daily_closes(
+        bars_dir,
+        symbols,
+        window_days,
+        today.pred_opt(),
+        decision_offset_min,
+    )
 }
 
 /// Same as [`load_warmup_closes`] but with an explicit "as-of" cutoff.
@@ -1498,8 +1538,15 @@ pub(crate) fn load_warmup_closes_as_of(
     symbols: &[String],
     window_days: i64,
     as_of: NaiveDate,
+    decision_offset_min: u32,
 ) -> Result<HashMap<String, Vec<(NaiveDate, f64)>>, String> {
-    load_daily_closes(bars_dir, symbols, window_days, as_of.pred_opt())
+    load_daily_closes(
+        bars_dir,
+        symbols,
+        window_days,
+        as_of.pred_opt(),
+        decision_offset_min,
+    )
 }
 
 fn load_daily_closes(
@@ -1507,9 +1554,15 @@ fn load_daily_closes(
     symbols: &[String],
     window_days: i64,
     max_day_inclusive: Option<NaiveDate>,
+    decision_offset_min: u32,
 ) -> Result<HashMap<String, Vec<(NaiveDate, f64)>>, String> {
-    let closes =
-        load_daily_closes_with_timestamps(bars_dir, symbols, window_days, max_day_inclusive)?;
+    let closes = load_daily_closes_with_timestamps(
+        bars_dir,
+        symbols,
+        window_days,
+        max_day_inclusive,
+        decision_offset_min,
+    )?;
     Ok(closes
         .into_iter()
         .map(|(symbol, series)| {
@@ -1530,6 +1583,7 @@ fn load_daily_closes_with_timestamps(
     symbols: &[String],
     window_days: i64,
     max_day_inclusive: Option<NaiveDate>,
+    decision_offset_min: u32,
 ) -> Result<HashMap<String, Vec<(NaiveDate, i64, f64)>>, String> {
     use arrow::array::{Array, Float64Array, TimestampMicrosecondArray};
     use std::collections::BTreeMap;
@@ -1581,6 +1635,15 @@ fn load_daily_closes_with_timestamps(
                 };
                 let dt_utc = dt.and_utc();
                 if !market_session::is_rth_utc(dt_utc) {
+                    continue;
+                }
+                // Snapshot cutoff (issue #321): keep only bars whose
+                // OPEN minute (NY local) is at or before
+                // `RTH_CLOSE − decision_offset_min`. The downstream
+                // BTreeMap reduction below (max ts_us per day) then
+                // settles on the LAST bar at or before the cutoff —
+                // i.e., the same close the runner's bar buffer keeps.
+                if !market_session::is_open_at_or_before_cutoff_utc(dt_utc, decision_offset_min) {
                     continue;
                 }
                 let px = close.value(i);
