@@ -1,0 +1,53 @@
+# basket_universe_v1_faang_t15m.toml — RESEARCH-ONLY, NOT FROZEN
+# ----------------------------------------------------------------------
+# FAANG-only subset of basket_universe_v1.toml for issue #321
+# (one-shot daily decision-time / snapshot-robustness experiment).
+#
+# Why a separate file: keeps the frozen v1 universe untouched, lets us
+# tweak `[runner].decision_offset_minutes_before_close` per variant
+# without re-running the v1 baseline gauntlet.
+#
+# Strategy section is byte-identical to v1. Only `[sectors]` is narrowed
+# to the `faang` peer group, and `[runner]` is added (default 0 = last
+# RTH bar = production behavior).
+#
+# This file is the t-15m variant of the issue #321 sweep. The four timing variants are sibling files
+# with the offset overridden — see issue #321 for the matrix.
+# ----------------------------------------------------------------------
+
+[version]
+schema = "basket_universe"
+version = "v1"
+frozen_at = "2026-04-20"
+
+[strategy]
+method = "basket_spread_ou_bertram"
+spread_formula = "log(target) - mean(log(peers))"
+threshold_method = "bertram_symmetric"
+threshold_clip_min = 0.15
+threshold_clip_max = 2.5
+residual_window_days = 60
+forward_window_days = 60
+refit_cadence = "quarterly"
+cost_bps_assumed = 5.0
+leverage_assumed = 4.0
+sizing = "equal_weight_across_baskets"
+
+[runner]
+# 0 = last RTH bar (15:59 ET open) — byte-identical to production.
+# Variants for issue #321 phase 1: 5 → t-5m, 15 → t-15m, 30 → t-30m.
+decision_offset_minutes_before_close = 15
+
+[sectors.faang]
+members = ["AAPL", "AMZN", "MSFT", "GOOGL", "META", "NVDA"]
+traded_targets = ["AAPL", "GOOGL", "META", "AMZN"]  # MSFT and NVDA excluded — see v1 notes
+
+[dont_do]
+hl_trade_gate = false
+time_based_exit = false
+stop_loss = false
+regime_derisk = false
+continuous_sizing = false
+score_based_ranking = false
+hl_derived_max_hold = false
+pair_engine_reuse = false
