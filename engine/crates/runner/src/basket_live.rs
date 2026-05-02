@@ -733,6 +733,21 @@ pub async fn run_basket_live(
                         last_processed = ?last_processed_trading_day,
                         "persisted basket engine state after session close"
                     );
+                    // Ack to the session trigger that this session is
+                    // FULLY processed — fills, EOD valuation, state
+                    // save are all done. Replay's
+                    // `BarDrivenSessionTrigger` uses this to release
+                    // the bar emitter, which has been blocked from
+                    // overwriting `SharedCloses` with the next day's
+                    // prices while we ran. Live's
+                    // `IntervalSessionTrigger` no-ops the ack.
+                    //
+                    // Failure paths above (the `?` operators on
+                    // process_session_close and save_state) skip
+                    // this ack on purpose: the runner will exit, the
+                    // trigger's `done_tx` drops, and the emitter
+                    // sees `None` from `done_rx.recv()` and unwinds.
+                    session_trigger.ack_session_processed().await;
                 }
             }
             _ = &mut ctrl_c => {

@@ -190,7 +190,7 @@ async fn emit_loop(
     end: NaiveDate,
     symbols: &[String],
     bar_tx: mpsc::Sender<StreamBar>,
-    channels: ReplayChannels,
+    mut channels: ReplayChannels,
     closes: SharedCloses,
 ) -> Result<(), String> {
     info!(
@@ -270,10 +270,22 @@ async fn emit_loop(
         let bar_date = market_session::trading_day_utc(dt_open);
 
         // If we've crossed a date boundary, signal the previous date's
-        // session close (after the consumer has drained the channel).
+        // session close, then BLOCK on the consumer's ack before
+        // resuming. The ack is the gate that keeps `SharedCloses`
+        // frozen at prev_date's last close while the consumer's
+        // `process_session_close` fills + record_eod read prices.
+        // Without this gate, every emitter advance below would
+        // overwrite SharedCloses with the next day's prices and
+        // races would land fills at prices the engine never saw.
         if let Some(prev_date) = current_date {
             if bar_date != prev_date {
-                drain_then_signal(&bar_tx, &channels.session_tx, prev_date).await;
+                drain_signal_and_wait_ack(
+                    &bar_tx,
+                    &channels.session_tx,
+                    &mut channels.done_rx,
+                    prev_date,
+                )
+                .await;
             }
         }
         current_date = Some(bar_date);
@@ -310,9 +322,18 @@ async fn emit_loop(
         bars_emitted += 1;
     }
 
-    // Final session: signal close for the last date.
+    // Final session: signal close for the last date AND wait for the
+    // consumer's ack so the final session's fills + record_eod
+    // happen against the last day's snapshot, not a half-overwritten
+    // SharedCloses.
     if let Some(last_date) = current_date {
-        drain_then_signal(&bar_tx, &channels.session_tx, last_date).await;
+        drain_signal_and_wait_ack(
+            &bar_tx,
+            &channels.session_tx,
+            &mut channels.done_rx,
+            last_date,
+        )
+        .await;
     }
 
     info!(bars_emitted, "replay emit loop drained");
@@ -321,14 +342,27 @@ async fn emit_loop(
     Ok(())
 }
 
-/// Wait for the bar channel to drain, then signal the session-close
-/// trigger for `date`. The `select! { biased; ... }` on the consumer
-/// side already prefers bars over session events, but explicitly
-/// waiting until the channel is empty makes the ordering invariant
-/// independent of consumer-side biasing.
-async fn drain_then_signal(
+/// Wait for the bar channel to drain, signal the session-close trigger
+/// for `date`, then BLOCK until the consumer acks "session-close fully
+/// processed."
+///
+/// The ack closes a race that produced ~$15 cash drift across
+/// otherwise-identical replay runs (#321 investigation). Pre-fix:
+/// after `session_tx.send(D)` the emitter immediately advanced and
+/// overwrote `SharedCloses` with bars from D+1; the consumer's
+/// `process_session_close` for D then read those D+1 prices on
+/// fills. Different tokio scheduling produced different drift
+/// per run.
+///
+/// Post-fix: the emitter blocks on `done_rx.recv()` until the
+/// consumer signals (via `BarDrivenSessionTrigger::ack_session_processed`)
+/// that fills + EOD valuation are complete against the day's
+/// snapshot. Until then `SharedCloses` is guaranteed to hold
+/// exactly D's last-RTH-bar closes.
+async fn drain_signal_and_wait_ack(
     bar_tx: &mpsc::Sender<StreamBar>,
     session_tx: &mpsc::Sender<NaiveDate>,
+    done_rx: &mut mpsc::Receiver<()>,
     date: NaiveDate,
 ) {
     while bar_tx.capacity() < bar_tx.max_capacity() {
@@ -337,6 +371,13 @@ async fn drain_then_signal(
     }
     if let Err(e) = session_tx.send(date).await {
         debug!(error = %e, "session-close signal dropped (consumer gone)");
+        return;
+    }
+    // Block on the ack. `None` means the consumer dropped its sender —
+    // either Ctrl+C / panic / replay exit. Either way there's no point
+    // continuing to emit bars; let the emit loop unwind.
+    if done_rx.recv().await.is_none() {
+        debug!("session-done ack channel closed; consumer has exited");
     }
 }
 
