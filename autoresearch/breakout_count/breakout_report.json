@@ -1,0 +1,445 @@
+{
+  "window": "2025-07-01 \u2192 2026-03-31",
+  "k": 1.5,
+  "recovery_thresh": 0.5,
+  "max_days": 20,
+  "rolling_window": 30,
+  "rows": [
+    {
+      "sector": "utilities",
+      "target": "EXC",
+      "short_bid": "utilities:EXC",
+      "n_breakouts": 10,
+      "n_tradable": 10,
+      "strat_entries": 143,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "insurance",
+      "target": "PGR",
+      "short_bid": "insurance:PGR",
+      "n_breakouts": 10,
+      "n_tradable": 9,
+      "strat_entries": 177,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "hc_providers",
+      "target": "ELV",
+      "short_bid": "hc_providers:ELV",
+      "n_breakouts": 8,
+      "n_tradable": 8,
+      "strat_entries": 165,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "energy",
+      "target": "CVX",
+      "short_bid": "energy:CVX",
+      "n_breakouts": 9,
+      "n_tradable": 8,
+      "strat_entries": 157,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "energy",
+      "target": "COP",
+      "short_bid": "energy:COP",
+      "n_breakouts": 9,
+      "n_tradable": 8,
+      "strat_entries": 150,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "utilities",
+      "target": "DUK",
+      "short_bid": "utilities:DUK",
+      "n_breakouts": 8,
+      "n_tradable": 8,
+      "strat_entries": 161,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "insurance",
+      "target": "MET",
+      "short_bid": "insurance:MET",
+      "n_breakouts": 9,
+      "n_tradable": 8,
+      "strat_entries": 169,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "chips",
+      "target": "INTC",
+      "short_bid": "chips:INTC",
+      "n_breakouts": 8,
+      "n_tradable": 7,
+      "strat_entries": 173,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "hc_providers",
+      "target": "UNH",
+      "short_bid": "hc_providers:UNH",
+      "n_breakouts": 8,
+      "n_tradable": 7,
+      "strat_entries": 189,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "energy",
+      "target": "XOM",
+      "short_bid": "energy:XOM",
+      "n_breakouts": 8,
+      "n_tradable": 7,
+      "strat_entries": 162,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "utilities",
+      "target": "SO",
+      "short_bid": "utilities:SO",
+      "n_breakouts": 8,
+      "n_tradable": 7,
+      "strat_entries": 88,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "banks_regional",
+      "target": "PNC",
+      "short_bid": "banks_regional:PNC",
+      "n_breakouts": 9,
+      "n_tradable": 7,
+      "strat_entries": 158,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "insurance",
+      "target": "PRU",
+      "short_bid": "insurance:PRU",
+      "n_breakouts": 8,
+      "n_tradable": 7,
+      "strat_entries": 149,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "energy",
+      "target": "OXY",
+      "short_bid": "energy:OXY",
+      "n_breakouts": 9,
+      "n_tradable": 6,
+      "strat_entries": 95,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "energy",
+      "target": "PSX",
+      "short_bid": "energy:PSX",
+      "n_breakouts": 7,
+      "n_tradable": 6,
+      "strat_entries": 172,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "entsw",
+      "target": "ORCL",
+      "short_bid": "entsw:ORCL",
+      "n_breakouts": 7,
+      "n_tradable": 6,
+      "strat_entries": 0,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "entsw",
+      "target": "ADBE",
+      "short_bid": "entsw:ADBE",
+      "n_breakouts": 8,
+      "n_tradable": 6,
+      "strat_entries": 0,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "utilities",
+      "target": "AEP",
+      "short_bid": "utilities:AEP",
+      "n_breakouts": 7,
+      "n_tradable": 6,
+      "strat_entries": 175,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "banks_regional",
+      "target": "USB",
+      "short_bid": "banks_regional:USB",
+      "n_breakouts": 7,
+      "n_tradable": 6,
+      "strat_entries": 155,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "banks_regional",
+      "target": "KEY",
+      "short_bid": "banks_regional:KEY",
+      "n_breakouts": 8,
+      "n_tradable": 6,
+      "strat_entries": 104,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "banks_regional",
+      "target": "HBAN",
+      "short_bid": "banks_regional:HBAN",
+      "n_breakouts": 8,
+      "n_tradable": 6,
+      "strat_entries": 52,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "faang",
+      "target": "AAPL",
+      "short_bid": "faang:AAPL",
+      "n_breakouts": 9,
+      "n_tradable": 6,
+      "strat_entries": 185,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "insurance",
+      "target": "ALL",
+      "short_bid": "insurance:ALL",
+      "n_breakouts": 7,
+      "n_tradable": 6,
+      "strat_entries": 145,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "entsw",
+      "target": "CRM",
+      "short_bid": "entsw:CRM",
+      "n_breakouts": 8,
+      "n_tradable": 5,
+      "strat_entries": 0,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "utilities",
+      "target": "D",
+      "short_bid": "utilities:D",
+      "n_breakouts": 8,
+      "n_tradable": 5,
+      "strat_entries": 158,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "banks_regional",
+      "target": "RF",
+      "short_bid": "banks_regional:RF",
+      "n_breakouts": 7,
+      "n_tradable": 5,
+      "strat_entries": 124,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "faang",
+      "target": "META",
+      "short_bid": "faang:META",
+      "n_breakouts": 7,
+      "n_tradable": 5,
+      "strat_entries": 181,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "faang",
+      "target": "AMZN",
+      "short_bid": "faang:AMZN",
+      "n_breakouts": 6,
+      "n_tradable": 5,
+      "strat_entries": 71,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "insurance",
+      "target": "TRV",
+      "short_bid": "insurance:TRV",
+      "n_breakouts": 7,
+      "n_tradable": 5,
+      "strat_entries": 112,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "chips",
+      "target": "ADI",
+      "short_bid": "chips:ADI",
+      "n_breakouts": 7,
+      "n_tradable": 4,
+      "strat_entries": 166,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "chips",
+      "target": "NVDA",
+      "short_bid": "chips:NVDA",
+      "n_breakouts": 6,
+      "n_tradable": 4,
+      "strat_entries": 80,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "energy",
+      "target": "MPC",
+      "short_bid": "energy:MPC",
+      "n_breakouts": 7,
+      "n_tradable": 4,
+      "strat_entries": 172,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "entsw",
+      "target": "INTU",
+      "short_bid": "entsw:INTU",
+      "n_breakouts": 6,
+      "n_tradable": 4,
+      "strat_entries": 175,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "utilities",
+      "target": "NEE",
+      "short_bid": "utilities:NEE",
+      "n_breakouts": 5,
+      "n_tradable": 4,
+      "strat_entries": 169,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "banks_regional",
+      "target": "TFC",
+      "short_bid": "banks_regional:TFC",
+      "n_breakouts": 6,
+      "n_tradable": 4,
+      "strat_entries": 132,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "faang",
+      "target": "GOOGL",
+      "short_bid": "faang:GOOGL",
+      "n_breakouts": 7,
+      "n_tradable": 4,
+      "strat_entries": 60,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "chips",
+      "target": "AMD",
+      "short_bid": "chips:AMD",
+      "n_breakouts": 8,
+      "n_tradable": 3,
+      "strat_entries": 111,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "chips",
+      "target": "MU",
+      "short_bid": "chips:MU",
+      "n_breakouts": 6,
+      "n_tradable": 3,
+      "strat_entries": 177,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "hc_providers",
+      "target": "CI",
+      "short_bid": "hc_providers:CI",
+      "n_breakouts": 6,
+      "n_tradable": 3,
+      "strat_entries": 171,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "hc_providers",
+      "target": "HUM",
+      "short_bid": "hc_providers:HUM",
+      "n_breakouts": 6,
+      "n_tradable": 3,
+      "strat_entries": 43,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "insurance",
+      "target": "AIG",
+      "short_bid": "insurance:AIG",
+      "n_breakouts": 7,
+      "n_tradable": 3,
+      "strat_entries": 169,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "hc_providers",
+      "target": "CNC",
+      "short_bid": "hc_providers:CNC",
+      "n_breakouts": 6,
+      "n_tradable": 2,
+      "strat_entries": 101,
+      "strat_flips": 0,
+      "n_days": 189
+    },
+    {
+      "sector": "hc_providers",
+      "target": "MOH",
+      "short_bid": "hc_providers:MOH",
+      "n_breakouts": 6,
+      "n_tradable": 2,
+      "strat_entries": 3,
+      "strat_flips": 0,
+      "n_days": 189
+    }
+  ],
+  "totals": {
+    "breakouts": 321,
+    "tradable": 238,
+    "strat_entries": 5499,
+    "strat_flips": 0
+  }
+}
