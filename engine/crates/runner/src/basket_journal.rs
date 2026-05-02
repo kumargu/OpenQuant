@@ -190,7 +190,10 @@ impl BasketJournal {
     }
 
     pub fn record_run(&self, rec: &BasketRunRecord<'_>) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|_| "basket journal mutex poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "basket journal mutex poisoned".to_string())?;
         conn.execute(
             "INSERT OR REPLACE INTO basket_runs (
                 run_id, started_at_utc, execution_mode, universe_path, fit_artifact_path,
@@ -219,7 +222,10 @@ impl BasketJournal {
     }
 
     pub fn record_session_close(&self, rec: &BasketSessionCloseRecord<'_>) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|_| "basket journal mutex poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "basket journal mutex poisoned".to_string())?;
         conn.execute(
             "INSERT INTO basket_session_closes (
                 run_id, trading_day, status, closes_received, symbols_expected,
@@ -289,7 +295,10 @@ impl BasketJournal {
     }
 
     pub fn record_order_event(&self, rec: &BasketOrderEvent<'_>) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|_| "basket journal mutex poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "basket journal mutex poisoned".to_string())?;
         conn.execute(
             "INSERT INTO basket_order_events (
                 run_id, trading_day, seq, symbol, side, requested_qty, intended_notional,
@@ -415,7 +424,9 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM basket_runs", [], |r| r.get(0))
             .unwrap();
         let sessions: i64 = conn
-            .query_row("SELECT COUNT(*) FROM basket_session_closes", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM basket_session_closes", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         let orders: i64 = conn
             .query_row("SELECT COUNT(*) FROM basket_order_events", [], |r| r.get(0))

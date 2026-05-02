@@ -146,12 +146,10 @@ mod tests {
 
         // Consumer signals done → emitter should observe it.
         trigger.ack_session_processed().await;
-        let received = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            channels.done_rx.recv(),
-        )
-        .await
-        .expect("ack should arrive within the test timeout");
+        let received =
+            tokio::time::timeout(std::time::Duration::from_secs(1), channels.done_rx.recv())
+                .await
+                .expect("ack should arrive within the test timeout");
         assert_eq!(received, Some(()), "exactly one ack per call");
 
         // After consume, channel is empty again.
@@ -171,7 +169,7 @@ mod tests {
         let initial = Utc.with_ymd_and_hms(2026, 1, 2, 14, 30, 0).unwrap();
         let (_clock, mut trigger, channels) = make_replay_clock_and_trigger(initial);
         drop(channels); // simulate emitter task exiting / panicking
-        // Should not panic.
+                        // Should not panic.
         trigger.ack_session_processed().await;
     }
 }
