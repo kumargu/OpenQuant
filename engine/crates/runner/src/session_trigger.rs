@@ -29,6 +29,22 @@ pub trait SessionTrigger: Send + Sync {
     /// date that just closed, or `None` if no further sessions will
     /// arrive (replay exhausted).
     async fn next(&mut self) -> Option<NaiveDate>;
+
+    /// Acknowledge that the consumer has fully finished processing the
+    /// session returned by the most recent `next()` call (engine
+    /// `on_bars`, fills, EOD valuation, state save).
+    ///
+    /// Replay implementations use this as a back-pressure signal to
+    /// the bar emitter — the emitter MUST NOT advance past the
+    /// just-closed session's last bar (and overwrite `SharedCloses`
+    /// with the next day's prices) until the consumer's fills are
+    /// done against the day's snapshot. Without this gate, the
+    /// emitter races the consumer at session-close, and fills can
+    /// land at next-day prices the engine never saw.
+    ///
+    /// Live implementations no-op — there is no shared mutable price
+    /// state between a wall-clock trigger and the broker.
+    async fn ack_session_processed(&mut self) {}
 }
 
 /// Production trigger — polls the clock on a 30s wall-clock interval.

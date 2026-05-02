@@ -38,11 +38,11 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tracing::{debug, error, info, warn};
 
 use crate::alpaca::ExecutionMode;
-use crate::basket_journal::{
-    serialize_shares_map, serialize_string_vec, BasketJournal, BasketOrderEvent,
-    BasketRunRecord, BasketSessionCloseRecord,
-};
 use crate::bar_source::BarSource;
+use crate::basket_journal::{
+    serialize_shares_map, serialize_string_vec, BasketJournal, BasketOrderEvent, BasketRunRecord,
+    BasketSessionCloseRecord,
+};
 use crate::broker::Broker;
 use crate::clock::Clock;
 use crate::market_session;
@@ -431,7 +431,10 @@ pub async fn run_basket_live(
     };
     let run_id = format!(
         "{}-{}",
-        execution.label().to_ascii_lowercase().replace([' ', '(', ')'], "-"),
+        execution
+            .label()
+            .to_ascii_lowercase()
+            .replace([' ', '(', ')'], "-"),
         now.timestamp_millis()
     );
     info!(
@@ -656,7 +659,27 @@ pub async fn run_basket_live(
                         break;
                     }
                 };
-                if !processed_sessions.contains(&today) {
+                // EVERY session_event MUST end with `ack_session_processed`
+                // so the bar emitter (blocked on `done_rx.recv()` after
+                // `session_tx.send(date)`) can resume. Skipping the ack
+                // — even on dedup or non-trading days — hangs replay
+                // forever (codex review on PR #322). The labeled block
+                // gives every short-circuit path a single fall-through
+                // point. The only paths that can skip the ack are the
+                // `return Err(...)` failures below: those drop the
+                // trigger, the emitter sees `None` from
+                // `done_rx.recv()`, and the run unwinds cleanly.
+                'session: {
+                    if processed_sessions.contains(&today) {
+                        // Resume case (state on disk had this date): the
+                        // emitter still drives session_tx for D, so we
+                        // must still ack.
+                        info!(
+                            date = %today,
+                            "session-close event for already-processed date — acknowledging without rerun"
+                        );
+                        break 'session;
+                    }
                     let closes_for_day = day_closes.remove(&today).unwrap_or_default();
                     if closes_for_day.is_empty() {
                         if !market_session::is_trading_day(today) {
@@ -665,7 +688,7 @@ pub async fn run_basket_live(
                                 "session close grace elapsed on non-trading day with zero buffered closes — marking processed"
                             );
                             processed_sessions.insert(today);
-                            continue;
+                            break 'session;
                         }
                         error!(
                             date = %today,
@@ -734,6 +757,12 @@ pub async fn run_basket_live(
                         "persisted basket engine state after session close"
                     );
                 }
+                // Replay's `BarDrivenSessionTrigger` uses this to
+                // release the bar emitter, which has been blocked
+                // from overwriting `SharedCloses` with the next day's
+                // prices while we ran. Live's
+                // `IntervalSessionTrigger` no-ops the ack.
+                session_trigger.ack_session_processed().await;
             }
             _ = &mut ctrl_c => {
                 info!(
@@ -1307,7 +1336,11 @@ async fn process_session_close(
                     journal.record_session_close(&BasketSessionCloseRecord {
                         run_id,
                         trading_day: date,
-                        status: if failed_orders == 0 { "submitted" } else { "partial_failure" },
+                        status: if failed_orders == 0 {
+                            "submitted"
+                        } else {
+                            "partial_failure"
+                        },
                         closes_received: closes.len(),
                         symbols_expected: closes.len(),
                         active_baskets: plan.active_baskets,
