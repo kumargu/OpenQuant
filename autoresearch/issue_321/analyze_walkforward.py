@@ -20,8 +20,9 @@ ROOT = Path("autoresearch/issue_321/walkforward")
 FIT_ROOT = Path("autoresearch/issue_321/walkforward_fits")  # per-block fits go here
 
 VARIANTS = ["baseline", "dom050", "dom060", "nomegacaps", "nomegacaps_dom050"]
-BLOCKS = ["test1", "test2", "test3"]
+BLOCKS = ["test0", "test1", "test2", "test3"]
 BLOCK_RANGES = {
+    "test0": ("2024-07-01", "2024-12-31"),  # 2nd truly-OOS block
     "test1": ("2025-01-01", "2025-06-30"),
     "test2": ("2025-07-01", "2025-12-31"),
     "test3": ("2026-01-01", "2026-03-31"),
@@ -40,12 +41,19 @@ def parse_report(p: Path) -> dict:
 
 
 def parse_engine_log(p: Path) -> dict:
-    """Extract n_valid, avg_active, n_orders from engine.log."""
+    """Extract n_valid, avg_active, n_orders, n_intents from engine.log.
+
+    `n_orders` counts emitted broker orders (`ORDER PLACED` lines), one per
+    symbol per side per day — the real turnover.
+    `n_intents` counts `BASKET_INTENT` lines — basket-level position-change
+    intents the engine emits, before they're aggregated to symbol orders.
+    """
     if not p.exists():
         return {}
     n_valid = None
     actives = []
     n_orders = 0
+    n_intents = 0
     with p.open() as f:
         for line in f:
             if n_valid is None and "loaded basket fits" in line:
@@ -56,13 +64,16 @@ def parse_engine_log(p: Path) -> dict:
                 m = re.search(r"admitted=(\d+)", line)
                 if m:
                     actives.append(int(m.group(1)))
-            if "BASKET_INTENT" in line:
+            if "ORDER PLACED" in line:
                 n_orders += 1
+            if "BASKET_INTENT" in line:
+                n_intents += 1
     return {
         "n_valid": n_valid,
         "avg_active": mean(actives) if actives else None,
         "n_decisions": len(actives),
         "n_orders": n_orders,
+        "n_intents": n_intents,
     }
 
 
@@ -99,7 +110,7 @@ def jaccard(a: set, b: set) -> float:
 
 def main():
     print("=" * 96)
-    print(" WALK-FORWARD: 5 variants x 3 OOS blocks (frozen rules)")
+    print(f" WALK-FORWARD: {len(VARIANTS)} variants x {len(BLOCKS)} OOS blocks (frozen rules)")
     print("=" * 96)
     rows = {}
     fits = {}
@@ -117,14 +128,15 @@ def main():
     # Per-variant flat table
     for v in VARIANTS:
         print(f"\n{v}")
-        hdr = f"{'block':<8} {'cum':>8} {'sharpe':>8} {'mdd':>8} {'n_valid':>8} {'avg_act':>8} {'orders':>8}"
+        hdr = (f"{'block':<8} {'cum':>8} {'sharpe':>8} {'mdd':>8} {'n_valid':>8}"
+               f" {'avg_act':>8} {'intents':>8} {'orders':>8}")
         print(hdr)
         print("-" * len(hdr))
         for b in BLOCKS:
             r = rows[v][b]
             valid = fits[v][b].get("n_valid", r.get("n_valid"))
             cum = r.get("cum_return"); sh = r.get("sharpe"); mdd = r.get("max_dd")
-            avg_a = r.get("avg_active"); orders = r.get("n_orders")
+            avg_a = r.get("avg_active"); intents = r.get("n_intents"); orders = r.get("n_orders")
             print(f"{b:<8}"
                   f" {cum:>+8.3f}" if cum is not None else f"{b:<8} {'  ---':>8}",
                   end="")
@@ -132,6 +144,7 @@ def main():
             print(f" {mdd:>+8.3f}" if mdd is not None else f" {'  ---':>8}", end="")
             print(f" {valid:>8}" if valid is not None else f" {'  ---':>8}", end="")
             print(f" {avg_a:>8.2f}" if avg_a is not None else f" {'  ---':>8}", end="")
+            print(f" {intents:>8}" if intents is not None else f" {'  ---':>8}", end="")
             print(f" {orders:>8}" if orders is not None else f" {'  ---':>8}")
 
     # Reject lists per (variant, block)
@@ -154,15 +167,14 @@ def main():
     for v in ["dom050", "dom060"]:
         sets = {b: set(fits[v][b].get("rejected_ids", [])) for b in BLOCKS}
         if all(fits[v][b].get("present") for b in BLOCKS):
-            j12 = jaccard(sets["test1"], sets["test2"])
-            j23 = jaccard(sets["test2"], sets["test3"])
-            j13 = jaccard(sets["test1"], sets["test3"])
-            j_all = sets["test1"] & sets["test2"] & sets["test3"]
             print(f"\n{v}:")
-            print(f"  Jaccard(test1, test2) = {j12:.2f}")
-            print(f"  Jaccard(test2, test3) = {j23:.2f}")
-            print(f"  Jaccard(test1, test3) = {j13:.2f}")
-            print(f"  Always rejected: {sorted(j_all) if j_all else '(none)'}")
+            for i in range(len(BLOCKS)):
+                for j in range(i + 1, len(BLOCKS)):
+                    print(f"  Jaccard({BLOCKS[i]}, {BLOCKS[j]}) = "
+                          f"{jaccard(sets[BLOCKS[i]], sets[BLOCKS[j]]):.2f}")
+            j_all = set.intersection(*sets.values())
+            print(f"  Always rejected ({len(j_all)}): "
+                  f"{sorted(j_all) if j_all else '(none)'}")
 
     # Additivity check for dom050 + nomegacaps
     print("\n" + "=" * 96)
@@ -198,7 +210,7 @@ def main():
                       f"-> {'+' if d >= 0 else ''}{d:.3f}")
             avg = mean(x[1] for x in diffs)
             n_pos = sum(1 for x in diffs if x[1] > 0.2)
-            print(f"  mean lift = {avg:+.3f}, blocks with lift>0.2: {n_pos}/3")
+            print(f"  mean lift = {avg:+.3f}, blocks with lift>0.2: {n_pos}/{len(diffs)}")
 
 
 if __name__ == "__main__":

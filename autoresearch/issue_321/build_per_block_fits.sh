@@ -25,6 +25,7 @@ for v_pair in \
   "nomegacaps_dom050:config/basket_universe_v1_no_megacaps_dom050.toml"; do
   v="${v_pair%%:*}"
   u="${v_pair#*:}"
+  build_one "$v" "$u" test0 2024-07-01
   build_one "$v" "$u" test1 2025-01-01
   build_one "$v" "$u" test2 2025-07-01
   build_one "$v" "$u" test3 2026-01-01

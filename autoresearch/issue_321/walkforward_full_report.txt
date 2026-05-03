@@ -1,0 +1,145 @@
+================================================================================================
+ WALK-FORWARD: 5 variants x 4 OOS blocks (frozen rules)
+================================================================================================
+
+baseline
+block         cum   sharpe      mdd  n_valid  avg_act  intents   orders
+-----------------------------------------------------------------------
+test0      +0.097   +1.207   +0.089       41     8.00     3756     1334
+test1      +0.038   +0.486   +0.072       43     8.00     3698     1315
+test2      -0.007   +0.103   +0.245       40     8.00     3635     1374
+test3      +0.224   +3.329   +0.057       42     8.00     1679      831
+
+dom050
+block         cum   sharpe      mdd  n_valid  avg_act  intents   orders
+-----------------------------------------------------------------------
+test0      +0.113   +1.176   +0.086       10     8.00      190     1242
+test1      +0.210   +2.862   +0.048       11     7.99      291     1498
+test2      +0.237   +2.795   +0.060        5     4.96       25      432
+test3      +0.078   +1.630   +0.068       10     7.95       91      708
+
+dom060
+block         cum   sharpe      mdd  n_valid  avg_act  intents   orders
+-----------------------------------------------------------------------
+test0      +0.146   +1.788   +0.075       15     8.00      740     1359
+test1      +0.229   +3.075   +0.048       12     7.99      374     1579
+test2      +0.159   +1.638   +0.085       10     7.98      161     1056
+test3      +0.135   +2.731   +0.060       11     7.97      141      853
+
+nomegacaps
+block         cum   sharpe      mdd  n_valid  avg_act  intents   orders
+-----------------------------------------------------------------------
+test0      +0.179   +2.260   +0.065       36     8.00     3187     1301
+test1      +0.110   +1.101   +0.089       38     8.00     3173     1355
+test2      +0.009   +0.214   +0.248       35     8.00     3011     1091
+test3      +0.283   +4.643   +0.055       37     8.00     1406      814
+
+nomegacaps_dom050
+block         cum   sharpe      mdd  n_valid  avg_act  intents   orders
+-----------------------------------------------------------------------
+test0      +0.120   +1.986   +0.050        7     6.98       22      796
+test1      +0.201   +2.870   +0.055        9     7.98      107     1348
+test2      +0.227   +2.842   +0.038        4     3.96       20      382
+test3      +0.097   +2.037   +0.038        9     7.93       45      486
+
+================================================================================================
+ REJECTED BASKET LISTS (gate-rejected; sorted)
+================================================================================================
+
+dom050 / test0: 33 rejected of 43
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:TFC, banks_regional:USB, chips:ADI, chips:MU, chips:NVDA, energy:COP, energy:MPC, energy:OXY, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, faang:AAPL, faang:AMZN, hc_providers:CI, hc_providers:CNC, hc_providers:ELV, hc_providers:HUM, hc_providers:MOH, hc_providers:UNH, insurance:AIG, insurance:ALL, insurance:MET, insurance:PRU, insurance:TRV, utilities:D, utilities:DUK, utilities:NEE, utilities:SO
+
+dom050 / test1: 32 rejected of 43
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:RF, banks_regional:TFC, chips:AMD, chips:INTC, chips:MU, energy:COP, energy:MPC, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, faang:AAPL, faang:AMZN, faang:GOOGL, hc_providers:CI, hc_providers:CNC, hc_providers:ELV, hc_providers:HUM, hc_providers:UNH, insurance:ALL, insurance:MET, insurance:PGR, insurance:PRU, insurance:TRV, utilities:AEP, utilities:D, utilities:NEE, utilities:SO
+
+dom050 / test2: 38 rejected of 43
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:PNC, banks_regional:RF, banks_regional:TFC, banks_regional:USB, chips:ADI, chips:AMD, chips:MU, chips:NVDA, energy:MPC, energy:OXY, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, faang:AMZN, faang:GOOGL, faang:META, hc_providers:CI, hc_providers:CNC, hc_providers:ELV, hc_providers:HUM, hc_providers:MOH, hc_providers:UNH, insurance:ALL, insurance:MET, insurance:PGR, insurance:PRU, insurance:TRV, utilities:AEP, utilities:D, utilities:DUK, utilities:EXC, utilities:NEE, utilities:SO
+
+dom050 / test3: 33 rejected of 43
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:PNC, banks_regional:RF, banks_regional:USB, chips:ADI, chips:AMD, chips:INTC, chips:MU, energy:COP, energy:MPC, energy:OXY, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, faang:AAPL, faang:AMZN, faang:GOOGL, faang:META, hc_providers:CI, hc_providers:HUM, hc_providers:MOH, insurance:AIG, insurance:ALL, insurance:PGR, insurance:PRU, insurance:TRV, utilities:DUK, utilities:EXC, utilities:SO
+
+dom060 / test0: 28 rejected of 43
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:TFC, banks_regional:USB, chips:ADI, chips:MU, chips:NVDA, energy:COP, energy:MPC, energy:PSX, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, faang:AAPL, hc_providers:CNC, hc_providers:ELV, hc_providers:HUM, hc_providers:MOH, hc_providers:UNH, insurance:AIG, insurance:ALL, insurance:MET, insurance:PRU, insurance:TRV, utilities:DUK, utilities:NEE, utilities:SO
+
+dom060 / test1: 31 rejected of 43
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:RF, banks_regional:TFC, chips:AMD, chips:INTC, chips:MU, energy:COP, energy:MPC, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, faang:AAPL, faang:AMZN, faang:GOOGL, hc_providers:CI, hc_providers:CNC, hc_providers:ELV, hc_providers:UNH, insurance:ALL, insurance:MET, insurance:PGR, insurance:PRU, insurance:TRV, utilities:AEP, utilities:D, utilities:NEE, utilities:SO
+
+dom060 / test2: 33 rejected of 43
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:RF, banks_regional:TFC, banks_regional:USB, chips:ADI, chips:AMD, chips:MU, chips:NVDA, energy:MPC, energy:OXY, energy:PSX, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, faang:AMZN, faang:GOOGL, faang:META, hc_providers:CNC, hc_providers:ELV, hc_providers:MOH, hc_providers:UNH, insurance:ALL, insurance:MET, insurance:PRU, insurance:TRV, utilities:AEP, utilities:D, utilities:DUK, utilities:EXC, utilities:NEE, utilities:SO
+
+dom060 / test3: 32 rejected of 43
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:PNC, banks_regional:RF, banks_regional:USB, chips:ADI, chips:AMD, chips:INTC, chips:MU, energy:COP, energy:MPC, energy:OXY, energy:PSX, energy:XOM, entsw:CRM, entsw:INTU, entsw:ORCL, faang:AAPL, faang:AMZN, faang:GOOGL, faang:META, hc_providers:CI, hc_providers:HUM, hc_providers:MOH, insurance:AIG, insurance:ALL, insurance:PGR, insurance:PRU, insurance:TRV, utilities:DUK, utilities:EXC, utilities:SO
+
+nomegacaps / test0: 2 rejected of 38
+   hc_providers:CNC, hc_providers:HUM
+
+nomegacaps / test1: 0 rejected of 38
+
+nomegacaps / test2: 3 rejected of 38
+   entsw:ADBE, entsw:CRM, entsw:ORCL
+
+nomegacaps / test3: 1 rejected of 38
+   energy:MPC
+
+nomegacaps_dom050 / test0: 31 rejected of 38
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:TFC, banks_regional:USB, chips:ADI, chips:INTC, chips:MU, energy:COP, energy:MPC, energy:OXY, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, hc_providers:CI, hc_providers:CNC, hc_providers:ELV, hc_providers:HUM, hc_providers:MOH, hc_providers:UNH, insurance:AIG, insurance:ALL, insurance:MET, insurance:PRU, insurance:TRV, utilities:D, utilities:DUK, utilities:NEE, utilities:SO
+
+nomegacaps_dom050 / test1: 29 rejected of 38
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:RF, banks_regional:TFC, chips:AMD, chips:INTC, chips:MU, energy:COP, energy:MPC, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, hc_providers:CI, hc_providers:CNC, hc_providers:ELV, hc_providers:HUM, hc_providers:UNH, insurance:ALL, insurance:MET, insurance:PGR, insurance:PRU, insurance:TRV, utilities:AEP, utilities:D, utilities:NEE, utilities:SO
+
+nomegacaps_dom050 / test2: 34 rejected of 38
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:PNC, banks_regional:RF, banks_regional:TFC, banks_regional:USB, chips:ADI, chips:AMD, chips:MU, energy:MPC, energy:OXY, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, hc_providers:CI, hc_providers:CNC, hc_providers:ELV, hc_providers:HUM, hc_providers:MOH, hc_providers:UNH, insurance:ALL, insurance:MET, insurance:PGR, insurance:PRU, insurance:TRV, utilities:AEP, utilities:D, utilities:DUK, utilities:EXC, utilities:NEE, utilities:SO
+
+nomegacaps_dom050 / test3: 29 rejected of 38
+   banks_regional:HBAN, banks_regional:KEY, banks_regional:PNC, banks_regional:RF, banks_regional:USB, chips:ADI, chips:AMD, chips:INTC, chips:MU, energy:COP, energy:MPC, energy:OXY, energy:PSX, energy:XOM, entsw:ADBE, entsw:CRM, entsw:INTU, entsw:ORCL, hc_providers:CI, hc_providers:HUM, hc_providers:MOH, insurance:AIG, insurance:ALL, insurance:PGR, insurance:PRU, insurance:TRV, utilities:DUK, utilities:EXC, utilities:SO
+
+================================================================================================
+ REJECT-LIST STABILITY (Jaccard across blocks)
+================================================================================================
+
+dom050:
+  Jaccard(test0, test1) = 0.67
+  Jaccard(test0, test2) = 0.73
+  Jaccard(test0, test3) = 0.61
+  Jaccard(test1, test2) = 0.71
+  Jaccard(test1, test3) = 0.59
+  Jaccard(test2, test3) = 0.69
+  Always rejected (17): ['banks_regional:HBAN', 'banks_regional:KEY', 'chips:MU', 'energy:MPC', 'energy:PSX', 'energy:XOM', 'entsw:ADBE', 'entsw:CRM', 'entsw:INTU', 'entsw:ORCL', 'faang:AMZN', 'hc_providers:CI', 'hc_providers:HUM', 'insurance:ALL', 'insurance:PRU', 'insurance:TRV', 'utilities:SO']
+
+dom060:
+  Jaccard(test0, test1) = 0.55
+  Jaccard(test0, test2) = 0.65
+  Jaccard(test0, test3) = 0.50
+  Jaccard(test1, test2) = 0.64
+  Jaccard(test1, test3) = 0.54
+  Jaccard(test2, test3) = 0.55
+  Always rejected (12): ['banks_regional:HBAN', 'banks_regional:KEY', 'chips:MU', 'energy:MPC', 'energy:PSX', 'entsw:CRM', 'entsw:INTU', 'entsw:ORCL', 'insurance:ALL', 'insurance:PRU', 'insurance:TRV', 'utilities:SO']
+
+================================================================================================
+ ADDITIVITY: dom050 + nomegacaps
+================================================================================================
+
+block      baseline     dom050     nomega      stack   dom_lift    nm_lift stack_lift
+test0        +1.207     +1.176     +2.260     +1.986     -0.031     +1.053     +0.780
+test1        +0.486     +2.862     +1.101     +2.870     +2.377     +0.616     +2.384
+test2        +0.103     +2.795     +0.214     +2.842     +2.692     +0.111     +2.739
+test3        +3.329     +1.630     +4.643     +2.037     -1.699     +1.314     -1.292
+
+================================================================================================
+ KEY DECISION QUESTION
+ 'If dom_only_0p50 or dom_only_0p60 stays materially better than baseline OOS'
+================================================================================================
+
+dom050:
+  test0: Sharpe +1.176 vs baseline +1.207  -> -0.031
+  test1: Sharpe +2.862 vs baseline +0.486  -> +2.377
+  test2: Sharpe +2.795 vs baseline +0.103  -> +2.692
+  test3: Sharpe +1.630 vs baseline +3.329  -> -1.699
+  mean lift = +0.835, blocks with lift>0.2: 2/4
+
+dom060:
+  test0: Sharpe +1.788 vs baseline +1.207  -> +0.581
+  test1: Sharpe +3.075 vs baseline +0.486  -> +2.589
+  test2: Sharpe +1.638 vs baseline +0.103  -> +1.535
+  test3: Sharpe +2.731 vs baseline +3.329  -> -0.597
+  mean lift = +1.027, blocks with lift>0.2: 3/4
