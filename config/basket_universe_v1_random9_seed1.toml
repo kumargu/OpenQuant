@@ -1,0 +1,60 @@
+# Random 9-basket subset, seed=1. Picked: [('hc_providers', 'CNC'), ('faang', 'AMZN'), ('chips', 'NVDA'), ('energy', 'PSX'), ('hc_providers', 'HUM'), ('banks_regional', 'HBAN'), ('banks_regional', 'PNC'), ('banks_regional', 'KEY'), ('utilities', 'D')]
+
+[version]
+schema = "basket_universe"
+version = "v1"
+frozen_at = "2026-04-20"
+baseline_sharpe_point = 2.8
+baseline_ci_95_lo = 1.26
+baseline_ci_95_hi = 3.18
+baseline_ci_method = "fit-date-clustered bootstrap (hierarchical)"
+
+[strategy]
+method = "basket_spread_ou_bertram"
+spread_formula = "log(target) - mean(log(peers))"
+threshold_method = "bertram_symmetric"
+threshold_clip_min = 0.15
+threshold_clip_max = 2.5
+residual_window_days = 60
+forward_window_days = 60
+refit_cadence = "quarterly"
+cost_bps_assumed = 5.0
+leverage_assumed = 4.0
+sizing = "equal_weight_across_baskets"
+
+[dont_do]
+hl_trade_gate = false
+time_based_exit = false
+stop_loss = false
+regime_derisk = false
+continuous_sizing = false
+score_based_ranking = false
+hl_derived_max_hold = false
+pair_engine_reuse = false
+
+[runner]
+decision_offset_minutes_before_close = 0
+
+[sectors.chips]
+members = [ "NVDA", "AVGO", "AMD", "INTC", "MU", "ADI",]
+traded_targets = [ "NVDA",]
+
+[sectors.hc_providers]
+members = [ "UNH", "CI", "HUM", "CNC", "ELV", "MOH",]
+traded_targets = [ "CNC", "HUM",]
+
+[sectors.energy]
+members = [ "XOM", "CVX", "COP", "OXY", "MPC", "PSX",]
+traded_targets = [ "PSX",]
+
+[sectors.utilities]
+members = [ "NEE", "DUK", "SO", "D", "AEP", "EXC",]
+traded_targets = [ "D",]
+
+[sectors.banks_regional]
+members = [ "USB", "PNC", "TFC", "KEY", "HBAN", "RF",]
+traded_targets = [ "HBAN", "PNC", "KEY",]
+
+[sectors.faang]
+members = [ "AAPL", "AMZN", "MSFT", "GOOGL", "META", "NVDA",]
+traded_targets = [ "AMZN",]

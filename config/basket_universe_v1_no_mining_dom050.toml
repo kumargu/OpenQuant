@@ -1,0 +1,113 @@
+# basket_universe_v1_no_mining.toml — RESEARCH VARIANT (NOT FROZEN)
+# ----------------------------------------------------------------------
+# This is `basket_universe_v1.toml` with the `sectors.mining` block
+# removed. It exists for replay-only research while the metals/mining
+# basket is being redesigned.
+#
+# Why mining was pulled (not deleted from v1, just excluded here):
+#   `sectors.mining` mixed three macro drivers:
+#     - NEM, FCX  — gold / copper miners (commodity price-driven)
+#     - NUE, STLD — steel producers (industrial demand-driven)
+#     - MLM, VMC  — construction aggregates (infrastructure-driven)
+#   Cointegration is fragile across these regimes; we'd rather not
+#   trade a basket whose peers decouple by design.
+#
+# Status:
+#   - Replay only. NOT for live/paper.
+#   - Frozen v1 is untouched. The autoresearch baseline (Sharpe 2.80,
+#     point estimate from full v1) still applies to v1, NOT to this.
+#   - Use this via `replay --engine basket --universe config/basket_universe_v1_no_mining.toml`.
+#   - Quant-lab is researching a proper metals replacement
+#     (precious-only / industrial-only / aggregates-only sub-baskets).
+#     When that lands, a frozen v2 supersedes both this file and v1.
+#
+# DO NOT promote this file to live until quant-lab has signed off and
+# we've gone through the full universe-version protocol (CHANGELOG,
+# issue, baseline rerun).
+# ----------------------------------------------------------------------
+
+[version]
+schema = "basket_universe"
+version = "v1"
+frozen_at = "2026-04-20"
+baseline_sharpe_point = 2.80
+baseline_ci_95_lo = 1.26
+baseline_ci_95_hi = 3.18
+baseline_ci_method = "fit-date-clustered bootstrap (hierarchical)"
+
+[strategy]
+method = "basket_spread_ou_bertram"
+spread_formula = "log(target) - mean(log(peers))"
+threshold_method = "bertram_symmetric"
+threshold_clip_min = 0.15
+threshold_clip_max = 2.5
+residual_window_days = 60
+forward_window_days = 60
+refit_cadence = "quarterly"
+cost_bps_assumed = 5.0
+leverage_assumed = 4.0
+sizing = "equal_weight_across_baskets"
+dominance_gate_enabled = true
+dominance_max = 0.5
+
+# Sector groups: { target } traded vs { other members of group }
+# Exactly 9 sectors × 6 members each = 54 candidate baskets
+# (subset of 49 targets after AVGO/MSFT/NVDA exclusions — see notes)
+
+[sectors.chips]
+members = ["NVDA", "AVGO", "AMD", "INTC", "MU", "ADI"]
+traded_targets = ["AMD", "INTC", "ADI", "MU", "NVDA"]  # AVGO excluded (cursed in this peer set)
+
+[sectors.hc_providers]
+members = ["UNH", "CI", "HUM", "CNC", "ELV", "MOH"]
+traded_targets = ["UNH", "CI", "HUM", "CNC", "ELV", "MOH"]
+
+[sectors.energy]
+members = ["XOM", "CVX", "COP", "OXY", "MPC", "PSX"]
+traded_targets = ["XOM", "CVX", "COP", "OXY", "MPC", "PSX"]
+
+[sectors.entsw]
+members = ["MSFT", "ORCL", "CRM", "ADBE", "INTU", "IBM"]
+traded_targets = ["ORCL", "CRM", "ADBE", "INTU"]  # MSFT and IBM excluded
+
+[sectors.utilities]
+members = ["NEE", "DUK", "SO", "D", "AEP", "EXC"]
+traded_targets = ["NEE", "DUK", "SO", "D", "AEP", "EXC"]
+
+[sectors.banks_regional]
+members = ["USB", "PNC", "TFC", "KEY", "HBAN", "RF"]
+traded_targets = ["USB", "PNC", "TFC", "KEY", "HBAN", "RF"]
+
+[sectors.faang]
+members = ["AAPL", "AMZN", "MSFT", "GOOGL", "META", "NVDA"]
+traded_targets = ["AAPL", "GOOGL", "META", "AMZN"]  # MSFT and NVDA excluded
+
+[sectors.insurance]
+members = ["ALL", "TRV", "PGR", "AIG", "MET", "PRU"]
+traded_targets = ["ALL", "TRV", "PGR", "AIG", "MET", "PRU"]
+
+# ----------------------------------------------------------------------
+# Explicitly EXCLUDED from v1 (see project_statarb_autoresearch_findings.md):
+#   - biotech, big_retail, pharma, reits — net-negative mean contribution
+#   - industrials, payments, defense, banks_money — marginal, within CI noise
+#
+# Candidates for v2 (NOT to be added without re-running the full gauntlet):
+#   - Box-Tiao weights instead of equal-weight
+#   - Vine-copula partner selection
+#   - Ex-ante sector rotation (weak signal ρ=0.12, needs more research)
+# ----------------------------------------------------------------------
+
+[dont_do]
+hl_trade_gate = false       # DO NOT re-introduce absolute HL as trade filter
+time_based_exit = false     # DO NOT close at mult × half-life
+stop_loss = false           # DO NOT exit on adverse spread move
+regime_derisk = false       # DO NOT size-down at extreme |s| (was a bug)
+continuous_sizing = false   # DO NOT use linear-in-z sizing (loses to Bertram)
+score_based_ranking = false # DO NOT sort baskets by HL-derived score
+hl_derived_max_hold = false # DO NOT derive max_hold from half-life
+pair_engine_reuse = false   # DO NOT port by adapting PairsEngine / PairConfig
+
+[runner]
+# Issue #321 baseline cell — last RTH bar (production behavior).
+# Variants in sibling files override this for the timing sweep.
+decision_offset_minutes_before_close = 0

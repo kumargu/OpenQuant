@@ -1,0 +1,60 @@
+# Random 9-basket subset, seed=2. Picked: [('chips', 'MU'), ('hc_providers', 'UNH'), ('insurance', 'MET'), ('utilities', 'SO'), ('hc_providers', 'MOH'), ('entsw', 'ADBE'), ('energy', 'PSX'), ('energy', 'COP'), ('chips', 'ADI')]
+
+[version]
+schema = "basket_universe"
+version = "v1"
+frozen_at = "2026-04-20"
+baseline_sharpe_point = 2.8
+baseline_ci_95_lo = 1.26
+baseline_ci_95_hi = 3.18
+baseline_ci_method = "fit-date-clustered bootstrap (hierarchical)"
+
+[strategy]
+method = "basket_spread_ou_bertram"
+spread_formula = "log(target) - mean(log(peers))"
+threshold_method = "bertram_symmetric"
+threshold_clip_min = 0.15
+threshold_clip_max = 2.5
+residual_window_days = 60
+forward_window_days = 60
+refit_cadence = "quarterly"
+cost_bps_assumed = 5.0
+leverage_assumed = 4.0
+sizing = "equal_weight_across_baskets"
+
+[dont_do]
+hl_trade_gate = false
+time_based_exit = false
+stop_loss = false
+regime_derisk = false
+continuous_sizing = false
+score_based_ranking = false
+hl_derived_max_hold = false
+pair_engine_reuse = false
+
+[runner]
+decision_offset_minutes_before_close = 0
+
+[sectors.chips]
+members = [ "NVDA", "AVGO", "AMD", "INTC", "MU", "ADI",]
+traded_targets = [ "MU", "ADI",]
+
+[sectors.hc_providers]
+members = [ "UNH", "CI", "HUM", "CNC", "ELV", "MOH",]
+traded_targets = [ "UNH", "MOH",]
+
+[sectors.energy]
+members = [ "XOM", "CVX", "COP", "OXY", "MPC", "PSX",]
+traded_targets = [ "PSX", "COP",]
+
+[sectors.entsw]
+members = [ "MSFT", "ORCL", "CRM", "ADBE", "INTU", "IBM",]
+traded_targets = [ "ADBE",]
+
+[sectors.utilities]
+members = [ "NEE", "DUK", "SO", "D", "AEP", "EXC",]
+traded_targets = [ "SO",]
+
+[sectors.insurance]
+members = [ "ALL", "TRV", "PGR", "AIG", "MET", "PRU",]
+traded_targets = [ "MET",]
