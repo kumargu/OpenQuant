@@ -1,0 +1,1030 @@
+{
+  "schema": "basket_fit_artifact",
+  "version": "v1",
+  "universe_version": "v1",
+  "universe_frozen_at": "2026-04-20",
+  "generated_at": "2026-05-03T16:59:53.741908+00:00",
+  "fits": [
+    {
+      "candidate": {
+        "target": "HBAN",
+        "members": [
+          "USB",
+          "PNC",
+          "TFC",
+          "KEY",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=3.600 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "KEY",
+        "members": [
+          "USB",
+          "PNC",
+          "TFC",
+          "HBAN",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=5.755 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "PNC",
+        "members": [
+          "USB",
+          "TFC",
+          "KEY",
+          "HBAN",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.575 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "RF",
+        "members": [
+          "USB",
+          "PNC",
+          "TFC",
+          "KEY",
+          "HBAN"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.846 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "TFC",
+        "members": [
+          "USB",
+          "PNC",
+          "KEY",
+          "HBAN",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=2.451 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "USB",
+        "members": [
+          "PNC",
+          "TFC",
+          "KEY",
+          "HBAN",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.442 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "ADI",
+        "members": [
+          "NVDA",
+          "AVGO",
+          "AMD",
+          "INTC",
+          "MU"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.757 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "AMD",
+        "members": [
+          "NVDA",
+          "AVGO",
+          "INTC",
+          "MU",
+          "ADI"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=3.055 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "INTC",
+        "members": [
+          "NVDA",
+          "AVGO",
+          "AMD",
+          "MU",
+          "ADI"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.0988355557734721,
+        "b": 0.9522588392327854,
+        "kappa": 12.327434581326749,
+        "mu": -2.0702378028760817,
+        "sigma": 0.024008855914918276,
+        "sigma_eq": 0.07864231317264606,
+        "half_life_days": 14.1694598619648
+      },
+      "bertram": {
+        "a": -2.0869654408666625,
+        "m": -2.053510164885501,
+        "k": 0.21270531493469558,
+        "expected_return_rate": 0.3781069484758339,
+        "expected_trade_length_days": 21.963969667125752,
+        "sigma_cont": 0.3904879443976593
+      },
+      "threshold_k": 0.21270531493469558,
+      "adf_statistic": -1.9757426093915702,
+      "adf_pvalue": 0.42565621820012495,
+      "dominance_score": 0.2988790646731997,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "MU",
+        "members": [
+          "NVDA",
+          "AVGO",
+          "AMD",
+          "INTC",
+          "ADI"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=2.097 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "NVDA",
+        "members": [
+          "AVGO",
+          "AMD",
+          "INTC",
+          "MU",
+          "ADI"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=2.625 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "COP",
+        "members": [
+          "XOM",
+          "CVX",
+          "OXY",
+          "MPC",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.005375733679769377,
+        "b": 0.9685977084671629,
+        "kappa": 8.04029053851539,
+        "mu": -0.17118921637129614,
+        "sigma": 0.009726275803847316,
+        "sigma_eq": 0.0391189709890654,
+        "half_life_days": 21.72472358609058
+      },
+      "bertram": {
+        "a": -0.18170966778559508,
+        "m": -0.1606687649569972,
+        "k": 0.2689347686890754,
+        "expected_return_rate": 0.12102189916506871,
+        "expected_trade_length_days": 42.771659910463015,
+        "sigma_cont": 0.15686942018705705
+      },
+      "threshold_k": 0.2689347686890754,
+      "adf_statistic": -1.0763274062179826,
+      "adf_pvalue": 0.6871141260994237,
+      "dominance_score": 0.47684158244054076,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "CVX",
+        "members": [
+          "XOM",
+          "COP",
+          "OXY",
+          "MPC",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.027483075452705463,
+        "b": 0.9276380769480335,
+        "kappa": 18.928633640050368,
+        "mu": 0.3798002360021383,
+        "sigma": 0.008183240304438953,
+        "sigma_eq": 0.021910763260274208,
+        "half_life_days": 9.22798194643707
+      },
+      "bertram": {
+        "a": 0.37263536358075083,
+        "m": 0.38696510842352577,
+        "k": 0.3270024113846311,
+        "expected_return_rate": 0.15684377734184035,
+        "expected_trade_length_days": 22.220171940793882,
+        "sigma_cont": 0.13481311296639223
+      },
+      "threshold_k": 0.3270024113846311,
+      "adf_statistic": -2.934805148241588,
+      "adf_pvalue": 0.13430266905165616,
+      "dominance_score": 0.4863912084681056,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "MPC",
+        "members": [
+          "XOM",
+          "CVX",
+          "COP",
+          "OXY",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.325 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "OXY",
+        "members": [
+          "XOM",
+          "CVX",
+          "COP",
+          "MPC",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.131 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "PSX",
+        "members": [
+          "XOM",
+          "CVX",
+          "COP",
+          "OXY",
+          "MPC"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.797 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "XOM",
+        "members": [
+          "CVX",
+          "COP",
+          "OXY",
+          "MPC",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.509 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "ADBE",
+        "members": [
+          "MSFT",
+          "ORCL",
+          "CRM",
+          "INTU",
+          "IBM"
+        ],
+        "sector": "entsw",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "OU fit failed (b not in (0,1))"
+    },
+    {
+      "candidate": {
+        "target": "CRM",
+        "members": [
+          "MSFT",
+          "ORCL",
+          "ADBE",
+          "INTU",
+          "IBM"
+        ],
+        "sector": "entsw",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "OU fit failed (b not in (0,1))"
+    },
+    {
+      "candidate": {
+        "target": "INTU",
+        "members": [
+          "MSFT",
+          "ORCL",
+          "CRM",
+          "ADBE",
+          "IBM"
+        ],
+        "sector": "entsw",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.819 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "ORCL",
+        "members": [
+          "MSFT",
+          "CRM",
+          "ADBE",
+          "INTU",
+          "IBM"
+        ],
+        "sector": "entsw",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.469 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "AAPL",
+        "members": [
+          "AMZN",
+          "MSFT",
+          "GOOGL",
+          "META",
+          "NVDA"
+        ],
+        "sector": "faang",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.010280371599937175,
+        "b": 0.9760360856020565,
+        "kappa": 6.112441515499363,
+        "mu": -0.4289938375351308,
+        "sigma": 0.01816801117551888,
+        "sigma_eq": 0.08348934866409075,
+        "half_life_days": 28.57664798234656
+      },
+      "bertram": {
+        "a": -0.4463998504246757,
+        "m": -0.4115878246455859,
+        "k": 0.20848183831899184,
+        "expected_return_rate": 0.1992130164891287,
+        "expected_trade_length_days": 43.40394342054697,
+        "sigma_cont": 0.2919129952687237
+      },
+      "threshold_k": 0.20848183831899184,
+      "adf_statistic": -0.9429696305314157,
+      "adf_pvalue": 0.7258809213571465,
+      "dominance_score": 0.2889389789157769,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "AMZN",
+        "members": [
+          "AAPL",
+          "MSFT",
+          "GOOGL",
+          "META",
+          "NVDA"
+        ],
+        "sector": "faang",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.720 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "GOOGL",
+        "members": [
+          "AAPL",
+          "AMZN",
+          "MSFT",
+          "META",
+          "NVDA"
+        ],
+        "sector": "faang",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.643 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "META",
+        "members": [
+          "AAPL",
+          "AMZN",
+          "MSFT",
+          "GOOGL",
+          "NVDA"
+        ],
+        "sector": "faang",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=2.345 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "CI",
+        "members": [
+          "UNH",
+          "HUM",
+          "CNC",
+          "ELV",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.582 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "CNC",
+        "members": [
+          "UNH",
+          "CI",
+          "HUM",
+          "ELV",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.726 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "ELV",
+        "members": [
+          "UNH",
+          "CI",
+          "HUM",
+          "CNC",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.280 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "HUM",
+        "members": [
+          "UNH",
+          "CI",
+          "CNC",
+          "ELV",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.577 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "MOH",
+        "members": [
+          "UNH",
+          "CI",
+          "HUM",
+          "CNC",
+          "ELV"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.884 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "UNH",
+        "members": [
+          "CI",
+          "HUM",
+          "CNC",
+          "ELV",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.217 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "AIG",
+        "members": [
+          "ALL",
+          "TRV",
+          "PGR",
+          "MET",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.03939797838462554,
+        "b": 0.9405735436092245,
+        "kappa": 15.438890126479437,
+        "mu": -0.6629703464994275,
+        "sigma": 0.006979775808813003,
+        "sigma_eq": 0.02055353387672782,
+        "half_life_days": 11.313837203978942
+      },
+      "bertram": {
+        "a": -0.6698383424174688,
+        "m": -0.6561023505813863,
+        "k": 0.33415158479475293,
+        "expected_return_rate": 0.11972000197717887,
+        "expected_trade_length_days": 27.860590441090885,
+        "sigma_cont": 0.11421142211593083
+      },
+      "threshold_k": 0.33415158479475293,
+      "adf_statistic": -1.4067862516140006,
+      "adf_pvalue": 0.591050508251744,
+      "dominance_score": 0.2353789841725394,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "ALL",
+        "members": [
+          "TRV",
+          "PGR",
+          "AIG",
+          "MET",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.049 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "MET",
+        "members": [
+          "ALL",
+          "TRV",
+          "PGR",
+          "AIG",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.572 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "PGR",
+        "members": [
+          "ALL",
+          "TRV",
+          "AIG",
+          "MET",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.550 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "PRU",
+        "members": [
+          "ALL",
+          "TRV",
+          "PGR",
+          "AIG",
+          "MET"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.653 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "TRV",
+        "members": [
+          "ALL",
+          "PGR",
+          "AIG",
+          "MET",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=1.598 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "AEP",
+        "members": [
+          "NEE",
+          "DUK",
+          "SO",
+          "D",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.850 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "D",
+        "members": [
+          "NEE",
+          "DUK",
+          "SO",
+          "AEP",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.905 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "DUK",
+        "members": [
+          "NEE",
+          "SO",
+          "D",
+          "AEP",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.794 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "EXC",
+        "members": [
+          "NEE",
+          "DUK",
+          "SO",
+          "D",
+          "AEP"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.804 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "NEE",
+        "members": [
+          "DUK",
+          "SO",
+          "D",
+          "AEP",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.821 > 0.500"
+    },
+    {
+      "candidate": {
+        "target": "SO",
+        "members": [
+          "NEE",
+          "DUK",
+          "D",
+          "AEP",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "dominance gate failed: score=0.860 > 0.500"
+    }
+  ]
+}

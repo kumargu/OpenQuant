@@ -1,0 +1,1555 @@
+{
+  "schema": "basket_fit_artifact",
+  "version": "v1",
+  "universe_version": "v1",
+  "universe_frozen_at": "2026-04-20",
+  "generated_at": "2026-05-03T16:59:52.257407+00:00",
+  "fits": [
+    {
+      "candidate": {
+        "target": "HBAN",
+        "members": [
+          "USB",
+          "PNC",
+          "TFC",
+          "KEY",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.06272970386020589,
+        "b": 0.9332553801992431,
+        "kappa": 17.407251839915023,
+        "mu": -0.9398465980848176,
+        "sigma": 0.0049638404377025476,
+        "sigma_eq": 0.01381863250184163,
+        "half_life_days": 10.034501201423355
+      },
+      "bertram": {
+        "a": -0.9451294678682158,
+        "m": -0.9345637283014194,
+        "k": 0.38230047601990247,
+        "expected_return_rate": 0.0892007750134119,
+        "expected_trade_length_days": 28.436595651229545,
+        "sigma_cont": 0.08153520571710658
+      },
+      "threshold_k": 0.38230047601990247,
+      "adf_statistic": -2.0075160963462824,
+      "adf_pvalue": 0.4164197394342203,
+      "dominance_score": 3.6003783144289634,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "KEY",
+        "members": [
+          "USB",
+          "PNC",
+          "TFC",
+          "HBAN",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.22233927593739636,
+        "b": 0.758476347645071,
+        "kappa": 69.66380326371954,
+        "mu": -0.9205693677183201,
+        "sigma": 0.005328733028292232,
+        "sigma_eq": 0.008176658563195854,
+        "half_life_days": 2.507372283994647
+      },
+      "bertram": {
+        "a": -0.924308216595436,
+        "m": -0.9168305188412041,
+        "k": 0.4572587748673969,
+        "expected_return_rate": 0.20468729960375448,
+        "expected_trade_length_days": 8.59056637842413,
+        "sigma_cont": 0.09651491918231826
+      },
+      "threshold_k": 0.4572587748673969,
+      "adf_statistic": -2.7021381723620514,
+      "adf_pvalue": 0.2101723350993311,
+      "dominance_score": 5.754980244282065,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "PNC",
+        "members": [
+          "USB",
+          "TFC",
+          "KEY",
+          "HBAN",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.3088920916214975,
+        "b": 0.842107306354112,
+        "kappa": 43.30565331979185,
+        "mu": 1.9563418958084386,
+        "sigma": 0.004756801045495891,
+        "sigma_eq": 0.008820160902100138,
+        "half_life_days": 4.033493923096547
+      },
+      "bertram": {
+        "a": 1.9524120915891616,
+        "m": 1.9602717000277157,
+        "k": 0.4455479058597749,
+        "expected_return_rate": 0.13798274331404736,
+        "expected_trade_length_days": 13.440965746669635,
+        "sigma_cont": 0.08208500010886934
+      },
+      "threshold_k": 0.4455479058597749,
+      "adf_statistic": -2.8861609640690573,
+      "adf_pvalue": 0.15016490302095958,
+      "dominance_score": 0.5753657103931759,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "RF",
+        "members": [
+          "USB",
+          "PNC",
+          "TFC",
+          "KEY",
+          "HBAN"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.04139550883769999,
+        "b": 0.9241307214932125,
+        "kappa": 19.88323945508347,
+        "mu": -0.5456162184802723,
+        "sigma": 0.003915818096885493,
+        "sigma_eq": 0.010248781758815481,
+        "half_life_days": 8.784941201140553
+      },
+      "bertram": {
+        "a": -0.5499541561733843,
+        "m": -0.5412782807871603,
+        "k": 0.4232637395542789,
+        "expected_return_rate": 0.07433052395617945,
+        "expected_trade_length_days": 27.71836504937147,
+        "sigma_cont": 0.06462950273434484
+      },
+      "threshold_k": 0.4232637395542789,
+      "adf_statistic": -1.4423740000471734,
+      "adf_pvalue": 0.5807052325444264,
+      "dominance_score": 0.8455537117727859,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "TFC",
+        "members": [
+          "USB",
+          "PNC",
+          "KEY",
+          "HBAN",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.013665868709679617,
+        "b": 0.9247066963619934,
+        "kappa": 19.726226544995583,
+        "mu": 0.1815017810266643,
+        "sigma": 0.0052264866520951095,
+        "sigma_eq": 0.013729331470115652,
+        "half_life_days": 8.854865835727697
+      },
+      "bertram": {
+        "a": 0.17624147223301784,
+        "m": 0.18676208982031078,
+        "k": 0.3831438409871935,
+        "expected_return_rate": 0.10039835001489371,
+        "expected_trade_length_days": 25.15176426328938,
+        "sigma_cont": 0.08623556169173616
+      },
+      "threshold_k": 0.3831438409871935,
+      "adf_statistic": -1.7364813239159003,
+      "adf_pvalue": 0.4952089174663081,
+      "dominance_score": 2.450527875820732,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "USB",
+        "members": [
+          "PNC",
+          "TFC",
+          "KEY",
+          "HBAN",
+          "RF"
+        ],
+        "sector": "banks_regional",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.02643024849405713,
+        "b": 0.9016727969091631,
+        "kappa": 26.082901555849432,
+        "mu": 0.2687989453909339,
+        "sigma": 0.0054985364200441506,
+        "sigma_eq": 0.01271576127910441,
+        "half_life_days": 6.696842723846936
+      },
+      "bertram": {
+        "a": 0.26379824159784937,
+        "m": 0.27379964918401845,
+        "k": 0.39326814048499686,
+        "expected_return_rate": 0.12246853368195618,
+        "expected_trade_length_days": 19.550774715182026,
+        "sigma_cont": 0.09184072744312793
+      },
+      "threshold_k": 0.39326814048499686,
+      "adf_statistic": -1.320782985894469,
+      "adf_pvalue": 0.6160514575888172,
+      "dominance_score": 1.4421598567465448,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "ADI",
+        "members": [
+          "NVDA",
+          "AVGO",
+          "AMD",
+          "INTC",
+          "MU"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.014158231345071536,
+        "b": 0.980901624265865,
+        "kappa": 4.859342590991756,
+        "mu": 0.7413316997301607,
+        "sigma": 0.0134892161909313,
+        "sigma_eq": 0.06935168933090885,
+        "half_life_days": 35.94582728637306
+      },
+      "bertram": {
+        "a": 0.7259448311210513,
+        "m": 0.75671856833927,
+        "k": 0.221867250207727,
+        "expected_return_rate": 0.13117639274855877,
+        "expected_trade_length_days": 58.15819157044868,
+        "sigma_cont": 0.21620254484955487
+      },
+      "threshold_k": 0.221867250207727,
+      "adf_statistic": -0.43267922345646453,
+      "adf_pvalue": 0.8742211559719579,
+      "dominance_score": 1.7566878029004376,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "AMD",
+        "members": [
+          "NVDA",
+          "AVGO",
+          "INTC",
+          "MU",
+          "ADI"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.01366142463100815,
+        "b": 0.8122407403818047,
+        "kappa": 52.40554312360528,
+        "mu": 0.07276032435784198,
+        "sigma": 0.02070442473830633,
+        "sigma_eq": 0.03549396703560971,
+        "half_life_days": 3.3331033148366966
+      },
+      "bertram": {
+        "a": 0.06289706763335493,
+        "m": 0.08262358108232903,
+        "k": 0.2778854421820934,
+        "expected_return_rate": 0.7139598658522746,
+        "expected_trade_length_days": 6.78620973093181,
+        "sigma_cont": 0.363377600338404
+      },
+      "threshold_k": 0.2778854421820934,
+      "adf_statistic": -2.1590928719063283,
+      "adf_pvalue": 0.37235672328304414,
+      "dominance_score": 3.0548791487017697,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "INTC",
+        "members": [
+          "NVDA",
+          "AVGO",
+          "AMD",
+          "MU",
+          "ADI"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.0988355557734721,
+        "b": 0.9522588392327854,
+        "kappa": 12.327434581326749,
+        "mu": -2.0702378028760817,
+        "sigma": 0.024008855914918276,
+        "sigma_eq": 0.07864231317264606,
+        "half_life_days": 14.1694598619648
+      },
+      "bertram": {
+        "a": -2.0869654408666625,
+        "m": -2.053510164885501,
+        "k": 0.21270531493469558,
+        "expected_return_rate": 0.3781069484758339,
+        "expected_trade_length_days": 21.963969667125752,
+        "sigma_cont": 0.3904879443976593
+      },
+      "threshold_k": 0.21270531493469558,
+      "adf_statistic": -1.9757426093915702,
+      "adf_pvalue": 0.42565621820012495,
+      "dominance_score": 0.2988790646731997,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "MU",
+        "members": [
+          "NVDA",
+          "AVGO",
+          "AMD",
+          "INTC",
+          "ADI"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.001411417428376632,
+        "b": 0.9898421587373993,
+        "kappa": 2.572865614241838,
+        "mu": 0.13894856120396526,
+        "sigma": 0.017325085513872244,
+        "sigma_eq": 0.12186117518731596,
+        "half_life_days": 67.89048309955287
+      },
+      "bertram": {
+        "a": 0.11656597816857396,
+        "m": 0.16133114423935654,
+        "k": 0.1836727981737124,
+        "expected_return_rate": 0.12298922350444456,
+        "expected_trade_length_days": 90.69755489133648,
+        "sigma_cont": 0.27643237891487776
+      },
+      "threshold_k": 0.1836727981737124,
+      "adf_statistic": -0.7336182681076527,
+      "adf_pvalue": 0.7867388755501009,
+      "dominance_score": 2.097173923392801,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "NVDA",
+        "members": [
+          "AVGO",
+          "AMD",
+          "INTC",
+          "MU",
+          "ADI"
+        ],
+        "sector": "chips",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.043146095242883736,
+        "b": 0.830245386516367,
+        "kappa": 46.88056182121666,
+        "mu": 0.254167438265492,
+        "sigma": 0.01646592244743636,
+        "sigma_eq": 0.02954068843406014,
+        "half_life_days": 3.725917154475199
+      },
+      "bertram": {
+        "a": 0.24543457669914537,
+        "m": 0.2629002998318386,
+        "k": 0.2956214641320855,
+        "expected_return_rate": 0.5288672645496143,
+        "expected_trade_length_days": 8.083998606114546,
+        "sigma_cont": 0.28604345418211874
+      },
+      "threshold_k": 0.2956214641320855,
+      "adf_statistic": -2.490444852252317,
+      "adf_pvalue": 0.27603347318246607,
+      "dominance_score": 2.624785173291626,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "COP",
+        "members": [
+          "XOM",
+          "CVX",
+          "OXY",
+          "MPC",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.005375733679769377,
+        "b": 0.9685977084671629,
+        "kappa": 8.04029053851539,
+        "mu": -0.17118921637129614,
+        "sigma": 0.009726275803847316,
+        "sigma_eq": 0.0391189709890654,
+        "half_life_days": 21.72472358609058
+      },
+      "bertram": {
+        "a": -0.18170966778559508,
+        "m": -0.1606687649569972,
+        "k": 0.2689347686890754,
+        "expected_return_rate": 0.12102189916506871,
+        "expected_trade_length_days": 42.771659910463015,
+        "sigma_cont": 0.15686942018705705
+      },
+      "threshold_k": 0.2689347686890754,
+      "adf_statistic": -1.0763274062179826,
+      "adf_pvalue": 0.6871141260994237,
+      "dominance_score": 0.47684158244054076,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "CVX",
+        "members": [
+          "XOM",
+          "COP",
+          "OXY",
+          "MPC",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.027483075452705463,
+        "b": 0.9276380769480335,
+        "kappa": 18.928633640050368,
+        "mu": 0.3798002360021383,
+        "sigma": 0.008183240304438953,
+        "sigma_eq": 0.021910763260274208,
+        "half_life_days": 9.22798194643707
+      },
+      "bertram": {
+        "a": 0.37263536358075083,
+        "m": 0.38696510842352577,
+        "k": 0.3270024113846311,
+        "expected_return_rate": 0.15684377734184035,
+        "expected_trade_length_days": 22.220171940793882,
+        "sigma_cont": 0.13481311296639223
+      },
+      "threshold_k": 0.3270024113846311,
+      "adf_statistic": -2.934805148241588,
+      "adf_pvalue": 0.13430266905165616,
+      "dominance_score": 0.4863912084681056,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "MPC",
+        "members": [
+          "XOM",
+          "CVX",
+          "COP",
+          "OXY",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.029576363681602096,
+        "b": 0.9508668092552796,
+        "kappa": 12.69608246032437,
+        "mu": 0.6019630159024466,
+        "sigma": 0.010666653205915793,
+        "sigma_eq": 0.03445298708318693,
+        "half_life_days": 13.75803048278591
+      },
+      "bertram": {
+        "a": 0.5922925623799047,
+        "m": 0.6116334694249885,
+        "k": 0.28068548887190986,
+        "expected_return_rate": 0.16776409700357317,
+        "expected_trade_length_days": 28.301100534401016,
+        "sigma_cont": 0.17361080322683903
+      },
+      "threshold_k": 0.28068548887190986,
+      "adf_statistic": -2.9016227146401214,
+      "adf_pvalue": 0.145123027834743,
+      "dominance_score": 1.3251885130796155,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "OXY",
+        "members": [
+          "XOM",
+          "CVX",
+          "COP",
+          "MPC",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.3465722386666135,
+        "b": 0.6643363436917832,
+        "kappa": 103.05961244463843,
+        "mu": -1.0324985507170312,
+        "sigma": 0.012383387500550678,
+        "sigma_eq": 0.016567872897959787,
+        "half_life_days": 1.6948743097101895
+      },
+      "bertram": {
+        "a": -1.0384540586129367,
+        "m": -1.0265430428211257,
+        "k": 0.35946122550462223,
+        "expected_return_rate": 0.6385681208575709,
+        "expected_trade_length_days": 4.503162443616171,
+        "sigma_cont": 0.2378625138870959
+      },
+      "threshold_k": 0.35946122550462223,
+      "adf_statistic": -3.689337475103502,
+      "adf_pvalue": 0.025047323206892708,
+      "dominance_score": 1.1306042216590628,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "PSX",
+        "members": [
+          "XOM",
+          "CVX",
+          "COP",
+          "OXY",
+          "MPC"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.009760494205409294,
+        "b": 0.9427335994749398,
+        "kappa": 14.860827945970984,
+        "mu": 0.17044015541256233,
+        "sigma": 0.014212150142150862,
+        "sigma_eq": 0.042609184078914016,
+        "half_life_days": 11.753927179303828
+      },
+      "bertram": {
+        "a": 0.15930586414802486,
+        "m": 0.1815744466770998,
+        "k": 0.26131200362617313,
+        "expected_return_rate": 0.24413427748562658,
+        "expected_trade_length_days": 22.46994094325756,
+        "sigma_cont": 0.23229492344738834
+      },
+      "threshold_k": 0.26131200362617313,
+      "adf_statistic": -1.4418743169314145,
+      "adf_pvalue": 0.5808504892641237,
+      "dominance_score": 1.7974657687606765,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "XOM",
+        "members": [
+          "CVX",
+          "COP",
+          "OXY",
+          "MPC",
+          "PSX"
+        ],
+        "sector": "energy",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.002106293290139024,
+        "b": 0.9629858937578543,
+        "kappa": 9.504561910491915,
+        "mu": 0.056905150602845414,
+        "sigma": 0.010932666639258733,
+        "sigma_eq": 0.04055868658561886,
+        "half_life_days": 18.377815952599324
+      },
+      "bertram": {
+        "a": 0.046129359288393235,
+        "m": 0.0676809419172976,
+        "k": 0.26568393164568144,
+        "expected_return_rate": 0.14845615628406023,
+        "expected_trade_length_days": 35.73444817157439,
+        "sigma_cont": 0.1768336586834332
+      },
+      "threshold_k": 0.26568393164568144,
+      "adf_statistic": -1.1106183820380129,
+      "adf_pvalue": 0.6771458191749962,
+      "dominance_score": 0.5088398990689527,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "ADBE",
+        "members": [
+          "MSFT",
+          "ORCL",
+          "CRM",
+          "INTU",
+          "IBM"
+        ],
+        "sector": "entsw",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "OU fit failed (b not in (0,1))"
+    },
+    {
+      "candidate": {
+        "target": "CRM",
+        "members": [
+          "MSFT",
+          "ORCL",
+          "ADBE",
+          "INTU",
+          "IBM"
+        ],
+        "sector": "entsw",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "OU fit failed (b not in (0,1))"
+    },
+    {
+      "candidate": {
+        "target": "INTU",
+        "members": [
+          "MSFT",
+          "ORCL",
+          "CRM",
+          "ADBE",
+          "IBM"
+        ],
+        "sector": "entsw",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.05309965365117493,
+        "b": 0.9399313863286091,
+        "kappa": 15.610996711715032,
+        "mu": 0.8839833384812219,
+        "sigma": 0.01643808890746239,
+        "sigma_eq": 0.04815421813930226,
+        "half_life_days": 11.189105521367862
+      },
+      "bertram": {
+        "a": 0.8719072166454166,
+        "m": 0.8960594603170272,
+        "k": 0.2507801455912148,
+        "expected_return_rate": 0.29061537942018795,
+        "expected_trade_length_days": 20.509463116293123,
+        "sigma_cont": 0.2690696103051333
+      },
+      "threshold_k": 0.2507801455912148,
+      "adf_statistic": -1.3198193094325466,
+      "adf_pvalue": 0.61633159609519,
+      "dominance_score": 1.8190356962231693,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "ORCL",
+        "members": [
+          "MSFT",
+          "CRM",
+          "ADBE",
+          "INTU",
+          "IBM"
+        ],
+        "sector": "entsw",
+        "fit_date": "2026-04-20"
+      },
+      "ou": null,
+      "bertram": null,
+      "threshold_k": 0.0,
+      "adf_statistic": null,
+      "adf_pvalue": null,
+      "dominance_score": null,
+      "valid": false,
+      "reject_reason": "OU fit failed (b not in (0,1))"
+    },
+    {
+      "candidate": {
+        "target": "AAPL",
+        "members": [
+          "AMZN",
+          "MSFT",
+          "GOOGL",
+          "META",
+          "NVDA"
+        ],
+        "sector": "faang",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.010280371599937175,
+        "b": 0.9760360856020565,
+        "kappa": 6.112441515499363,
+        "mu": -0.4289938375351308,
+        "sigma": 0.01816801117551888,
+        "sigma_eq": 0.08348934866409075,
+        "half_life_days": 28.57664798234656
+      },
+      "bertram": {
+        "a": -0.4463998504246757,
+        "m": -0.4115878246455859,
+        "k": 0.20848183831899184,
+        "expected_return_rate": 0.1992130164891287,
+        "expected_trade_length_days": 43.40394342054697,
+        "sigma_cont": 0.2919129952687237
+      },
+      "threshold_k": 0.20848183831899184,
+      "adf_statistic": -0.9429696305314157,
+      "adf_pvalue": 0.7258809213571465,
+      "dominance_score": 0.2889389789157769,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "AMZN",
+        "members": [
+          "AAPL",
+          "MSFT",
+          "GOOGL",
+          "META",
+          "NVDA"
+        ],
+        "sector": "faang",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.04719576253253271,
+        "b": 0.8179524997723473,
+        "kappa": 50.63965522645835,
+        "mu": -0.2592497149014065,
+        "sigma": 0.010710825713394498,
+        "sigma_eq": 0.018618270116106467,
+        "half_life_days": 3.449334098345964
+      },
+      "bertram": {
+        "a": -0.265682812320669,
+        "m": -0.25281661748214407,
+        "k": 0.34552605473788184,
+        "expected_return_rate": 0.3543361354516406,
+        "expected_trade_length_days": 8.794703072934498,
+        "sigma_cont": 0.187369843796035
+      },
+      "threshold_k": 0.34552605473788184,
+      "adf_statistic": -2.3071104495916486,
+      "adf_pvalue": 0.3293283576768464,
+      "dominance_score": 1.720264639807622,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "GOOGL",
+        "members": [
+          "AAPL",
+          "AMZN",
+          "MSFT",
+          "META",
+          "NVDA"
+        ],
+        "sector": "faang",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.03408813789030923,
+        "b": 0.9329881515438776,
+        "kappa": 17.479419936379333,
+        "mu": -0.5086882197053443,
+        "sigma": 0.018335475788865647,
+        "sigma_eq": 0.05094502610934333,
+        "half_life_days": 9.993071288227645
+      },
+      "bertram": {
+        "a": -0.5212246095734664,
+        "m": -0.49615182983722217,
+        "k": 0.2460768170226323,
+        "expected_return_rate": 0.34465923167094836,
+        "expected_trade_length_days": 17.966559211289223,
+        "sigma_cont": 0.30121756616806195
+      },
+      "threshold_k": 0.2460768170226323,
+      "adf_statistic": -1.3110155095820857,
+      "adf_pvalue": 0.6188908402377657,
+      "dominance_score": 0.6425488621893116,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "META",
+        "members": [
+          "AAPL",
+          "AMZN",
+          "MSFT",
+          "GOOGL",
+          "NVDA"
+        ],
+        "sector": "faang",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.035139489650894265,
+        "b": 0.9697784380563452,
+        "kappa": 7.733287283436981,
+        "mu": 1.1627291043529948,
+        "sigma": 0.014095592123201762,
+        "sigma_eq": 0.05777183757628847,
+        "half_life_days": 22.58717193595251
+      },
+      "bertram": {
+        "a": 1.1491008230021893,
+        "m": 1.1763573857038003,
+        "k": 0.2358983532903773,
+        "expected_return_rate": 0.1733431631719127,
+        "expected_trade_length_days": 38.89771986056911,
+        "sigma_cont": 0.2272025761982356
+      },
+      "threshold_k": 0.2358983532903773,
+      "adf_statistic": -0.7799068981110067,
+      "adf_pvalue": 0.7732828784561028,
+      "dominance_score": 2.345460378591812,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "CI",
+        "members": [
+          "UNH",
+          "HUM",
+          "CNC",
+          "ELV",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.01819892730956693,
+        "b": 0.9539123349590822,
+        "kappa": 11.890242965820182,
+        "mu": 0.3948763143762973,
+        "sigma": 0.02183027818144858,
+        "sigma_eq": 0.07274688131802665,
+        "half_life_days": 14.690455863956972
+      },
+      "bertram": {
+        "a": 0.3789929034771658,
+        "m": 0.41075972527542876,
+        "k": 0.21833803197272678,
+        "expected_return_rate": 0.336948545112707,
+        "expected_trade_length_days": 23.38410183823976,
+        "sigma_cont": 0.3547519097565639
+      },
+      "threshold_k": 0.21833803197272678,
+      "adf_statistic": -1.2244985291190569,
+      "adf_pvalue": 0.6440411252560881,
+      "dominance_score": 0.5820198553818453,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "CNC",
+        "members": [
+          "UNH",
+          "CI",
+          "HUM",
+          "ELV",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.10085184226511801,
+        "b": 0.940474370226285,
+        "kappa": 15.465462222107726,
+        "mu": -1.6942591392733422,
+        "sigma": 0.01723996582250021,
+        "sigma_eq": 0.05072597993770195,
+        "half_life_days": 11.294398252863903
+      },
+      "bertram": {
+        "a": -1.7067597127441647,
+        "m": -1.6817585658025196,
+        "k": 0.24643335596818403,
+        "expected_return_rate": 0.30361017824478753,
+        "expected_trade_length_days": 20.336238610276478,
+        "sigma_cont": 0.2821154661083986
+      },
+      "threshold_k": 0.24643335596818403,
+      "adf_statistic": -1.395842108594713,
+      "adf_pvalue": 0.5942319451759555,
+      "dominance_score": 0.7258888060449296,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "ELV",
+        "members": [
+          "UNH",
+          "CI",
+          "HUM",
+          "CNC",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.06272475058279674,
+        "b": 0.8939110384288467,
+        "kappa": 28.261552623557453,
+        "mu": 0.5912467202417432,
+        "sigma": 0.015365217445204027,
+        "sigma_eq": 0.03427865900569042,
+        "half_life_days": 6.18059070666582
+      },
+      "bertram": {
+        "a": 0.5816087432159288,
+        "m": 0.6008846972675576,
+        "k": 0.28116552121290506,
+        "expected_return_rate": 0.3715041613710803,
+        "expected_trade_length_days": 12.736170716225978,
+        "sigma_cont": 0.25771329893741246
+      },
+      "threshold_k": 0.28116552121290506,
+      "adf_statistic": -1.776521439993745,
+      "adf_pvalue": 0.48356934883902764,
+      "dominance_score": 1.2799622441187022,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "HUM",
+        "members": [
+          "UNH",
+          "CI",
+          "CNC",
+          "ELV",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.005475529127212625,
+        "b": 0.7625579353681076,
+        "kappa": 68.31135172923594,
+        "mu": 0.023060484820587136,
+        "sigma": 0.01652168856254215,
+        "sigma_eq": 0.025539000745982175,
+        "half_life_days": 2.5570140991127466
+      },
+      "bertram": {
+        "a": 0.015130529772019324,
+        "m": 0.030990439869154947,
+        "k": 0.3105037322110326,
+        "expected_return_rate": 0.6632407970439811,
+        "expected_trade_length_days": 5.836036265756888,
+        "sigma_cont": 0.2985144359825083
+      },
+      "threshold_k": 0.3105037322110326,
+      "adf_statistic": -3.2519136044938093,
+      "adf_pvalue": 0.06468106591769844,
+      "dominance_score": 0.5771412730310705,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "MOH",
+        "members": [
+          "UNH",
+          "CI",
+          "HUM",
+          "CNC",
+          "ELV"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.03145411728160609,
+        "b": 0.9003481852974654,
+        "kappa": 26.453376916086324,
+        "mu": 0.31564018553498624,
+        "sigma": 0.019579198213254732,
+        "sigma_eq": 0.04499204225944718,
+        "half_life_days": 6.603054500572566
+      },
+      "bertram": {
+        "a": 0.30409643349259885,
+        "m": 0.32718393757737363,
+        "k": 0.25657319522906324,
+        "expected_return_rate": 0.4594436740474705,
+        "expected_trade_length_days": 12.389007294885797,
+        "sigma_cont": 0.32725874811937333
+      },
+      "threshold_k": 0.25657319522906324,
+      "adf_statistic": -1.7497849189743337,
+      "adf_pvalue": 0.49134159332141464,
+      "dominance_score": 0.8840337871456456,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "UNH",
+        "members": [
+          "CI",
+          "HUM",
+          "CNC",
+          "ELV",
+          "MOH"
+        ],
+        "sector": "hc_providers",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.010939526253306086,
+        "b": 0.9614106134541361,
+        "kappa": 9.91712836830519,
+        "mu": 0.28348536301048355,
+        "sigma": 0.04057631451494206,
+        "sigma_eq": 0.1474872236364003,
+        "half_life_days": 17.613273017555723
+      },
+      "bertram": {
+        "a": 0.2580726071104512,
+        "m": 0.3088981189105159,
+        "k": 0.17230479544914543,
+        "expected_return_rate": 0.5749149816392707,
+        "expected_trade_length_days": 22.05896415754497,
+        "sigma_cont": 0.6568441942418108
+      },
+      "threshold_k": 0.17230479544914543,
+      "adf_statistic": -1.4130071548066965,
+      "adf_pvalue": 0.589242106160844,
+      "dominance_score": 1.2166368374098013,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "AIG",
+        "members": [
+          "ALL",
+          "TRV",
+          "PGR",
+          "MET",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.03939797838462554,
+        "b": 0.9405735436092245,
+        "kappa": 15.438890126479437,
+        "mu": -0.6629703464994275,
+        "sigma": 0.006979775808813003,
+        "sigma_eq": 0.02055353387672782,
+        "half_life_days": 11.313837203978942
+      },
+      "bertram": {
+        "a": -0.6698383424174688,
+        "m": -0.6561023505813863,
+        "k": 0.33415158479475293,
+        "expected_return_rate": 0.11972000197717887,
+        "expected_trade_length_days": 27.860590441090885,
+        "sigma_cont": 0.11421142211593083
+      },
+      "threshold_k": 0.33415158479475293,
+      "adf_statistic": -1.4067862516140006,
+      "adf_pvalue": 0.591050508251744,
+      "dominance_score": 0.2353789841725394,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "ALL",
+        "members": [
+          "TRV",
+          "PGR",
+          "AIG",
+          "MET",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.07122071083344506,
+        "b": 0.8175498835465415,
+        "kappa": 50.76372632777549,
+        "mu": 0.39035716840231693,
+        "sigma": 0.008588691081700253,
+        "sigma_eq": 0.014914604462429027,
+        "half_life_days": 3.4409036163590976
+      },
+      "bertram": {
+        "a": 0.3848012425542477,
+        "m": 0.3959130942503862,
+        "k": 0.37251580235097936,
+        "expected_return_rate": 0.2818008783059534,
+        "expected_trade_length_days": 9.489631982351428,
+        "sigma_cont": 0.15028079546017564
+      },
+      "threshold_k": 0.37251580235097936,
+      "adf_statistic": -2.431437060880074,
+      "adf_pvalue": 0.2931869009069552,
+      "dominance_score": 1.0486582196442953,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "MET",
+        "members": [
+          "ALL",
+          "TRV",
+          "PGR",
+          "AIG",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.09525202745639992,
+        "b": 0.8725808211536739,
+        "kappa": 34.34759937021425,
+        "mu": -0.7475485897713923,
+        "sigma": 0.01182102681576413,
+        "sigma_eq": 0.024200119806184396,
+        "half_life_days": 5.085452628534506
+      },
+      "bertram": {
+        "a": -0.7552007249251942,
+        "m": -0.7398964546175903,
+        "k": 0.31620236656210104,
+        "expected_return_rate": 0.315437177843145,
+        "expected_trade_length_days": 11.827001950199072,
+        "sigma_cont": 0.20057680456283447
+      },
+      "threshold_k": 0.31620236656210104,
+      "adf_statistic": -2.079942162202131,
+      "adf_pvalue": 0.3953656505226364,
+      "dominance_score": 1.572137739491624,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "PGR",
+        "members": [
+          "ALL",
+          "TRV",
+          "AIG",
+          "MET",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.050912468190147955,
+        "b": 0.927152115653255,
+        "kappa": 19.06068334526755,
+        "mu": 0.6988873959305697,
+        "sigma": 0.01384241587877768,
+        "sigma_eq": 0.0369441282455075,
+        "half_life_days": 9.164051799038708
+      },
+      "bertram": {
+        "a": 0.6887586628743914,
+        "m": 0.709016128986748,
+        "k": 0.2741635420077901,
+        "expected_return_rate": 0.2705652895918206,
+        "expected_trade_length_days": 18.401774550701273,
+        "sigma_cont": 0.22810229467414636
+      },
+      "threshold_k": 0.2741635420077901,
+      "adf_statistic": -1.3361555158918692,
+      "adf_pvalue": 0.6115826988686427,
+      "dominance_score": 0.5496930285254572,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "PRU",
+        "members": [
+          "ALL",
+          "TRV",
+          "PGR",
+          "AIG",
+          "MET"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.0905720310174082,
+        "b": 0.78732957063182,
+        "kappa": 60.255304187265104,
+        "mu": -0.42587975811440987,
+        "sigma": 0.012012814586154922,
+        "sigma_eq": 0.019484483579925528,
+        "half_life_days": 2.898883207995209
+      },
+      "bertram": {
+        "a": -0.43250928567057195,
+        "m": -0.4192502305582478,
+        "k": 0.34024651097206166,
+        "expected_return_rate": 0.4420340589807169,
+        "expected_trade_length_days": 7.273832916223211,
+        "sigma_cont": 0.21389544645169065
+      },
+      "threshold_k": 0.34024651097206166,
+      "adf_statistic": -2.491259913213157,
+      "adf_pvalue": 0.2757965368566404,
+      "dominance_score": 0.6531832087806217,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "TRV",
+        "members": [
+          "ALL",
+          "PGR",
+          "AIG",
+          "MET",
+          "PRU"
+        ],
+        "sector": "insurance",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.11082097096966971,
+        "b": 0.8491793831803656,
+        "kappa": 41.198176499631664,
+        "mu": 0.7347866180802053,
+        "sigma": 0.00834587875867485,
+        "sigma_eq": 0.015803460442427513,
+        "half_life_days": 4.239825748177662
+      },
+      "bertram": {
+        "a": 0.7290141197840042,
+        "m": 0.7405591163764064,
+        "k": 0.36526799413523847,
+        "expected_return_rate": 0.24297884162632097,
+        "expected_trade_length_days": 11.455067950179226,
+        "sigma_cont": 0.14345186157389367
+      },
+      "threshold_k": 0.36526799413523847,
+      "adf_statistic": -2.295871226304035,
+      "adf_pvalue": 0.33259557374882703,
+      "dominance_score": 1.5978004577942202,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "AEP",
+        "members": [
+          "NEE",
+          "DUK",
+          "SO",
+          "D",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.01752404982003791,
+        "b": 0.9539794599334235,
+        "kappa": 11.872510834903473,
+        "mu": 0.38078757430239624,
+        "sigma": 0.00559774308345501,
+        "sigma_eq": 0.0186671109802791,
+        "half_life_days": 14.712396722990766
+      },
+      "bertram": {
+        "a": 0.3743433211589306,
+        "m": 0.3872318274458619,
+        "k": 0.3452196298759728,
+        "expected_return_rate": 0.0833011551274737,
+        "expected_trade_length_days": 37.47731444455134,
+        "sigma_cont": 0.09096271084480384
+      },
+      "threshold_k": 0.3452196298759728,
+      "adf_statistic": -1.1449472307857027,
+      "adf_pvalue": 0.6671665026785748,
+      "dominance_score": 0.8503840627461368,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "D",
+        "members": [
+          "NEE",
+          "DUK",
+          "SO",
+          "AEP",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.016330659413567778,
+        "b": 0.9568056776944124,
+        "kappa": 11.127050363069598,
+        "mu": -0.3780742130420054,
+        "sigma": 0.010183177679023016,
+        "sigma_eq": 0.03502645132297121,
+        "half_life_days": 15.698058676973533
+      },
+      "bertram": {
+        "a": -0.38785111614870743,
+        "m": -0.36829730993530335,
+        "k": 0.2791291363361752,
+        "expected_return_rate": 0.14954358733147793,
+        "expected_trade_length_days": 32.108091369606534,
+        "sigma_cont": 0.16523466491176841
+      },
+      "threshold_k": 0.2791291363361752,
+      "adf_statistic": -1.0337276674069693,
+      "adf_pvalue": 0.6994977711026252,
+      "dominance_score": 0.9050498808509726,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "DUK",
+        "members": [
+          "NEE",
+          "SO",
+          "D",
+          "AEP",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.039876211053623045,
+        "b": 0.9249916660144267,
+        "kappa": 19.648578908557077,
+        "mu": 0.5316237401205662,
+        "sigma": 0.006854759339069039,
+        "sigma_eq": 0.018039438912750057,
+        "half_life_days": 8.889858666828827
+      },
+      "bertram": {
+        "a": 0.525323607459152,
+        "m": 0.5379238727819805,
+        "k": 0.3492421627904063,
+        "expected_return_rate": 0.13303897388465838,
+        "expected_trade_length_days": 22.92010207472311,
+        "sigma_cont": 0.11308463377074413
+      },
+      "threshold_k": 0.3492421627904063,
+      "adf_statistic": -1.5049394918101175,
+      "adf_pvalue": 0.5625175895900821,
+      "dominance_score": 0.7944638680832684,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "EXC",
+        "members": [
+          "NEE",
+          "DUK",
+          "SO",
+          "D",
+          "AEP"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.012731487521774528,
+        "b": 0.9814313416786764,
+        "kappa": 4.7232914787824525,
+        "mu": -0.6856439114480412,
+        "sigma": 0.008064936383397465,
+        "sigma_eq": 0.04204565954817256,
+        "half_life_days": 36.981221736104374
+      },
+      "bertram": {
+        "a": -0.6966802633689609,
+        "m": -0.6746075595271214,
+        "k": 0.2624849280405549,
+        "expected_return_rate": 0.07654468551340858,
+        "expected_trade_length_days": 71.02153900927941,
+        "sigma_cont": 0.12922857066041937
+      },
+      "threshold_k": 0.2624849280405549,
+      "adf_statistic": -0.6404778451822918,
+      "adf_pvalue": 0.8138145798888686,
+      "dominance_score": 0.8043708027516869,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "NEE",
+        "members": [
+          "DUK",
+          "SO",
+          "D",
+          "AEP",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": -0.00599162734716388,
+        "b": 0.9386543152404355,
+        "kappa": 15.953618252511307,
+        "mu": -0.09766990735611145,
+        "sigma": 0.018032417089273556,
+        "sigma_eq": 0.05228916981362134,
+        "half_life_days": 10.948807144336076
+      },
+      "bertram": {
+        "a": -0.1104249636515275,
+        "m": -0.08491485106069539,
+        "k": 0.24393304274823963,
+        "expected_return_rate": 0.32304287562640827,
+        "expected_trade_length_days": 19.50994387561868,
+        "sigma_cont": 0.2953631713136142
+      },
+      "threshold_k": 0.24393304274823963,
+      "adf_statistic": -1.3424605212967338,
+      "adf_pvalue": 0.6097498484602518,
+      "dominance_score": 0.8211551452677569,
+      "valid": true,
+      "reject_reason": null
+    },
+    {
+      "candidate": {
+        "target": "SO",
+        "members": [
+          "NEE",
+          "DUK",
+          "D",
+          "AEP",
+          "EXC"
+        ],
+        "sector": "utilities",
+        "fit_date": "2026-04-20"
+      },
+      "ou": {
+        "a": 0.027887052489243096,
+        "b": 0.8697524171298011,
+        "kappa": 35.16576483299964,
+        "mu": 0.21410802315644165,
+        "sigma": 0.006160670111537755,
+        "sigma_eq": 0.01248392256458846,
+        "half_life_days": 4.9671346643708585
+      },
+      "bertram": {
+        "a": 0.20916765518845495,
+        "m": 0.21904839112442834,
+        "k": 0.39573843416815235,
+        "expected_return_rate": 0.16194746386432585,
+        "expected_trade_length_days": 14.596989662312508,
+        "sigma_cont": 0.1046950377250161
+      },
+      "threshold_k": 0.39573843416815235,
+      "adf_statistic": -1.9009990882672982,
+      "adf_pvalue": 0.4473839859688087,
+      "dominance_score": 0.8604282514364373,
+      "valid": true,
+      "reject_reason": null
+    }
+  ]
+}

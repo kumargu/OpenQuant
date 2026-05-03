@@ -284,6 +284,11 @@ struct BasketFitArgs {
     /// Output fit artifact path. Defaults to `<universe>.fits.json`.
     #[arg(long)]
     out: Option<PathBuf>,
+
+    /// Build the fit using only data strictly before this date (YYYY-MM-DD).
+    /// Lets us reproduce the walk-forward fit a replay computes at its --start.
+    #[arg(long)]
+    as_of: Option<String>,
 }
 
 /// Extract the unique symbols (leg_a/leg_b) from a candidates JSON file.
@@ -654,12 +659,30 @@ fn run_freeze_basket_fits(args: BasketFitArgs) {
         "========== FREEZE BASKET FITS =========="
     );
 
-    let artifact = match basket_fits::build_live_fit_artifact(&universe_path, &bars_dir) {
-        Ok(a) => a,
-        Err(e) => {
-            error!(error = %e, "failed to build basket fit artifact");
-            std::process::exit(1);
+    let artifact = match args.as_of.as_deref() {
+        Some(s) => {
+            let as_of = match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(e) => {
+                    error!(error = %e, value = s, "invalid --as-of date");
+                    std::process::exit(1);
+                }
+            };
+            match basket_fits::build_replay_fit_artifact_as_of(&universe_path, &bars_dir, as_of) {
+                Ok(a) => a,
+                Err(e) => {
+                    error!(error = %e, "failed to build basket fit artifact (as-of)");
+                    std::process::exit(1);
+                }
+            }
         }
+        None => match basket_fits::build_live_fit_artifact(&universe_path, &bars_dir) {
+            Ok(a) => a,
+            Err(e) => {
+                error!(error = %e, "failed to build basket fit artifact");
+                std::process::exit(1);
+            }
+        },
     };
     let valid = artifact.fits.iter().filter(|f| f.valid).count();
     if valid == 0 {
