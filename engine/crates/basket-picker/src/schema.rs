@@ -58,6 +58,15 @@ pub struct BasketFit {
     pub bertram: Option<BertramResult>,
     /// Final threshold k (after clipping).
     pub threshold_k: f64,
+    /// ADF test statistic on the spread fit window, if computed.
+    #[serde(default)]
+    pub adf_statistic: Option<f64>,
+    /// ADF p-value on the spread fit window, if computed.
+    #[serde(default)]
+    pub adf_pvalue: Option<f64>,
+    /// Maximum absolute component contribution share to spread variance.
+    #[serde(default)]
+    pub dominance_score: Option<f64>,
     /// Whether this basket passed validation.
     pub valid: bool,
     /// Rejection reason if invalid.
@@ -72,6 +81,9 @@ impl BasketFit {
             ou: None,
             bertram: None,
             threshold_k: 0.0,
+            adf_statistic: None,
+            adf_pvalue: None,
+            dominance_score: None,
             valid: false,
             reject_reason: Some(reason.into()),
         }

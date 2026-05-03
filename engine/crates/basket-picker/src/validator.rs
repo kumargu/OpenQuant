@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::adf::adf_test;
 use crate::bertram::optimize_symmetric_thresholds;
+use crate::dominance::max_component_dominance;
 use crate::ou::fit_ou_ar1;
 use crate::schema::{BasketCandidate, BasketFit};
 use crate::spread::build_spread;
@@ -20,6 +22,14 @@ pub struct ValidatorConfig {
     pub k_clip_max: f64,
     /// Transaction cost per round-trip (as a decimal, e.g., 0.0005 for 5 bps).
     pub cost: f64,
+    /// Whether to reject baskets that fail ADF stationarity on the fit window.
+    pub adf_gate_enabled: bool,
+    /// Maximum allowed ADF p-value when the gate is enabled.
+    pub adf_pvalue_max: f64,
+    /// Whether to reject baskets dominated by a single component.
+    pub dominance_gate_enabled: bool,
+    /// Maximum allowed absolute component variance contribution share.
+    pub dominance_max: f64,
 }
 
 impl Default for ValidatorConfig {
@@ -29,6 +39,10 @@ impl Default for ValidatorConfig {
             k_clip_min: 0.15,
             k_clip_max: 2.5,
             cost: 0.0005,
+            adf_gate_enabled: false,
+            adf_pvalue_max: 0.05,
+            dominance_gate_enabled: false,
+            dominance_max: 0.60,
         }
     }
 }
@@ -103,6 +117,50 @@ pub fn validate(
         );
     }
     let fit_window = &spread[spread.len() - config.residual_window..];
+    let target_window = &target_prices[target_prices.len() - config.residual_window..];
+    let peer_windows: Vec<&[f64]> = peer_prices
+        .iter()
+        .map(|p| &p[p.len() - config.residual_window..])
+        .collect();
+
+    let adf = adf_test(fit_window, None);
+    if config.adf_gate_enabled {
+        match adf {
+            Some(result) if result.p_value <= config.adf_pvalue_max && result.is_stationary => {}
+            Some(result) => {
+                return BasketFit::rejected(
+                    candidate.clone(),
+                    format!(
+                        "ADF gate failed: p={:.4} > {:.4} (stat={:.3})",
+                        result.p_value, config.adf_pvalue_max, result.test_statistic
+                    ),
+                );
+            }
+            None => return BasketFit::rejected(candidate.clone(), "ADF gate failed: test unavailable"),
+        }
+    }
+
+    let dominance_score = max_component_dominance(target_window, &peer_windows);
+    if config.dominance_gate_enabled {
+        match dominance_score {
+            Some(score) if score <= config.dominance_max => {}
+            Some(score) => {
+                return BasketFit::rejected(
+                    candidate.clone(),
+                    format!(
+                        "dominance gate failed: score={:.3} > {:.3}",
+                        score, config.dominance_max
+                    ),
+                );
+            }
+            None => {
+                return BasketFit::rejected(
+                    candidate.clone(),
+                    "dominance gate failed: score unavailable",
+                )
+            }
+        }
+    }
 
     // Fit OU
     let ou = match fit_ou_ar1(fit_window) {
@@ -159,6 +217,9 @@ pub fn validate(
         ou: Some(ou),
         bertram: Some(bertram),
         threshold_k: k_clipped,
+        adf_statistic: adf.map(|r| r.test_statistic),
+        adf_pvalue: adf.map(|r| r.p_value),
+        dominance_score,
         valid,
         reject_reason,
     }

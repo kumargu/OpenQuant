@@ -4,7 +4,9 @@
 //! optimal symmetric thresholds. No dependency on pair-picker to avoid
 //! HL contamination through the dep tree.
 
+mod adf;
 mod bertram;
+mod dominance;
 mod ou;
 mod schema;
 mod spread;

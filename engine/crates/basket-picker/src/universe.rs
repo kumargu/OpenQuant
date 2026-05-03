@@ -39,6 +39,22 @@ pub struct StrategyConfig {
     pub cost_bps_assumed: f64,
     pub leverage_assumed: f64,
     pub sizing: String,
+    #[serde(default)]
+    pub adf_gate_enabled: bool,
+    #[serde(default = "default_adf_pvalue_max")]
+    pub adf_pvalue_max: f64,
+    #[serde(default)]
+    pub dominance_gate_enabled: bool,
+    #[serde(default = "default_dominance_max")]
+    pub dominance_max: f64,
+}
+
+fn default_adf_pvalue_max() -> f64 {
+    0.05
+}
+
+fn default_dominance_max() -> f64 {
+    0.60
 }
 
 /// Sector configuration.

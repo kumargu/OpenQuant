@@ -481,6 +481,9 @@ mod tests {
             ou: Some(ou),
             bertram: Some(bertram),
             threshold_k: 1.25,
+            adf_statistic: None,
+            adf_pvalue: None,
+            dominance_score: None,
             valid: true,
             reject_reason: None,
         }
