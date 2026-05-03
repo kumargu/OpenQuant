@@ -326,6 +326,9 @@ mod tests {
                 sigma_cont: 0.1,
             }),
             threshold_k: 1.25,
+            adf_statistic: None,
+            adf_pvalue: None,
+            dominance_score: None,
             reject_reason: None,
         };
         let mut fit2 = fit.clone();
