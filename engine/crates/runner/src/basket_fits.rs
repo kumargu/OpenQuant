@@ -86,16 +86,16 @@ pub fn build_live_fit_artifact_from_inputs(
     universe: &Universe,
     closes: &std::collections::HashMap<String, Vec<(chrono::NaiveDate, f64)>>,
 ) -> Result<BasketFitArtifact, String> {
-        let validator_config = ValidatorConfig {
-            residual_window: universe.strategy.residual_window_days,
-            k_clip_min: universe.strategy.threshold_clip_min,
-            k_clip_max: universe.strategy.threshold_clip_max,
-            cost: universe.strategy.cost_bps_assumed / 10_000.0,
-            adf_gate_enabled: universe.strategy.adf_gate_enabled,
-            adf_pvalue_max: universe.strategy.adf_pvalue_max,
-            dominance_gate_enabled: universe.strategy.dominance_gate_enabled,
-            dominance_max: universe.strategy.dominance_max,
-        };
+    let validator_config = ValidatorConfig {
+        residual_window: universe.strategy.residual_window_days,
+        k_clip_min: universe.strategy.threshold_clip_min,
+        k_clip_max: universe.strategy.threshold_clip_max,
+        cost: universe.strategy.cost_bps_assumed / 10_000.0,
+        adf_gate_enabled: universe.strategy.adf_gate_enabled,
+        adf_pvalue_max: universe.strategy.adf_pvalue_max,
+        dominance_gate_enabled: universe.strategy.dominance_gate_enabled,
+        dominance_max: universe.strategy.dominance_max,
+    };
 
     let fits: Vec<BasketFit> = universe
         .candidates

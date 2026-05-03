@@ -95,35 +95,17 @@ pub struct RunnerConfig {
     pub decision_offset_minutes_before_close: u32,
 }
 
-/// Constraints on what NOT to do.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DontDoConfig {
-    #[serde(default)]
-    pub hl_trade_gate: bool,
-    #[serde(default)]
-    pub time_based_exit: bool,
-    #[serde(default)]
-    pub stop_loss: bool,
-    #[serde(default)]
-    pub regime_derisk: bool,
-    #[serde(default)]
-    pub continuous_sizing: bool,
-    #[serde(default)]
-    pub score_based_ranking: bool,
-    #[serde(default)]
-    pub hl_derived_max_hold: bool,
-    #[serde(default)]
-    pub pair_engine_reuse: bool,
-}
-
 /// Raw TOML structure for deserialization.
+///
+/// `[dont_do]` blocks may appear in research universe TOMLs as documentation
+/// of intent ("this universe explicitly does not enable feature X"); they are
+/// not deserialized into Rust state because no field has a runtime effect.
+/// Unknown TOML fields are tolerated (no `deny_unknown_fields`).
 #[derive(Debug, Deserialize)]
 struct RawUniverse {
     version: VersionInfo,
     strategy: StrategyConfig,
     sectors: HashMap<String, SectorConfig>,
-    #[serde(default)]
-    dont_do: DontDoConfig,
     #[serde(default)]
     runner: RunnerConfig,
 }
@@ -134,7 +116,6 @@ pub struct Universe {
     pub version: VersionInfo,
     pub strategy: StrategyConfig,
     pub sectors: HashMap<String, SectorConfig>,
-    pub dont_do: DontDoConfig,
     pub runner: RunnerConfig,
     /// All basket candidates derived from sectors.
     pub candidates: Vec<BasketCandidate>,
@@ -269,7 +250,6 @@ pub fn load_universe_from_str(content: &str) -> Result<Universe, String> {
         version: raw.version,
         strategy: raw.strategy,
         sectors: raw.sectors,
-        dont_do: raw.dont_do,
         runner: raw.runner,
         candidates,
     })

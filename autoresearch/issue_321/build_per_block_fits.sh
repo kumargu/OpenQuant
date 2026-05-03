@@ -30,4 +30,4 @@ for v_pair in \
   build_one "$v" "$u" test2 2025-07-01
   build_one "$v" "$u" test3 2026-01-01
 done
-echo "all 15 per-block fits built"
+echo "all 20 per-block fits built (5 variants × 4 blocks)"

@@ -668,6 +668,15 @@ fn run_freeze_basket_fits(args: BasketFitArgs) {
                     std::process::exit(1);
                 }
             };
+            let today = chrono::Utc::now().date_naive();
+            if as_of > today {
+                error!(
+                    as_of = %as_of, today = %today,
+                    "--as-of is in the future — basket fit needs 180 cal-days of \
+                     prior bars and would necessarily produce zero valid baskets"
+                );
+                std::process::exit(1);
+            }
             match basket_fits::build_replay_fit_artifact_as_of(&universe_path, &bars_dir, as_of) {
                 Ok(a) => a,
                 Err(e) => {
