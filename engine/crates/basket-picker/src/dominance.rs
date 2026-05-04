@@ -37,6 +37,7 @@ pub fn max_component_dominance(target: &[f64], peers: &[&[f64]]) -> Option<f64> 
         .collect();
 
     let mut cov = vec![0.0; m * m];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..m {
         for j in i..m {
             let mut s = 0.0;

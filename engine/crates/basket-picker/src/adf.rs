@@ -10,8 +10,20 @@ pub struct AdfResult {
     pub is_stationary: bool,
 }
 
-const EG_CRITICAL_VALUES: [(f64, f64); 4] =
-    [(0.01, -3.90), (0.05, -3.34), (0.10, -3.04), (0.25, -2.58)];
+// Standard ADF critical values with constant (no time trend), MacKinnon (1996)
+// asymptotic table. Appropriate when the tested series is built from a fixed
+// formula (e.g. `log(target) - mean(log(peers))`) and is NOT the residual of
+// an OLS-estimated cointegrating regression. Using the Engle-Granger table
+// here would over-state p-values by ~0.5 critical-value units.
+//
+// Ref: MacKinnon, J. G. (1996). "Numerical Distribution Functions for Unit
+// Root and Cointegration Tests." Journal of Applied Econometrics, 11(6).
+const ADF_CONSTANT_CRITICAL_VALUES: [(f64, f64); 4] = [
+    (0.01, -3.435),
+    (0.05, -2.864),
+    (0.10, -2.568),
+    (0.25, -2.196),
+];
 
 pub fn adf_test(series: &[f64], max_lags: Option<usize>) -> Option<AdfResult> {
     let n = series.len();
@@ -108,7 +120,7 @@ fn adf_regression(series: &[f64], p: usize) -> Option<AdfResult> {
         return None;
     }
     let test_statistic = gamma / se_gamma;
-    let p_value = interpolate_p_value(test_statistic, &EG_CRITICAL_VALUES);
+    let p_value = interpolate_p_value(test_statistic, &ADF_CONSTANT_CRITICAL_VALUES);
 
     Some(AdfResult {
         test_statistic,
