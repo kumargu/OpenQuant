@@ -2,12 +2,15 @@
 
 use tracing::debug;
 
-/// ADF result for a spread series.
+/// ADF result for a spread series. Callers compare `p_value` against
+/// their own configured threshold (`ValidatorConfig::adf_pvalue_max`).
+/// We deliberately do NOT publish a `is_stationary` boolean computed
+/// from a hardcoded cutoff — that would silently override the
+/// per-universe configurable threshold.
 #[derive(Debug, Clone, Copy)]
 pub struct AdfResult {
     pub test_statistic: f64,
     pub p_value: f64,
-    pub is_stationary: bool,
 }
 
 // Standard ADF critical values with constant (no time trend), MacKinnon (1996)
@@ -125,7 +128,6 @@ fn adf_regression(series: &[f64], p: usize) -> Option<AdfResult> {
     Some(AdfResult {
         test_statistic,
         p_value,
-        is_stationary: p_value < 0.05,
     })
 }
 
@@ -278,6 +280,9 @@ mod tests {
             series.push(x);
         }
         let result = adf_test(&series, None).unwrap();
-        assert!(result.is_stationary, "{result:?}");
+        assert!(
+            result.p_value < 0.05,
+            "stationary series should have p < 0.05, got {result:?}"
+        );
     }
 }

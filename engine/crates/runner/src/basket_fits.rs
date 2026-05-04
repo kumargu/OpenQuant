@@ -230,10 +230,10 @@ traded_targets = ["AAA"]
 
     #[test]
     fn test_default_fit_artifact_path() {
-        let path = Path::new("config/basket_universe_v1.toml");
+        let path = Path::new("config/basket_universe.toml");
         assert_eq!(
             default_fit_artifact_path(path),
-            PathBuf::from("config/basket_universe_v1.fits.json")
+            PathBuf::from("config/basket_universe.fits.json")
         );
     }
 

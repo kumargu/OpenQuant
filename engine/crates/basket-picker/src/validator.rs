@@ -126,7 +126,7 @@ pub fn validate(
     let adf = adf_test(fit_window, None);
     if config.adf_gate_enabled {
         match adf {
-            Some(result) if result.p_value <= config.adf_pvalue_max && result.is_stationary => {}
+            Some(result) if result.p_value <= config.adf_pvalue_max => {}
             Some(result) => {
                 return BasketFit::rejected(
                     candidate.clone(),
