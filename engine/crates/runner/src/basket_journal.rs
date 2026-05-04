@@ -349,7 +349,7 @@ mod tests {
                 run_id: "run-1",
                 started_at_utc: Utc::now(),
                 execution_mode: "PAPER",
-                universe_path: "config/basket_universe.toml",
+                universe_path: "config/basket_universe_v1.toml",
                 fit_artifact_path: Some("config/basket_universe_v1.fits.json"),
                 state_path: "data/state.json",
                 startup_phase: "intraday",

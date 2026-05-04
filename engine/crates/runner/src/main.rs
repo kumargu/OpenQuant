@@ -82,7 +82,7 @@ enum Engine {
     /// Metals — curated structurally-similar pairs, lab pipeline (structural gates relaxed).
     Metals,
     /// Basket spread strategy — OU/Bertram symmetric state machine.
-    /// Defaults to `config/basket_universe.toml`; override with `--universe`.
+    /// Defaults to `config/basket_universe_v1.toml`; override with `--universe`.
     Basket,
     // Future: Bitcoin, etc.
 }
@@ -93,7 +93,7 @@ impl Engine {
     fn universe_path(&self) -> Option<&'static str> {
         match self {
             Engine::Snp500 | Engine::Metals => None,
-            Engine::Basket => Some("config/basket_universe.toml"),
+            Engine::Basket => Some("config/basket_universe_v1.toml"),
         }
     }
 
@@ -129,7 +129,7 @@ struct StreamArgs {
     #[arg(long)]
     pipeline: Option<String>,
 
-    /// Basket universe TOML file. Defaults to `config/basket_universe.toml` when --engine basket.
+    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml` when --engine basket.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -207,7 +207,7 @@ struct ReplayArgs {
     #[arg(long)]
     bar_cache: Option<PathBuf>,
 
-    /// Basket universe TOML file. Defaults to `config/basket_universe.toml` when --engine basket.
+    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml` when --engine basket.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -270,7 +270,7 @@ struct ReplayArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 struct BasketFitArgs {
-    /// Basket universe TOML file. Defaults to `config/basket_universe.toml`.
+    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml`.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -631,7 +631,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
 fn run_freeze_basket_fits(args: BasketFitArgs) {
     let universe_path = args
         .universe
-        .unwrap_or_else(|| PathBuf::from("config/basket_universe.toml"));
+        .unwrap_or_else(|| PathBuf::from("config/basket_universe_v1.toml"));
     let bars_dir = args.bars_dir.unwrap_or_else(|| {
         std::env::var("QUANT_DATA_DIR")
             .map(PathBuf::from)

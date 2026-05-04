@@ -214,7 +214,7 @@ fn test_universe_loads_real_file() {
         .unwrap()
         .parent()
         .unwrap()
-        .join("config/basket_universe.toml");
+        .join("config/basket_universe_v1.toml");
 
     if path.exists() {
         let universe = basket_picker::load_universe(&path).expect("should load universe");
