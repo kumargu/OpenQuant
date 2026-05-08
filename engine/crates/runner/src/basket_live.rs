@@ -413,16 +413,25 @@ pub async fn run_basket_live(
         }
         Some(mode) => seed_current_shares_from_alpaca(broker, mode, &symbols).await?,
     };
+    // Self-healing state reconciliation: if Alpaca has open positions but
+    // there's no engine-state snapshot on disk (deleted, corrupted, fresh
+    // checkout, etc.), recover engine state from broker holdings instead of
+    // aborting startup. For each basket whose target symbol is held with
+    // non-zero qty, infer state.position from the qty sign — long basket
+    // means long target, short basket means short target. Peer-only orphan
+    // holdings stay at flat and get closed via natural delta math at the
+    // next session close.
+    //
+    // This eliminates the "manually liquidate or rebuild state" step from
+    // the startup sequence — running the binary is enough.
     if execution.alpaca_mode().is_some() && !state_exists && !current_shares.is_empty() {
-        error!(
+        let reconciled = reconcile_engine_state_from_broker(&mut engine, &current_shares)?;
+        warn!(
             state_path = %state_path.display(),
             broker_positions = current_shares.len(),
-            "broker has open positions but no basket state snapshot was found"
+            reconciled_baskets = reconciled,
+            "state file missing — reconciled engine state from broker positions"
         );
-        return Err(format!(
-            "open broker positions found but no basket state snapshot exists at {}",
-            state_path.display()
-        ));
     }
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
     let journal = match options.journal_path.as_deref() {
@@ -781,6 +790,40 @@ pub async fn run_basket_live(
 /// Used on startup so `diff_to_orders` computes correct deltas from the engine's target.
 ///
 /// Returns `Err` on any fetch failure; the caller must treat this as fatal for
+/// Recover engine state from broker holdings when the state-snapshot file
+/// is missing but Alpaca has open positions. For each basket whose target
+/// symbol is held by the broker with non-zero qty, set the basket's
+/// `state.position` to `+1` (long) or `-1` (short) based on the qty sign.
+/// Baskets without held targets stay at the engine's current state
+/// (typically flat) and get reconciled at the next session close via
+/// normal delta math.
+///
+/// Returns the number of baskets that got reconciled.
+///
+/// Quantity threshold: |qty| < 0.5 share is treated as zero (handles
+/// floating-point noise from Alpaca's positions endpoint).
+fn reconcile_engine_state_from_broker(
+    engine: &mut basket_engine::BasketEngine,
+    broker_shares: &HashMap<String, f64>,
+) -> Result<usize, String> {
+    use basket_engine::BasketState;
+    let mut new_states: HashMap<String, BasketState> = HashMap::new();
+    for (basket_id, params) in engine.iter_params() {
+        let target_qty = broker_shares.get(&params.target).copied().unwrap_or(0.0);
+        if target_qty.abs() < 0.5 {
+            continue;
+        }
+        let state = BasketState {
+            position: if target_qty > 0.0 { 1 } else { -1 },
+            ..Default::default()
+        };
+        new_states.insert(basket_id.clone(), state);
+    }
+    let count = new_states.len();
+    engine.apply_states(new_states)?;
+    Ok(count)
+}
+
 /// paper/live execution (trading from an empty share map would double-size
 /// every already-open leg on the first session).
 async fn seed_current_shares_from_alpaca(

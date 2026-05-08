@@ -574,21 +574,36 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         error!(error = %e, "invalid basket portfolio config");
         std::process::exit(1);
     }
+    // Self-healing fit artifact: if missing or out-of-sync with the universe
+    // (frozen_at / version mismatch / candidate-set change), rebuild it from
+    // the current parquet history. Eliminates the "build it first" step in
+    // the live/paper startup sequence — running the binary is enough.
     let fit_artifact = match basket_fits::load_fit_artifact(&fit_artifact_path, &universe) {
         Ok(a) => a,
         Err(e) => {
-            error!(
+            warn!(
                 error = %e,
                 fit_artifact = %fit_artifact_path.display(),
-                "failed to load frozen basket fit artifact"
+                "fit artifact unloadable — rebuilding from current universe"
             );
-            error!(
-                "build it first with: openquant-runner freeze-basket-fits --universe {} --bars-dir {} --out {}",
-                universe_path.display(),
-                bars_dir.display(),
-                fit_artifact_path.display()
+            let rebuilt = match basket_fits::build_live_fit_artifact(&universe_path, &bars_dir) {
+                Ok(a) => a,
+                Err(e) => {
+                    error!(error = %e, "failed to rebuild basket fit artifact");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = basket_fits::save_fit_artifact(&fit_artifact_path, &rebuilt) {
+                error!(error = %e, "failed to save rebuilt basket fit artifact");
+                std::process::exit(1);
+            }
+            info!(
+                path = %fit_artifact_path.display(),
+                fits = rebuilt.fits.len(),
+                valid = rebuilt.fits.iter().filter(|f| f.valid).count(),
+                "rebuilt and saved fit artifact"
             );
-            std::process::exit(1);
+            rebuilt
         }
     };
 
