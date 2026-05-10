@@ -1,5 +1,6 @@
 //! Position intent types for basket trading.
 
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 /// Reason for a position transition.
@@ -28,6 +29,62 @@ impl TransitionReason {
             Self::FlipShortToLong => "flip_short_to_long",
         }
     }
+}
+
+/// Reason a basket trade closed.
+///
+/// Distinct from `TransitionReason` because not every closure is a state-machine
+/// transition: cap-driven flattens and replay end produce closures without firing
+/// an entry/flip intent. Per issue #325 we want these visible separately so the
+/// loser cohort can be partitioned by exit driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExitReason {
+    /// State-machine flip from long to short.
+    FlipLongToShort,
+    /// State-machine flip from short to long.
+    FlipShortToLong,
+    /// External flatten (e.g., portfolio cap exclusion).
+    EngineFlatten,
+    /// Replay window ended while position was still open.
+    WindowEnd,
+}
+
+impl ExitReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FlipLongToShort => "flip_long_to_short",
+            Self::FlipShortToLong => "flip_short_to_long",
+            Self::EngineFlatten => "engine_flatten",
+            Self::WindowEnd => "window_end",
+        }
+    }
+}
+
+/// A completed basket trade. Emitted by the engine when a position closes
+/// (flip, external flatten, or replay window end). Replay-only diagnostic;
+/// live/paper paths can ignore the drained vec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosedTrade {
+    pub basket_id: String,
+    /// Position held during the trade: -1 (short) or +1 (long).
+    pub position: i8,
+    pub entry_date: NaiveDate,
+    pub exit_date: NaiveDate,
+    pub entry_z: f64,
+    pub exit_z: f64,
+    pub entry_spread: f64,
+    pub exit_spread: f64,
+    /// Running max of `-position * (z - entry_z)` over the trade lifetime.
+    /// Always >= 0 for live observations; never NaN.
+    pub max_adverse_z: f64,
+    /// Date the running adverse max was last advanced. For computing
+    /// `days_to_max_adverse` against entry_date.
+    pub max_adverse_date: NaiveDate,
+    /// Running max of `position * (z - entry_z)` over the trade lifetime.
+    pub max_favorable_z: f64,
+    /// Bars observed by `update_diagnostics` while in this position.
+    pub bars_held: u32,
+    pub exit_reason: ExitReason,
 }
 
 /// A position intent produced by the engine on direction change.

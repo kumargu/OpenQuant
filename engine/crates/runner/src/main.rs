@@ -29,6 +29,7 @@ mod parquet_bar_source;
 pub mod refresh;
 mod replay_clock;
 mod replay_report;
+mod trade_report;
 mod session_trigger;
 mod simulated_broker;
 mod stream;
@@ -258,6 +259,13 @@ struct ReplayArgs {
     /// to the given path after replay completes.
     #[arg(long)]
     report_tsv: Option<PathBuf>,
+
+    /// Write a per-trade diagnostics TSV (issue #325 Stage 1) to the given
+    /// path after replay completes. One row per closed basket trade with
+    /// entry/exit z, max adverse / favorable z, days held, exit reason.
+    /// Replay-only — has no effect on live or paper.
+    #[arg(long)]
+    trade_tsv: Option<PathBuf>,
 
     /// Resume replay from an existing state snapshot at `--state-path`
     /// instead of starting from empty engine + simulated broker state.
@@ -642,6 +650,8 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         basket_live::BasketRunOptions {
             fit_artifact_path: Some(fit_artifact_path.clone()),
             journal_path: Some(basket_journal_path),
+            trade_tsv_path: None,
+            replay_end_date: None,
         },
     )
     .await
@@ -1486,6 +1496,8 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         basket_live::BasketRunOptions {
             fit_artifact_path: None,
             journal_path: None,
+            trade_tsv_path: args.trade_tsv.clone(),
+            replay_end_date: Some(end),
         },
     )
     .await;

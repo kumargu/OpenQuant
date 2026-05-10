@@ -9,7 +9,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, trace, warn};
 
-use crate::intent::{PositionIntent, TransitionReason};
+use crate::intent::{ClosedTrade, ExitReason, PositionIntent, TransitionReason};
 use crate::state::BasketState;
 use crate::DailyBar;
 
@@ -67,6 +67,10 @@ pub struct BasketEngine {
     params: HashMap<String, BasketParams>,
     /// Per-basket runtime state.
     states: HashMap<String, BasketState>,
+    /// Buffer of closed-trade diagnostic records, drained by the runner. Live
+    /// and paper paths simply discard via `take_closed_trades` (or never call
+    /// it). Replay accumulates these for the per-trade TSV.
+    closed_trades: Vec<ClosedTrade>,
 }
 
 impl BasketEngine {
@@ -83,7 +87,11 @@ impl BasketEngine {
             }
         }
 
-        Self { params, states }
+        Self {
+            params,
+            states,
+            closed_trades: Vec::new(),
+        }
     }
 
     /// Get the number of active baskets.
@@ -120,6 +128,7 @@ impl BasketEngine {
         }
 
         let mut intents = Vec::new();
+        let mut closed_this_call = Vec::new();
         // Per-call cardinality breakdown — emitted as INFO at the end so every
         // `on_bars` session leaves a one-line summary we can grep even at
         // default log level. This is the "did the engine actually evaluate
@@ -213,6 +222,12 @@ impl BasketEngine {
                 continue;
             }
 
+            // Update adverse / favorable excursion trackers for this bar
+            // BEFORE the state machine fires. This ensures a flip's exit_z
+            // is visible in the closed trade's `max_adverse_z` /
+            // `max_favorable_z` fields. No-op for flat baskets.
+            state.update_diagnostics(z, date);
+
             evaluated += 1;
             let k = params.threshold_k;
             let old_pos = state.position;
@@ -281,9 +296,24 @@ impl BasketEngine {
             // Apply state transition if any
             if let Some(reason) = reason {
                 if old_pos == 0 {
-                    state.enter(new_pos, date, spread);
+                    state.enter(new_pos, date, spread, z);
                 } else {
-                    state.flip(date, spread);
+                    // Snapshot the just-closed trade BEFORE state.flip()
+                    // overwrites entry_date / entry_z / etc. We must have an
+                    // entry record because old_pos != 0; defensively skip if
+                    // any field is missing rather than panic.
+                    let exit_reason = match reason {
+                        TransitionReason::FlipLongToShort => ExitReason::FlipLongToShort,
+                        TransitionReason::FlipShortToLong => ExitReason::FlipShortToLong,
+                        // Unreachable: state machine only produces flips when old_pos != 0.
+                        _ => unreachable!("InitialEntry transition with old_pos != 0"),
+                    };
+                    if let Some(closed) =
+                        snapshot_closed_trade(basket_id, state, z, spread, date, exit_reason)
+                    {
+                        closed_this_call.push(closed);
+                    }
+                    state.flip(date, spread, z);
                 }
 
                 transitioned += 1;
@@ -308,6 +338,11 @@ impl BasketEngine {
                 ));
             }
         }
+
+        // Move trades closed by flips into the engine-wide buffer; the
+        // local accumulator existed only to dodge the borrow conflict
+        // with `self.states.get_mut`.
+        self.closed_trades.append(&mut closed_this_call);
 
         // Per-`on_bars` cardinality summary. Emitted at INFO so it surfaces
         // at the default log level and gives every session a one-line
@@ -374,6 +409,7 @@ impl BasketEngine {
         Ok(Self {
             params,
             states: snapshot.states,
+            closed_trades: Vec::new(),
         })
     }
 
@@ -406,10 +442,74 @@ impl BasketEngine {
 
     /// Flatten a set of baskets so portfolio admission and engine state stay aligned.
     pub fn flatten_baskets(&mut self, basket_ids: &[String]) {
+        self.flatten_baskets_with_date(basket_ids, None);
+    }
+
+    /// Flatten the listed baskets and, when a `date` is provided, emit a
+    /// `ClosedTrade` diagnostic for each one that was actually in a position.
+    /// `date` defaults to the basket's `last_z` observation date via the
+    /// state's `max_adverse_date` if not given; without a date the flatten
+    /// still happens but no trade record is emitted (used by tests / reload
+    /// paths that don't have a current bar).
+    pub fn flatten_baskets_with_date(
+        &mut self,
+        basket_ids: &[String],
+        date: Option<NaiveDate>,
+    ) {
         for basket_id in basket_ids {
-            if let Some(state) = self.states.get_mut(basket_id) {
-                state.flatten();
+            let Some(state) = self.states.get_mut(basket_id) else {
+                continue;
+            };
+            if state.position != 0 {
+                if let Some(d) = date {
+                    let spread = state.spread_history.back().copied().unwrap_or(f64::NAN);
+                    let z = state.last_z.unwrap_or(f64::NAN);
+                    if let Some(closed) = snapshot_closed_trade(
+                        basket_id,
+                        state,
+                        z,
+                        spread,
+                        d,
+                        ExitReason::EngineFlatten,
+                    ) {
+                        self.closed_trades.push(closed);
+                    }
+                }
             }
+            state.flatten();
+        }
+    }
+
+    /// Drain the internal closed-trade buffer. Replay calls this at the end
+    /// of the run (and optionally after each `on_bars`) to write the per-trade
+    /// TSV. Live / paper paths can ignore it — the buffer caps the leak at
+    /// transitions per session, which is small.
+    pub fn drain_closed_trades(&mut self) -> Vec<ClosedTrade> {
+        std::mem::take(&mut self.closed_trades)
+    }
+
+    /// Emit synthetic `WindowEnd` close records for any baskets still in a
+    /// position, then flatten them. Replay calls this after the final
+    /// `on_bars` of the window so the TSV captures positions that never flipped.
+    pub fn flush_open_as_window_end(&mut self, end_date: NaiveDate) {
+        let open_ids: Vec<String> = self
+            .states
+            .iter()
+            .filter(|(_, s)| s.position != 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for basket_id in &open_ids {
+            let Some(state) = self.states.get_mut(basket_id) else {
+                continue;
+            };
+            let spread = state.spread_history.back().copied().unwrap_or(f64::NAN);
+            let z = state.last_z.unwrap_or(f64::NAN);
+            if let Some(closed) =
+                snapshot_closed_trade(basket_id, state, z, spread, end_date, ExitReason::WindowEnd)
+            {
+                self.closed_trades.push(closed);
+            }
+            state.flatten();
         }
     }
 
@@ -432,6 +532,42 @@ impl BasketEngine {
         }
         Ok(())
     }
+}
+
+/// Build a `ClosedTrade` from a basket's current state and a chosen exit
+/// reason. Returns `None` if entry context is missing — should not happen
+/// in normal flow but handled defensively because the snapshot path must
+/// not panic on unexpected state.
+fn snapshot_closed_trade(
+    basket_id: &str,
+    state: &BasketState,
+    exit_z: f64,
+    exit_spread: f64,
+    exit_date: NaiveDate,
+    exit_reason: ExitReason,
+) -> Option<ClosedTrade> {
+    let position = state.position;
+    let entry_date = state.entry_date?;
+    let entry_spread = state.entry_spread?;
+    let entry_z = state.entry_z?;
+    let max_adverse_z = state.max_adverse_z.unwrap_or(0.0);
+    let max_adverse_date = state.max_adverse_date.unwrap_or(entry_date);
+    let max_favorable_z = state.max_favorable_z.unwrap_or(0.0);
+    Some(ClosedTrade {
+        basket_id: basket_id.to_string(),
+        position,
+        entry_date,
+        exit_date,
+        entry_z,
+        exit_z,
+        entry_spread,
+        exit_spread,
+        max_adverse_z,
+        max_adverse_date,
+        max_favorable_z,
+        bars_held: state.bars_held,
+        exit_reason,
+    })
 }
 
 #[cfg(test)]

@@ -107,6 +107,16 @@ impl StartupPhase {
 pub struct BasketRunOptions {
     pub fit_artifact_path: Option<PathBuf>,
     pub journal_path: Option<PathBuf>,
+    /// Replay-only: when set, per-trade closed-trade diagnostics are
+    /// written to this path as TSV after the run completes. Live/paper
+    /// callers should leave this `None` — the engine still emits the
+    /// records on flips/flattens but the buffer is drained-and-discarded.
+    pub trade_tsv_path: Option<PathBuf>,
+    /// Replay-only: when set, any baskets still in a position when the
+    /// run loop exits are flushed via `BasketEngine::flush_open_as_window_end`
+    /// using this date so the TSV captures positions that never flipped.
+    /// Live/paper callers should leave this `None`.
+    pub replay_end_date: Option<NaiveDate>,
 }
 
 // Grace period after session close before firing the engine. Lets
@@ -750,6 +760,27 @@ pub async fn run_basket_live(
             }
         }
     }
+
+    // Replay-only: flush still-open positions and write per-trade diagnostics
+    // (issue #325 Stage 1). Live / paper paths leave both options None so the
+    // engine's internal buffer is simply drained and discarded.
+    if let Some(end_date) = options.replay_end_date {
+        engine.flush_open_as_window_end(end_date);
+    }
+    let drained = engine.drain_closed_trades();
+    if let Some(path) = options.trade_tsv_path.as_ref() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match crate::trade_report::write_trade_tsv(path, &drained) {
+            Ok(()) => info!(
+                path = %path.display(),
+                trades = drained.len(),
+                "wrote per-trade replay diagnostics TSV"
+            ),
+            Err(e) => error!(error = %e, "failed to write per-trade TSV"),
+        }
+    }
     Ok(())
 }
 
@@ -1058,7 +1089,9 @@ async fn process_session_close(
     let plan = plan_portfolio(engine, portfolio_config);
     let target_notionals = plan.symbol_notionals;
     if !plan.excluded_baskets.is_empty() {
-        engine.flatten_baskets(&plan.excluded_baskets);
+        // Pass the session date so cap-driven flattens emit ClosedTrade
+        // records (issue #325 diagnostics).
+        engine.flatten_baskets_with_date(&plan.excluded_baskets, Some(date));
     }
     let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
 
