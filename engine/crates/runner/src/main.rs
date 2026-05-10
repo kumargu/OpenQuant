@@ -593,6 +593,14 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
                     std::process::exit(1);
                 }
             };
+            let valid = rebuilt.fits.iter().filter(|f| f.valid).count();
+            if valid == 0 {
+                error!(
+                    total = rebuilt.fits.len(),
+                    "refusing to replace fit artifact with zero valid baskets"
+                );
+                std::process::exit(1);
+            }
             if let Err(e) = basket_fits::save_fit_artifact(&fit_artifact_path, &rebuilt) {
                 error!(error = %e, "failed to save rebuilt basket fit artifact");
                 std::process::exit(1);
@@ -600,7 +608,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             info!(
                 path = %fit_artifact_path.display(),
                 fits = rebuilt.fits.len(),
-                valid = rebuilt.fits.iter().filter(|f| f.valid).count(),
+                valid,
                 "rebuilt and saved fit artifact"
             );
             rebuilt

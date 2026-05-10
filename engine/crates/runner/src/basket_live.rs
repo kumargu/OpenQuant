@@ -26,6 +26,7 @@
 //!   - `Live`: api.alpaca.markets (real money). Gated behind explicit opt-in.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use basket_engine::{
@@ -106,6 +107,22 @@ impl StartupPhase {
 pub struct BasketRunOptions {
     pub fit_artifact_path: Option<PathBuf>,
     pub journal_path: Option<PathBuf>,
+}
+
+// Grace period after session close before firing the engine. Lets
+// late-arriving final-RTH-minute bars land in the buffer.
+//
+// The `clock` and `session_trigger` parameters MUST agree on this value:
+// `IntervalSessionTrigger` is constructed with the same constant in
+// `main.rs`. If they diverge, replay/live cadence drifts.
+const CLOSE_GRACE_MIN: u32 = 2;
+const BROKER_QTY_EPSILON: f64 = 0.5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupStateSource {
+    Snapshot,
+    BrokerReconciled,
+    Fresh,
 }
 
 async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> Result<(), String> {
@@ -296,14 +313,6 @@ pub async fn run_basket_live(
     fits: &[BasketFit],
     options: BasketRunOptions,
 ) -> Result<(), String> {
-    // Grace period after session close before firing the engine. Lets late-arriving
-    // final-RTH-minute bars land in the buffer.
-    //
-    // The `clock` and `session_trigger` parameters MUST agree on this value:
-    // `IntervalSessionTrigger` is constructed with the same constant in
-    // `main.rs`. If they diverge, replay/live cadence drifts.
-    const CLOSE_GRACE_MIN: u32 = 2;
-
     info!(
         universe = %universe_path.display(),
         state_path = %state_path.display(),
@@ -362,39 +371,7 @@ pub async fn run_basket_live(
         return Err("no valid baskets in fit artifact".to_string());
     }
 
-    let expected_ids: std::collections::HashSet<String> = fits
-        .iter()
-        .filter(|f| f.valid)
-        .map(|f| f.candidate.id())
-        .collect();
     let state_exists = state_path.exists();
-    let mut last_processed_trading_day = None;
-    let mut engine = if state_exists {
-        let snapshot = BasketEngine::load_snapshot(state_path)?;
-        let loaded_ids: std::collections::HashSet<String> =
-            snapshot.states.keys().cloned().collect();
-        if loaded_ids != expected_ids {
-            return Err(format!(
-                "state snapshot basket set mismatch: snapshot={}, artifact={}",
-                loaded_ids.len(),
-                expected_ids.len()
-            ));
-        }
-        last_processed_trading_day = snapshot.last_processed_trading_day;
-        let mut fresh = BasketEngine::new(fits);
-        fresh.apply_states(snapshot.states)?;
-        info!(
-            baskets = fresh.num_baskets(),
-            state_path = %state_path.display(),
-            last_processed = ?last_processed_trading_day,
-            "loaded basket runtime state onto current fit artifact params"
-        );
-        fresh
-    } else {
-        let fresh = BasketEngine::new(fits);
-        info!(baskets = fresh.num_baskets(), "basket engine initialized");
-        fresh
-    };
 
     // 2. Seed current_shares from Alpaca positions (startup reconciliation).
     //    Without this, a restart with live open positions would trigger
@@ -413,26 +390,15 @@ pub async fn run_basket_live(
         }
         Some(mode) => seed_current_shares_from_alpaca(broker, mode, &symbols).await?,
     };
-    // Self-healing state reconciliation: if Alpaca has open positions but
-    // there's no engine-state snapshot on disk (deleted, corrupted, fresh
-    // checkout, etc.), recover engine state from broker holdings instead of
-    // aborting startup. For each basket whose target symbol is held with
-    // non-zero qty, infer state.position from the qty sign — long basket
-    // means long target, short basket means short target. Peer-only orphan
-    // holdings stay at flat and get closed via natural delta math at the
-    // next session close.
-    //
-    // This eliminates the "manually liquidate or rebuild state" step from
-    // the startup sequence — running the binary is enough.
-    if execution.alpaca_mode().is_some() && !state_exists && !current_shares.is_empty() {
-        let reconciled = reconcile_engine_state_from_broker(&mut engine, &current_shares)?;
-        warn!(
-            state_path = %state_path.display(),
-            broker_positions = current_shares.len(),
-            reconciled_baskets = reconciled,
-            "state file missing — reconciled engine state from broker positions"
-        );
-    }
+
+    let (mut engine, mut last_processed_trading_day, startup_state_source) =
+        initialize_engine_state(
+            fits,
+            state_path,
+            &current_shares,
+            execution.alpaca_mode().is_some(),
+        )?;
+
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
     let journal = match options.journal_path.as_deref() {
         Some(path) => Some(BasketJournal::open(path)?),
@@ -450,6 +416,7 @@ pub async fn run_basket_live(
         now_utc = %now.to_rfc3339(),
         trading_day = %today,
         startup_phase = startup_phase.as_str(),
+        startup_state_source = ?startup_state_source,
         state_exists,
         last_processed = ?last_processed_trading_day,
         broker_positions = current_shares.len(),
@@ -810,18 +777,138 @@ fn reconcile_engine_state_from_broker(
     let mut new_states: HashMap<String, BasketState> = HashMap::new();
     for (basket_id, params) in engine.iter_params() {
         let target_qty = broker_shares.get(&params.target).copied().unwrap_or(0.0);
-        if target_qty.abs() < 0.5 {
-            continue;
-        }
-        let state = BasketState {
-            position: if target_qty > 0.0 { 1 } else { -1 },
-            ..Default::default()
+        let state = if target_qty.abs() < BROKER_QTY_EPSILON {
+            BasketState::default()
+        } else {
+            BasketState {
+                position: if target_qty > 0.0 { 1 } else { -1 },
+                ..Default::default()
+            }
         };
         new_states.insert(basket_id.clone(), state);
     }
-    let count = new_states.len();
+    let count = new_states.values().filter(|s| s.position != 0).count();
     engine.apply_states(new_states)?;
     Ok(count)
+}
+
+fn initialize_engine_state(
+    fits: &[BasketFit],
+    state_path: &Path,
+    broker_shares: &HashMap<String, f64>,
+    broker_execution_enabled: bool,
+) -> Result<(BasketEngine, Option<NaiveDate>, StartupStateSource), String> {
+    let expected_ids: std::collections::HashSet<String> = fits
+        .iter()
+        .filter(|f| f.valid)
+        .map(|f| f.candidate.id())
+        .collect();
+    let mut fresh = BasketEngine::new(fits);
+
+    if !state_path.exists() {
+        if broker_execution_enabled && !broker_shares.is_empty() {
+            let reconciled = reconcile_engine_state_from_broker(&mut fresh, broker_shares)?;
+            warn!(
+                state_path = %state_path.display(),
+                broker_positions = broker_shares.len(),
+                reconciled_baskets = reconciled,
+                "state file missing — reconciled engine state from broker positions"
+            );
+            return Ok((fresh, None, StartupStateSource::BrokerReconciled));
+        }
+        info!(baskets = fresh.num_baskets(), "basket engine initialized");
+        return Ok((fresh, None, StartupStateSource::Fresh));
+    }
+
+    match BasketEngine::load_snapshot(state_path) {
+        Ok(snapshot) => {
+            let loaded_ids: std::collections::HashSet<String> =
+                snapshot.states.keys().cloned().collect();
+            if loaded_ids != expected_ids {
+                return recover_from_unloadable_state(
+                    fresh,
+                    state_path,
+                    broker_shares,
+                    broker_execution_enabled,
+                    format!(
+                        "state snapshot basket set mismatch: snapshot={}, artifact={}",
+                        loaded_ids.len(),
+                        expected_ids.len()
+                    ),
+                );
+            }
+            let last_processed_trading_day = snapshot.last_processed_trading_day;
+            fresh.apply_states(snapshot.states)?;
+            info!(
+                baskets = fresh.num_baskets(),
+                state_path = %state_path.display(),
+                last_processed = ?last_processed_trading_day,
+                "loaded basket runtime state onto current fit artifact params"
+            );
+            Ok((
+                fresh,
+                last_processed_trading_day,
+                StartupStateSource::Snapshot,
+            ))
+        }
+        Err(e) => recover_from_unloadable_state(
+            fresh,
+            state_path,
+            broker_shares,
+            broker_execution_enabled,
+            format!("failed to load state snapshot: {e}"),
+        ),
+    }
+}
+
+fn recover_from_unloadable_state(
+    mut fresh: BasketEngine,
+    state_path: &Path,
+    broker_shares: &HashMap<String, f64>,
+    broker_execution_enabled: bool,
+    reason: String,
+) -> Result<(BasketEngine, Option<NaiveDate>, StartupStateSource), String> {
+    let backup_path = move_state_file_aside(state_path)?;
+    warn!(
+        state_path = %state_path.display(),
+        backup_path = %backup_path.display(),
+        reason = %reason,
+        "state snapshot unusable — moved aside for recovery"
+    );
+
+    if broker_execution_enabled && !broker_shares.is_empty() {
+        let reconciled = reconcile_engine_state_from_broker(&mut fresh, broker_shares)?;
+        warn!(
+            broker_positions = broker_shares.len(),
+            reconciled_baskets = reconciled,
+            "recovered engine state from broker positions after unloading state snapshot"
+        );
+        Ok((fresh, None, StartupStateSource::BrokerReconciled))
+    } else {
+        info!(
+            baskets = fresh.num_baskets(),
+            "state unavailable but broker flat — starting fresh"
+        );
+        Ok((fresh, None, StartupStateSource::Fresh))
+    }
+}
+
+fn move_state_file_aside(path: &Path) -> Result<PathBuf, String> {
+    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let mut backup_name: OsString = path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_else(|| OsString::from("basket.state.json"));
+    backup_name.push(format!(".unusable.{ts}"));
+    let backup_path = path.with_file_name(backup_name);
+    std::fs::rename(path, &backup_path).map_err(|e| {
+        format!(
+            "failed to move unusable state snapshot {} aside to {}: {e}",
+            path.display(),
+            backup_path.display()
+        )
+    })?;
+    Ok(backup_path)
 }
 
 /// paper/live execution (trading from an empty share map would double-size
@@ -1703,7 +1790,53 @@ pub(crate) fn align_basket_history(
 mod tests {
     use super::*;
     use crate::alpaca::AlpacaAccount;
+    use basket_picker::{BasketCandidate, BasketFit, BertramResult, OuFit};
     use chrono::{TimeZone, Timelike};
+    use tempfile::tempdir;
+
+    fn make_test_fit(target: &str, peers: &[&str], sector: &str) -> BasketFit {
+        let candidate = BasketCandidate {
+            target: target.to_string(),
+            members: peers.iter().map(|s| s.to_string()).collect(),
+            sector: sector.to_string(),
+            fit_date: NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+        };
+        let ou = OuFit {
+            a: 0.001,
+            b: 0.95,
+            kappa: 12.92,
+            mu: 0.0,
+            sigma: 0.01,
+            sigma_eq: 0.032,
+            half_life_days: 13.51,
+        };
+        let bertram = BertramResult {
+            a: -0.04,
+            m: 0.04,
+            k: 1.25,
+            expected_return_rate: 0.1,
+            expected_trade_length_days: 10.0,
+            sigma_cont: 0.05,
+        };
+        BasketFit {
+            candidate,
+            ou: Some(ou),
+            bertram: Some(bertram),
+            threshold_k: 1.25,
+            adf_statistic: None,
+            adf_pvalue: None,
+            dominance_score: None,
+            valid: true,
+            reject_reason: None,
+        }
+    }
+
+    fn make_test_fits() -> Vec<BasketFit> {
+        vec![
+            make_test_fit("AMD", &["NVDA", "INTC"], "chips"),
+            make_test_fit("AAPL", &["AMZN", "GOOGL"], "faang"),
+        ]
+    }
 
     #[test]
     fn test_basket_execution_alpaca_mode_mapping() {
@@ -1848,6 +1981,94 @@ mod tests {
         assert_eq!(
             classify_startup_phase(dt, Some(today), 2),
             StartupPhase::PostCloseProcessed
+        );
+    }
+
+    #[test]
+    fn test_reconcile_engine_state_from_broker_builds_complete_state_map() {
+        let fits = make_test_fits();
+        let mut engine = BasketEngine::new(&fits);
+        let broker_shares = HashMap::from([
+            ("AMD".to_string(), 15.0),
+            ("NVDA".to_string(), -7.0),
+            ("AMZN".to_string(), 3.0),
+        ]);
+
+        let reconciled = reconcile_engine_state_from_broker(&mut engine, &broker_shares).unwrap();
+        assert_eq!(reconciled, 1);
+
+        let amd_id = fits[0].candidate.id();
+        let aapl_id = fits[1].candidate.id();
+        assert_eq!(engine.get_state(&amd_id).unwrap().position, 1);
+        assert_eq!(engine.get_state(&aapl_id).unwrap().position, 0);
+    }
+
+    #[test]
+    fn test_initialize_engine_state_recovers_from_corrupt_snapshot_using_broker() {
+        let fits = make_test_fits();
+        let tmp = tempdir().unwrap();
+        let state_path = tmp.path().join("basket.state.json");
+        std::fs::write(&state_path, "{ definitely not json").unwrap();
+
+        let broker_shares = HashMap::from([("AMD".to_string(), -12.0)]);
+        let (engine, last_processed, source) =
+            initialize_engine_state(&fits, &state_path, &broker_shares, true).unwrap();
+
+        assert_eq!(source, StartupStateSource::BrokerReconciled);
+        assert_eq!(last_processed, None);
+        assert_eq!(
+            engine.get_state(&fits[0].candidate.id()).unwrap().position,
+            -1
+        );
+        assert_eq!(
+            engine.get_state(&fits[1].candidate.id()).unwrap().position,
+            0
+        );
+        assert!(!state_path.exists(), "corrupt state should be moved aside");
+        let backups: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.contains(".unusable."))
+            .collect();
+        assert_eq!(backups.len(), 1);
+    }
+
+    #[test]
+    fn test_initialize_engine_state_recovers_from_mismatched_snapshot_when_broker_flat() {
+        let fits = make_test_fits();
+        let tmp = tempdir().unwrap();
+        let state_path = tmp.path().join("basket.state.json");
+
+        let wrong_fit = make_test_fit("MSFT", &["ORCL", "CRM"], "entsw");
+        let mut wrong_engine = BasketEngine::new(&[wrong_fit]);
+        let wrong_basket_id = wrong_engine.iter_params().next().unwrap().0.clone();
+        let mut states = HashMap::new();
+        states.insert(
+            wrong_basket_id,
+            basket_engine::BasketState {
+                position: 1,
+                ..Default::default()
+            },
+        );
+        wrong_engine.apply_states(states).unwrap();
+        wrong_engine.save_state(&state_path).unwrap();
+
+        let (engine, last_processed, source) =
+            initialize_engine_state(&fits, &state_path, &HashMap::new(), true).unwrap();
+
+        assert_eq!(source, StartupStateSource::Fresh);
+        assert_eq!(last_processed, None);
+        assert_eq!(
+            engine.get_state(&fits[0].candidate.id()).unwrap().position,
+            0
+        );
+        assert_eq!(
+            engine.get_state(&fits[1].candidate.id()).unwrap().position,
+            0
+        );
+        assert!(
+            !state_path.exists(),
+            "mismatched state should be moved aside"
         );
     }
 
