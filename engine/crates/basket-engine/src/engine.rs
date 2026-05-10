@@ -206,7 +206,6 @@ impl BasketEngine {
 
             // Compute z-score using frozen OU parameters
             let z = (spread - params.ou.mu) / params.ou.sigma_eq;
-            state.last_z = Some(z);
 
             if !z.is_finite() {
                 skipped_nan_z += 1;
@@ -221,6 +220,11 @@ impl BasketEngine {
                 );
                 continue;
             }
+            // Only persist `last_z` once z has passed the finite-check.
+            // The replay diagnostics (WindowEnd, EngineFlatten) read this
+            // back as the trade's exit_z, and we don't want NaN to leak
+            // into the per-trade TSV. Buddy reviewer NIT, audit notes #4.
+            state.last_z = Some(z);
 
             // Update adverse / favorable excursion trackers for this bar
             // BEFORE the state machine fires. This ensures a flip's exit_z
