@@ -32,6 +32,16 @@ pub struct BasketState {
     /// Number of bars observed since entry (incremented by `update_diagnostics`).
     #[serde(default)]
     pub bars_held: u32,
+    /// Stage-2 re-entry block. Set to `Some(p)` after a `MaxHoldExit` on
+    /// position `p` (where `p ∈ {-1, +1}`). Cleared as soon as `z * p >= 0`,
+    /// i.e. once the spread has mean-reverted past zero on the same side we
+    /// had been positioned. While set, the state machine refuses to enter a
+    /// position in direction `p`. Prevents the "exit-then-re-enter-at-worse-
+    /// price" pathology that the first Stage 2 implementation tripped on
+    /// (NVDA cycling -0.81 → -4.4 → -4.1 → -4.9 → -4.4 → -6.9 → -6.4 on
+    /// April hl15).
+    #[serde(default)]
+    pub entry_block_direction: Option<i8>,
     /// Ring buffer of recent spread observations (for diagnostics).
     #[serde(default)]
     pub spread_history: VecDeque<f64>,
@@ -50,6 +60,7 @@ impl Default for BasketState {
             max_adverse_date: None,
             max_favorable_z: None,
             bars_held: 0,
+            entry_block_direction: None,
             spread_history: VecDeque::with_capacity(60),
             last_z: None,
         }
@@ -107,7 +118,9 @@ impl BasketState {
         }
     }
 
-    /// Enter a position from flat. Resets diagnostic trackers.
+    /// Enter a position from flat. Resets diagnostic trackers and clears any
+    /// re-entry block (the block is meant to gate this very call; if the
+    /// caller decided to enter, the block is logically cleared).
     pub fn enter(&mut self, position: i8, date: NaiveDate, spread: f64, entry_z: f64) {
         self.position = position;
         self.entry_date = Some(date);
@@ -117,6 +130,7 @@ impl BasketState {
         self.max_adverse_date = Some(date);
         self.max_favorable_z = Some(0.0);
         self.bars_held = 0;
+        self.entry_block_direction = None;
     }
 
     /// Flip to opposite position. Resets diagnostic trackers (the prior

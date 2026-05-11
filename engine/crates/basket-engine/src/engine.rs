@@ -249,6 +249,18 @@ impl BasketEngine {
             // into the per-trade TSV. Buddy reviewer NIT, audit notes #4.
             state.last_z = Some(z);
 
+            // Clear the Stage-2 re-entry block once z has reverted past zero
+            // on the same side we had been positioned. Without this, a basket
+            // that fires MaxHoldExit at z=-4 stays locked out forever; with it,
+            // normal trading resumes when the spread shows mean-reversion.
+            if state.position == 0 {
+                if let Some(blk) = state.entry_block_direction {
+                    if z * (blk as f64) >= 0.0 {
+                        state.entry_block_direction = None;
+                    }
+                }
+            }
+
             // Update adverse / favorable excursion trackers for this bar
             // BEFORE the state machine fires. This ensures a flip's exit_z
             // is visible in the closed trade's `max_adverse_z` /
@@ -288,6 +300,10 @@ impl BasketEngine {
                             "max_hold_exit"
                         );
                         state.flatten();
+                        // Block re-entry in the same direction until the
+                        // spread reverts past mean (see state.rs doc on
+                        // `entry_block_direction`).
+                        state.entry_block_direction = Some(exit_pos);
                         intents.push(PositionIntent::new(
                             basket_id.clone(),
                             0,
@@ -337,12 +353,18 @@ impl BasketEngine {
             );
 
             // Bertram symmetric state machine
+            let entry_block = state.entry_block_direction;
             let (new_pos, reason) = match old_pos {
                 0 => {
-                    // Flat: enter on threshold breach
-                    if z < -k {
+                    // Flat: enter on threshold breach, honoring any Stage-2
+                    // re-entry block in the same direction as the prior
+                    // MaxHoldExit. Opposite-direction entries are still
+                    // allowed — those represent the spread crossing past
+                    // mean and over to the other side, which is exactly
+                    // the mean-reversion behavior we want.
+                    if z < -k && entry_block != Some(1) {
                         (1, Some(TransitionReason::InitialEntryLong))
-                    } else if z > k {
+                    } else if z > k && entry_block != Some(-1) {
                         (-1, Some(TransitionReason::InitialEntryShort))
                     } else {
                         (0, None)
@@ -1008,6 +1030,74 @@ mod tests {
         assert_eq!(trades[0].exit_reason, ExitReason::MaxHoldExit);
         assert_eq!(trades[0].position, 1);
         assert_eq!(trades[0].bars_held, 4);
+    }
+
+    /// Re-entry block: after a `MaxHoldExit` on a long position, the state
+    /// machine MUST NOT re-enter long until z has reverted past 0. Otherwise
+    /// the engine churns: exit at z=-4 → re-enter long at z=-4 → cap fires
+    /// again, accumulating losses on every cycle. This was caught in the
+    /// April hl15 grid (NVDA -0.81 → -4.4 → -4.1 → -4.9 → -4.4 → -6.9 → -6.4).
+    #[test]
+    fn test_max_hold_exit_blocks_same_direction_reentry() {
+        let fit = make_test_fit();
+        let mut engine = BasketEngine::new(&[fit]);
+        engine.set_max_hold_multiplier(Some(0.2));
+        let id = test_basket_id();
+        let day = |n: i64| NaiveDate::from_ymd_opt(2026, 4, 21).unwrap() + chrono::Duration::days(n);
+
+        // Bar 0: long entry at z far below -k.
+        let bars_neg = |n: i64| vec![
+            DailyBar { symbol: "AMD".to_string(),  date: day(n), close: 90.0 },
+            DailyBar { symbol: "NVDA".to_string(), date: day(n), close: 100.0 },
+            DailyBar { symbol: "INTC".to_string(), date: day(n), close: 100.0 },
+        ];
+        engine.on_bars(&bars_neg(0));
+        assert_eq!(engine.get_state(&id).unwrap().position, 1);
+
+        // Bars 1..4: hold the long. bars_held -> 4. cap = ceil(0.2*13.51) = 3.
+        // Bar 4 trips MaxHoldExit. We drive z even more negative so the
+        // state machine *would* try to re-enter long if the block were absent.
+        for n in 1..=3 {
+            engine.on_bars(&bars_neg(n));
+        }
+        // Bar 4: MaxHoldExit fires
+        let intents = engine.on_bars(&bars_neg(4));
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].reason, TransitionReason::MaxHoldExit);
+        assert_eq!(engine.get_state(&id).unwrap().position, 0);
+        assert_eq!(engine.get_state(&id).unwrap().entry_block_direction, Some(1));
+
+        // Bars 5..8: z still negative (basket still stuck adverse). State
+        // machine WANTS to enter long but the block prevents it. No new
+        // intents emitted.
+        for n in 5..=8 {
+            let intents = engine.on_bars(&bars_neg(n));
+            assert!(intents.is_empty(), "bar {} should still be blocked (z<0, block_dir=+1)", n);
+            assert_eq!(engine.get_state(&id).unwrap().position, 0);
+            assert_eq!(engine.get_state(&id).unwrap().entry_block_direction, Some(1));
+        }
+
+        // Bar 9: z reverts to 0 (target price drops to match peer mean). The
+        // block clears; basket is flat with |z|=0, no entry (correct, |z| <= k).
+        let bars_at_mean = vec![
+            DailyBar { symbol: "AMD".to_string(),  date: day(9), close: 100.0 },
+            DailyBar { symbol: "NVDA".to_string(), date: day(9), close: 100.0 },
+            DailyBar { symbol: "INTC".to_string(), date: day(9), close: 100.0 },
+        ];
+        let intents = engine.on_bars(&bars_at_mean);
+        assert!(intents.is_empty());
+        assert_eq!(engine.get_state(&id).unwrap().entry_block_direction, None);
+
+        // Bar 10: z swings positive (z > k). Short entry is allowed (it was
+        // never blocked). Long entries would also now be allowed (block cleared).
+        let bars_pos = vec![
+            DailyBar { symbol: "AMD".to_string(),  date: day(10), close: 110.0 },
+            DailyBar { symbol: "NVDA".to_string(), date: day(10), close: 100.0 },
+            DailyBar { symbol: "INTC".to_string(), date: day(10), close: 100.0 },
+        ];
+        let intents = engine.on_bars(&bars_pos);
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].reason, TransitionReason::InitialEntryShort);
     }
 
     /// Sanity: with no multiplier configured, the engine never emits MaxHoldExit
