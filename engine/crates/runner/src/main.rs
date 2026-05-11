@@ -267,6 +267,13 @@ struct ReplayArgs {
     #[arg(long)]
     trade_tsv: Option<PathBuf>,
 
+    /// Issue #325 Stage 2: enable the half-life-adaptive max-hold protective
+    /// exit. When set, any basket with `bars_held > ceil(k × half_life_days)`
+    /// is force-flattened at the start of the next session close (before the
+    /// natural Bertram state machine runs). Replay-only; omit to disable.
+    #[arg(long)]
+    max_hold_multiplier: Option<f64>,
+
     /// Resume replay from an existing state snapshot at `--state-path`
     /// instead of starting from empty engine + simulated broker state.
     /// Default: false (fresh start). When false, any existing state
@@ -652,6 +659,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             journal_path: Some(basket_journal_path),
             trade_tsv_path: None,
             replay_end_date: None,
+            max_hold_multiplier: None,
         },
     )
     .await
@@ -1498,6 +1506,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             journal_path: None,
             trade_tsv_path: args.trade_tsv.clone(),
             replay_end_date: Some(end),
+            max_hold_multiplier: args.max_hold_multiplier,
         },
     )
     .await;

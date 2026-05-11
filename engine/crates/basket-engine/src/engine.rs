@@ -71,6 +71,12 @@ pub struct BasketEngine {
     /// and paper paths simply discard via `take_closed_trades` (or never call
     /// it). Replay accumulates these for the per-trade TSV.
     closed_trades: Vec<ClosedTrade>,
+    /// Optional protective hold cap, issue #325 Stage 2. When `Some(k)`, any
+    /// basket with `bars_held > ceil(k × half_life_days)` is force-flattened
+    /// (TransitionReason::MaxHoldExit) at the start of the next `on_bars`
+    /// before the natural state machine runs. `None` (default) disables.
+    /// Not persisted to `EngineSnapshot` — this is a per-experiment knob.
+    max_hold_multiplier: Option<f64>,
 }
 
 impl BasketEngine {
@@ -91,7 +97,21 @@ impl BasketEngine {
             params,
             states,
             closed_trades: Vec::new(),
+            max_hold_multiplier: None,
         }
+    }
+
+    /// Enable / disable the half-life-adaptive max-hold protective exit. When
+    /// `Some(k)`, a basket whose `bars_held > ceil(k × half_life_days)` will
+    /// be force-flattened at the next `on_bars` before the natural state
+    /// machine runs. Passing `None` (or `Some(k <= 0)`) disables.
+    pub fn set_max_hold_multiplier(&mut self, multiplier: Option<f64>) {
+        self.max_hold_multiplier = multiplier.filter(|m| m.is_finite() && *m > 0.0);
+    }
+
+    /// The configured max-hold multiplier, if any.
+    pub fn max_hold_multiplier(&self) -> Option<f64> {
+        self.max_hold_multiplier
     }
 
     /// Get the number of active baskets.
@@ -129,6 +149,9 @@ impl BasketEngine {
 
         let mut intents = Vec::new();
         let mut closed_this_call = Vec::new();
+        // Snapshot the optional max-hold multiplier so the per-basket loop
+        // doesn't have to borrow `self` while it already holds `&mut self.states`.
+        let max_hold_multiplier_local: Option<f64> = self.max_hold_multiplier;
         // Per-call cardinality breakdown — emitted as INFO at the end so every
         // `on_bars` session leaves a one-line summary we can grep even at
         // default log level. This is the "did the engine actually evaluate
@@ -231,6 +254,53 @@ impl BasketEngine {
             // is visible in the closed trade's `max_adverse_z` /
             // `max_favorable_z` fields. No-op for flat baskets.
             state.update_diagnostics(z, date);
+
+            // Stage 2 protective exit: if max-hold is configured and this
+            // basket has been held longer than `ceil(multiplier × HL)` bars,
+            // flatten BEFORE the state machine runs. We emit the closed-trade
+            // diagnostic with `MaxHoldExit`, push a `MaxHoldExit` intent with
+            // target_position=0, and skip the natural state-machine block for
+            // this basket on this bar. The next bar (with the basket flat)
+            // will re-enter via the normal entry path if `|z| > threshold_k`.
+            if let Some(mult) = max_hold_multiplier_local {
+                if state.position != 0 && params.ou.half_life_days > 0.0 {
+                    let cap_bars = (mult * params.ou.half_life_days).ceil() as u32;
+                    if state.bars_held > cap_bars {
+                        let exit_pos = state.position;
+                        if let Some(closed) = snapshot_closed_trade(
+                            basket_id,
+                            state,
+                            z,
+                            spread,
+                            date,
+                            ExitReason::MaxHoldExit,
+                        ) {
+                            closed_this_call.push(closed);
+                        }
+                        info!(
+                            basket_id = %basket_id,
+                            bars_held = state.bars_held,
+                            cap_bars,
+                            half_life_days = params.ou.half_life_days,
+                            multiplier = mult,
+                            z_score = %format!("{:.4}", z),
+                            old_pos = exit_pos,
+                            "max_hold_exit"
+                        );
+                        state.flatten();
+                        intents.push(PositionIntent::new(
+                            basket_id.clone(),
+                            0,
+                            TransitionReason::MaxHoldExit,
+                            z,
+                            spread,
+                            date,
+                        ));
+                        transitioned += 1;
+                        continue;
+                    }
+                }
+            }
 
             evaluated += 1;
             let k = params.threshold_k;
@@ -414,6 +484,7 @@ impl BasketEngine {
             params,
             states: snapshot.states,
             closed_trades: Vec::new(),
+            max_hold_multiplier: None,
         })
     }
 
@@ -870,5 +941,102 @@ mod tests {
             0,
             "state should remain flat"
         );
+    }
+
+    /// Path B (issue #325 Stage 2): when `bars_held > ceil(k × half_life_days)`,
+    /// the engine emits `TransitionReason::MaxHoldExit`, flattens the basket,
+    /// and records a `ClosedTrade` with `ExitReason::MaxHoldExit`. Disabled by
+    /// default; only fires when `set_max_hold_multiplier(Some(k))` was called.
+    #[test]
+    fn test_max_hold_exit_fires_after_cap() {
+        let fit = make_test_fit();
+        let mut engine = BasketEngine::new(&[fit]);
+        // half_life_days = 13.51 in the test fit. With multiplier=0.2 the cap
+        // is ceil(2.702) = 3 bars — short enough to exercise the path quickly
+        // without contriving an unrealistic HL.
+        engine.set_max_hold_multiplier(Some(0.2));
+        assert_eq!(engine.max_hold_multiplier(), Some(0.2));
+
+        let id = test_basket_id();
+        let day = |n: i64| NaiveDate::from_ymd_opt(2026, 4, 21).unwrap() + chrono::Duration::days(n);
+        // Spread far below mean → long entry on day 0.
+        let entry_bars = vec![
+            DailyBar { symbol: "AMD".to_string(),  date: day(0), close: 90.0 },
+            DailyBar { symbol: "NVDA".to_string(), date: day(0), close: 100.0 },
+            DailyBar { symbol: "INTC".to_string(), date: day(0), close: 100.0 },
+        ];
+        let intents = engine.on_bars(&entry_bars);
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].reason, TransitionReason::InitialEntryLong);
+        assert_eq!(engine.get_state(&id).unwrap().position, 1);
+        // bars_held resets to 0 on enter; the entry bar itself does NOT
+        // count toward update_diagnostics (the basket was flat at the start
+        // of the on_bars call, so `position == 0` skipped the diagnostic).
+        assert_eq!(engine.get_state(&id).unwrap().bars_held, 0);
+
+        // Bars 1..3: spread stays near entry, no flip. update_diagnostics
+        // ticks bars_held to 3. cap = ceil(0.2 * 13.51) = 3 — still NOT over.
+        for n in 1..=3 {
+            let bars = vec![
+                DailyBar { symbol: "AMD".to_string(),  date: day(n), close: 90.0 },
+                DailyBar { symbol: "NVDA".to_string(), date: day(n), close: 100.0 },
+                DailyBar { symbol: "INTC".to_string(), date: day(n), close: 100.0 },
+            ];
+            let intents = engine.on_bars(&bars);
+            assert!(intents.is_empty(), "no exit yet at bar {} (bars_held={}, cap=3)", n, engine.get_state(&id).unwrap().bars_held);
+        }
+        assert_eq!(engine.get_state(&id).unwrap().bars_held, 3);
+        assert_eq!(engine.get_state(&id).unwrap().position, 1);
+
+        // Bar 4: bars_held becomes 4 via update_diagnostics, exceeds cap (3),
+        // MaxHoldExit fires.
+        let bars = vec![
+            DailyBar { symbol: "AMD".to_string(),  date: day(4), close: 90.0 },
+            DailyBar { symbol: "NVDA".to_string(), date: day(4), close: 100.0 },
+            DailyBar { symbol: "INTC".to_string(), date: day(4), close: 100.0 },
+        ];
+        let intents = engine.on_bars(&bars);
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].reason, TransitionReason::MaxHoldExit);
+        assert_eq!(intents[0].target_position, 0, "MaxHoldExit goes to flat, not opposite");
+        assert_eq!(engine.get_state(&id).unwrap().position, 0);
+
+        // The closed-trade buffer should contain one ClosedTrade with
+        // ExitReason::MaxHoldExit and bars_held=4 (the bar that tripped the cap).
+        let trades = engine.drain_closed_trades();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].exit_reason, ExitReason::MaxHoldExit);
+        assert_eq!(trades[0].position, 1);
+        assert_eq!(trades[0].bars_held, 4);
+    }
+
+    /// Sanity: with no multiplier configured, the engine never emits MaxHoldExit
+    /// regardless of how long a position is held. The Bertram-symmetric flow
+    /// is preserved.
+    #[test]
+    fn test_max_hold_disabled_by_default() {
+        let fit = make_test_fit();
+        let mut engine = BasketEngine::new(&[fit]);
+        assert_eq!(engine.max_hold_multiplier(), None);
+        let id = test_basket_id();
+        let day = |n: i64| NaiveDate::from_ymd_opt(2026, 4, 21).unwrap() + chrono::Duration::days(n);
+        // Enter long on day 0 then hold for 50 bars with no flip-trigger.
+        for n in 0..=50 {
+            let bars = vec![
+                DailyBar { symbol: "AMD".to_string(),  date: day(n), close: 90.0 },
+                DailyBar { symbol: "NVDA".to_string(), date: day(n), close: 100.0 },
+                DailyBar { symbol: "INTC".to_string(), date: day(n), close: 100.0 },
+            ];
+            let intents = engine.on_bars(&bars);
+            if n == 0 {
+                assert_eq!(intents[0].reason, TransitionReason::InitialEntryLong);
+            } else {
+                assert!(intents.is_empty(), "no transitions expected at bar {n}");
+            }
+        }
+        assert_eq!(engine.get_state(&id).unwrap().position, 1);
+        assert_eq!(engine.get_state(&id).unwrap().bars_held, 50);
+        // No closed trades because no exit fired.
+        assert!(engine.drain_closed_trades().is_empty());
     }
 }

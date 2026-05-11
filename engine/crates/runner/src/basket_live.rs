@@ -117,6 +117,10 @@ pub struct BasketRunOptions {
     /// using this date so the TSV captures positions that never flipped.
     /// Live/paper callers should leave this `None`.
     pub replay_end_date: Option<NaiveDate>,
+    /// Issue #325 Stage 2: when set, the engine enables the half-life-adaptive
+    /// max-hold protective exit at this multiplier. `None` keeps the legacy
+    /// Bertram-only behavior. Live/paper paths should leave this `None`.
+    pub max_hold_multiplier: Option<f64>,
 }
 
 // Grace period after session close before firing the engine. Lets
@@ -408,6 +412,17 @@ pub async fn run_basket_live(
             &current_shares,
             execution.alpaca_mode().is_some(),
         )?;
+
+    // Stage 2 protective exit: only enabled for replay paths that opt in.
+    // Live and paper always pass `None` so the Bertram state machine is
+    // unchanged in production.
+    if let Some(mult) = options.max_hold_multiplier {
+        engine.set_max_hold_multiplier(Some(mult));
+        info!(
+            multiplier = mult,
+            "max_hold_exit ENABLED — basket positions will flat-exit when bars_held > ceil(multiplier * half_life_days)"
+        );
+    }
 
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
     let journal = match options.journal_path.as_deref() {

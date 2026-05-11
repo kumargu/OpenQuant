@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 
 /// Reason for a position transition.
 ///
-/// Deliberately limited to exactly 4 valid transitions per Bertram symmetric.
-/// No stop-loss, time-exit, or de-risk variants.
+/// Originally limited to four Bertram-symmetric transitions. `MaxHoldExit`
+/// added in issue #325 Stage 2 as the first protective transition — fires
+/// when a basket has been held for more than `multiplier × half_life_days`
+/// trading bars without naturally flipping. Optional; disabled unless the
+/// engine is configured with a multiplier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransitionReason {
     /// First entry into a long position (from flat).
@@ -17,6 +20,10 @@ pub enum TransitionReason {
     FlipLongToShort,
     /// Flip from short to long.
     FlipShortToLong,
+    /// Forced flat-exit because the position exceeded the configured
+    /// half-life-adaptive hold cap. The basket goes flat (position=0),
+    /// not to the opposite side.
+    MaxHoldExit,
 }
 
 impl TransitionReason {
@@ -27,6 +34,7 @@ impl TransitionReason {
             Self::InitialEntryShort => "initial_entry_short",
             Self::FlipLongToShort => "flip_long_to_short",
             Self::FlipShortToLong => "flip_short_to_long",
+            Self::MaxHoldExit => "max_hold_exit",
         }
     }
 }
@@ -47,6 +55,8 @@ pub enum ExitReason {
     EngineFlatten,
     /// Replay window ended while position was still open.
     WindowEnd,
+    /// Protective exit because `bars_held > multiplier × half_life`.
+    MaxHoldExit,
 }
 
 impl ExitReason {
@@ -56,6 +66,7 @@ impl ExitReason {
             Self::FlipShortToLong => "flip_short_to_long",
             Self::EngineFlatten => "engine_flatten",
             Self::WindowEnd => "window_end",
+            Self::MaxHoldExit => "max_hold_exit",
         }
     }
 }
