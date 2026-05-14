@@ -259,6 +259,31 @@ struct ReplayArgs {
     #[arg(long)]
     report_tsv: Option<PathBuf>,
 
+    /// Replay-only: comma-delimited sector list for the leadership overlay.
+    #[arg(long, value_delimiter = ',')]
+    leadership_overlay_sectors: Vec<String>,
+
+    /// Replay-only: activate the sector-level leadership overlay when the
+    /// prior 5d equal-weight sector return exceeds this threshold.
+    #[arg(long)]
+    leadership_ret5d_threshold: Option<f64>,
+
+    /// Replay-only: activate the sector-level leadership overlay when the
+    /// prior 5d average sector breadth exceeds this threshold.
+    #[arg(long)]
+    leadership_breadth5d_threshold: Option<f64>,
+
+    /// Replay-only: leadership overlay mode.
+    /// `suppress_shorts` flattens and blocks shorts in flagged sectors.
+    /// `replace_with_long_only` swaps the basket book for a long-only book
+    /// over the currently flagged sector members.
+    #[arg(long, value_enum)]
+    leadership_mode: Option<LeadershipModeArg>,
+
+    /// Replay-only: leverage for `replace_with_long_only` mode.
+    #[arg(long, default_value_t = 1.0)]
+    leadership_long_only_leverage: f64,
+
     /// Resume replay from an existing state snapshot at `--state-path`
     /// instead of starting from empty engine + simulated broker state.
     /// Default: false (fresh start). When false, any existing state
@@ -284,6 +309,46 @@ struct BasketFitArgs {
     /// Output fit artifact path. Defaults to `<universe>.fits.json`.
     #[arg(long)]
     out: Option<PathBuf>,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+enum LeadershipModeArg {
+    SuppressShorts,
+    ReplaceWithLongOnly,
+}
+
+fn build_leadership_overlay_config(
+    args: &ReplayArgs,
+) -> Option<basket_live::LeadershipOverlayConfig> {
+    if args.leadership_overlay_sectors.is_empty()
+        && args.leadership_ret5d_threshold.is_none()
+        && args.leadership_breadth5d_threshold.is_none()
+        && args.leadership_mode.is_none()
+    {
+        return None;
+    }
+    if args.leadership_overlay_sectors.is_empty()
+        || args.leadership_ret5d_threshold.is_none()
+        || args.leadership_breadth5d_threshold.is_none()
+        || args.leadership_mode.is_none()
+    {
+        error!(
+            "leadership overlay requires --leadership-overlay-sectors, --leadership-mode, and both threshold flags"
+        );
+        std::process::exit(2);
+    }
+    Some(basket_live::LeadershipOverlayConfig {
+        sectors: args.leadership_overlay_sectors.clone(),
+        ret5d_threshold: args.leadership_ret5d_threshold.unwrap(),
+        breadth5d_threshold: args.leadership_breadth5d_threshold.unwrap(),
+        mode: match args.leadership_mode.unwrap() {
+            LeadershipModeArg::SuppressShorts => basket_live::LeadershipOverlayMode::SuppressShorts,
+            LeadershipModeArg::ReplaceWithLongOnly => {
+                basket_live::LeadershipOverlayMode::ReplaceWithLongOnly
+            }
+        },
+        long_only_leverage: args.leadership_long_only_leverage,
+    })
 }
 
 /// Extract the unique symbols (leg_a/leg_b) from a candidates JSON file.
@@ -642,6 +707,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         basket_live::BasketRunOptions {
             fit_artifact_path: Some(fit_artifact_path.clone()),
             journal_path: Some(basket_journal_path),
+            leadership_overlay: None,
         },
     )
     .await
@@ -1486,6 +1552,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         basket_live::BasketRunOptions {
             fit_artifact_path: None,
             journal_path: None,
+            leadership_overlay: build_leadership_overlay_config(&args),
         },
     )
     .await;

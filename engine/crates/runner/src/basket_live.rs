@@ -25,7 +25,7 @@
 //!   - `Paper`: paper-api.alpaca.markets (paper money).
 //!   - `Live`: api.alpaca.markets (real money). Gated behind explicit opt-in.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -107,6 +107,7 @@ impl StartupPhase {
 pub struct BasketRunOptions {
     pub fit_artifact_path: Option<PathBuf>,
     pub journal_path: Option<PathBuf>,
+    pub leadership_overlay: Option<LeadershipOverlayConfig>,
 }
 
 // Grace period after session close before firing the engine. Lets
@@ -123,6 +124,187 @@ enum StartupStateSource {
     Snapshot,
     BrokerReconciled,
     Fresh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeadershipOverlayMode {
+    SuppressShorts,
+    ReplaceWithLongOnly,
+}
+
+#[derive(Debug, Clone)]
+pub struct LeadershipOverlayConfig {
+    pub sectors: Vec<String>,
+    pub ret5d_threshold: f64,
+    pub breadth5d_threshold: f64,
+    pub mode: LeadershipOverlayMode,
+    pub long_only_leverage: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SectorLeadershipSnapshot {
+    active_sectors: HashSet<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SectorLeadershipTracker {
+    config: LeadershipOverlayConfig,
+    sector_members: HashMap<String, Vec<String>>,
+    prev_closes: Option<HashMap<String, f64>>,
+    sector_returns: HashMap<String, VecDeque<f64>>,
+    sector_breadths: HashMap<String, VecDeque<f64>>,
+    last_snapshot: SectorLeadershipSnapshot,
+}
+
+impl SectorLeadershipTracker {
+    fn new(config: LeadershipOverlayConfig, sector_members: HashMap<String, Vec<String>>) -> Self {
+        let mut sector_returns = HashMap::new();
+        let mut sector_breadths = HashMap::new();
+        for sector in &config.sectors {
+            sector_returns.insert(sector.clone(), VecDeque::with_capacity(5));
+            sector_breadths.insert(sector.clone(), VecDeque::with_capacity(5));
+        }
+        Self {
+            config,
+            sector_members,
+            prev_closes: None,
+            sector_returns,
+            sector_breadths,
+            last_snapshot: SectorLeadershipSnapshot::default(),
+        }
+    }
+
+    fn active_sectors_for_today(&self) -> &HashSet<String> {
+        &self.last_snapshot.active_sectors
+    }
+
+    fn active_symbols_for_today(&self) -> Vec<String> {
+        let mut symbols: Vec<String> = self
+            .last_snapshot
+            .active_sectors
+            .iter()
+            .filter_map(|sector| self.sector_members.get(sector))
+            .flat_map(|members| members.iter().cloned())
+            .collect();
+        symbols.sort();
+        symbols.dedup();
+        symbols
+    }
+
+    fn observe_close_snapshot(&mut self, closes: &HashMap<String, f64>) {
+        let Some(prev) = &self.prev_closes else {
+            self.prev_closes = Some(closes.clone());
+            return;
+        };
+        let mut next_active = HashSet::new();
+        for sector in &self.config.sectors {
+            let Some(members) = self.sector_members.get(sector) else {
+                continue;
+            };
+            let mut rets = Vec::new();
+            let mut up = 0usize;
+            let mut total = 0usize;
+            for symbol in members {
+                let Some(&close) = closes.get(symbol) else {
+                    continue;
+                };
+                let Some(&prev_close) = prev.get(symbol) else {
+                    continue;
+                };
+                if !close.is_finite()
+                    || !prev_close.is_finite()
+                    || close <= 0.0
+                    || prev_close <= 0.0
+                {
+                    continue;
+                }
+                let ret = close / prev_close - 1.0;
+                rets.push(ret);
+                total += 1;
+                if ret > 0.0 {
+                    up += 1;
+                }
+            }
+            if rets.is_empty() || total == 0 {
+                continue;
+            }
+            let ew_ret = rets.iter().sum::<f64>() / rets.len() as f64;
+            let breadth = up as f64 / total as f64;
+            let hist_rets = self.sector_returns.entry(sector.clone()).or_default();
+            let hist_breadths = self.sector_breadths.entry(sector.clone()).or_default();
+            hist_rets.push_back(ew_ret);
+            hist_breadths.push_back(breadth);
+            while hist_rets.len() > 5 {
+                hist_rets.pop_front();
+            }
+            while hist_breadths.len() > 5 {
+                hist_breadths.pop_front();
+            }
+            if hist_rets.len() == 5 && hist_breadths.len() == 5 {
+                let ret5d = hist_rets.iter().fold(1.0_f64, |acc, r| acc * (1.0 + r)) - 1.0;
+                let breadth5d = hist_breadths.iter().sum::<f64>() / hist_breadths.len() as f64;
+                if ret5d > self.config.ret5d_threshold
+                    && breadth5d > self.config.breadth5d_threshold
+                {
+                    next_active.insert(sector.clone());
+                }
+            }
+        }
+        self.last_snapshot = SectorLeadershipSnapshot {
+            active_sectors: next_active,
+        };
+        self.prev_closes = Some(closes.clone());
+    }
+}
+
+fn basket_sector(basket_id: &str) -> &str {
+    basket_id.split(':').next().unwrap_or(basket_id)
+}
+
+fn apply_leadership_short_suppression(
+    engine: &mut basket_engine::BasketEngine,
+    active_sectors: &HashSet<String>,
+) -> Vec<String> {
+    if active_sectors.is_empty() {
+        return Vec::new();
+    }
+    let mut suppressed = Vec::new();
+    for (basket_id, _params) in engine.iter_params() {
+        if !active_sectors.contains(basket_sector(basket_id)) {
+            continue;
+        }
+        let Some(state) = engine.get_state(basket_id) else {
+            continue;
+        };
+        if state.position < 0 {
+            suppressed.push(basket_id.clone());
+        }
+    }
+    if !suppressed.is_empty() {
+        engine.flatten_baskets(&suppressed);
+    }
+    suppressed
+}
+
+fn leadership_long_only_notionals(
+    closes: &HashMap<String, f64>,
+    symbols: &[String],
+    capital: f64,
+    leverage: f64,
+) -> HashMap<String, f64> {
+    let active_symbols: Vec<&String> = symbols
+        .iter()
+        .filter(|symbol| matches!(closes.get(*symbol), Some(price) if price.is_finite() && *price > 0.0))
+        .collect();
+    if active_symbols.is_empty() || !capital.is_finite() || !leverage.is_finite() || leverage <= 0.0
+    {
+        return HashMap::new();
+    }
+    let per_symbol = capital * leverage / active_symbols.len() as f64;
+    active_symbols
+        .into_iter()
+        .map(|symbol| (symbol.clone(), per_symbol))
+        .collect()
 }
 
 async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> Result<(), String> {
@@ -339,6 +521,11 @@ pub async fn run_basket_live(
     );
 
     let symbols = collect_symbols(&universe);
+    let sector_members: HashMap<String, Vec<String>> = universe
+        .sectors
+        .iter()
+        .map(|(name, sector)| (name.clone(), sector.members.clone()))
+        .collect();
     info!(
         symbols = symbols.len(),
         fits = fits.len(),
@@ -398,6 +585,23 @@ pub async fn run_basket_live(
             &current_shares,
             execution.alpaca_mode().is_some(),
         )?;
+    let mut leadership_tracker = options
+        .leadership_overlay
+        .clone()
+        .map(|cfg| SectorLeadershipTracker::new(cfg, sector_members));
+    if let Some(cfg) = options.leadership_overlay.as_ref() {
+        info!(
+            sectors = ?cfg.sectors,
+            ret5d_threshold = cfg.ret5d_threshold,
+            breadth5d_threshold = cfg.breadth5d_threshold,
+            mode = match cfg.mode {
+                LeadershipOverlayMode::SuppressShorts => "suppress_shorts",
+                LeadershipOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
+            },
+            long_only_leverage = cfg.long_only_leverage,
+            "leadership_overlay ENABLED — replay may alter basket behavior in flagged sectors"
+        );
+    }
 
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
     let journal = match options.journal_path.as_deref() {
@@ -476,8 +680,20 @@ pub async fn run_basket_live(
             execution,
             journal.as_ref(),
             run_id.as_str(),
+            leadership_tracker
+                .as_ref()
+                .map(|t| t.active_sectors_for_today().clone())
+                .unwrap_or_default(),
+            leadership_tracker
+                .as_ref()
+                .map(|t| t.active_symbols_for_today())
+                .unwrap_or_default(),
+            options.leadership_overlay.as_ref(),
         )
         .await?;
+        if let Some(tracker) = leadership_tracker.as_mut() {
+            tracker.observe_close_snapshot(&catchup_closes);
+        }
         // Hook for replay's daily-equity time series. Noop on AlpacaClient.
         broker.record_eod(today).await;
         last_processed_trading_day = Some(today);
@@ -719,8 +935,20 @@ pub async fn run_basket_live(
                         execution,
                         journal.as_ref(),
                         run_id.as_str(),
+                        leadership_tracker
+                            .as_ref()
+                            .map(|t| t.active_sectors_for_today().clone())
+                            .unwrap_or_default(),
+                        leadership_tracker
+                            .as_ref()
+                            .map(|t| t.active_symbols_for_today())
+                            .unwrap_or_default(),
+                        options.leadership_overlay.as_ref(),
                     )
                     .await?;
+                    if let Some(tracker) = leadership_tracker.as_mut() {
+                        tracker.observe_close_snapshot(&closes_for_day);
+                    }
                     // Hook for replay's daily-equity time series.
                     // Noop on AlpacaClient.
                     broker.record_eod(today).await;
@@ -1010,6 +1238,9 @@ async fn process_session_close(
     execution: BasketExecution,
     journal: Option<&BasketJournal>,
     run_id: &str,
+    leadership_active_sectors: HashSet<String>,
+    leadership_long_symbols: Vec<String>,
+    leadership_overlay: Option<&LeadershipOverlayConfig>,
 ) -> Result<(), String> {
     debug_assert!(
         portfolio_config.validate().is_ok(),
@@ -1042,6 +1273,22 @@ async fn process_session_close(
         log_intent(intent);
     }
 
+    if matches!(
+        leadership_overlay.map(|cfg| cfg.mode),
+        Some(LeadershipOverlayMode::SuppressShorts)
+    ) {
+        let suppressed_baskets =
+            apply_leadership_short_suppression(engine, &leadership_active_sectors);
+        if !suppressed_baskets.is_empty() {
+            info!(
+                date = %date,
+                leadership_active_sectors = ?leadership_active_sectors,
+                suppressed_baskets = ?suppressed_baskets,
+                "leadership short suppression flattened active shorts in flagged sectors"
+            );
+        }
+    }
+
     let allowed_symbols: Vec<String> = closes.keys().cloned().collect();
     if let Some(mode) = execution.alpaca_mode() {
         *current_shares = seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await?;
@@ -1056,8 +1303,23 @@ async fn process_session_close(
     // Portfolio layer: apply active-basket admission first, then convert
     // admitted target notionals to target shares.
     let plan = plan_portfolio(engine, portfolio_config);
-    let target_notionals = plan.symbol_notionals;
-    if !plan.excluded_baskets.is_empty() {
+    let using_long_replacement = matches!(
+        leadership_overlay.map(|cfg| cfg.mode),
+        Some(LeadershipOverlayMode::ReplaceWithLongOnly)
+    ) && !leadership_long_symbols.is_empty();
+    let target_notionals = if using_long_replacement {
+        leadership_long_only_notionals(
+            closes,
+            &leadership_long_symbols,
+            portfolio_config.capital,
+            leadership_overlay
+                .map(|cfg| cfg.long_only_leverage)
+                .unwrap_or(1.0),
+        )
+    } else {
+        plan.symbol_notionals.clone()
+    };
+    if !using_long_replacement && !plan.excluded_baskets.is_empty() {
         engine.flatten_baskets(&plan.excluded_baskets);
     }
     let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
@@ -1082,6 +1344,14 @@ async fn process_session_close(
     let target_positions_len = target_shares.len();
     info!(
         date = %date,
+        leadership_mode = match leadership_overlay.map(|cfg| cfg.mode) {
+            Some(LeadershipOverlayMode::SuppressShorts) => "suppress_shorts",
+            Some(LeadershipOverlayMode::ReplaceWithLongOnly) if using_long_replacement => "replace_with_long_only",
+            Some(LeadershipOverlayMode::ReplaceWithLongOnly) => "replace_with_long_only_inactive",
+            None => "disabled",
+        },
+        leadership_sectors_active = ?leadership_active_sectors,
+        leadership_symbols_active = leadership_long_symbols.len(),
         targets = target_notionals.len(),
         target_positions = target_shares.len(),
         current_positions = current_shares.len(),
@@ -1108,7 +1378,7 @@ async fn process_session_close(
             admitted = plan.selected_baskets.len(),
             excluded = plan.excluded_baskets.len(),
             excluded_sample = ?plan.excluded_baskets.iter().take(10).collect::<Vec<_>>(),
-            "active-basket cap excluded baskets from the target portfolio"
+            "active-basket cap excluded baskets from the baseline target portfolio"
         );
     } else {
         info!(
@@ -1954,6 +2224,90 @@ mod tests {
         let shares = target_shares_from_notionals(&notionals, &closes).unwrap();
         assert_eq!(shares.get("AMD").copied(), Some(50.0));
         assert_eq!(shares.get("NVDA").copied(), Some(-12.0));
+    }
+
+    #[test]
+    fn test_apply_leadership_short_suppression_flattens_only_flagged_shorts() {
+        let fits = make_test_fits();
+        let mut engine = BasketEngine::new(&fits);
+        let states = HashMap::from([
+            (
+                fits[0].candidate.id(),
+                basket_engine::BasketState {
+                    position: -1,
+                    ..Default::default()
+                },
+            ),
+            (
+                fits[1].candidate.id(),
+                basket_engine::BasketState {
+                    position: 1,
+                    ..Default::default()
+                },
+            ),
+        ]);
+        engine.apply_states(states).unwrap();
+        let suppressed =
+            apply_leadership_short_suppression(&mut engine, &HashSet::from(["chips".to_string()]));
+        assert_eq!(suppressed.len(), 1);
+        assert_eq!(basket_sector(&suppressed[0]), "chips");
+        assert_eq!(
+            engine.get_state(&fits[0].candidate.id()).unwrap().position,
+            0
+        );
+        assert_eq!(
+            engine.get_state(&fits[1].candidate.id()).unwrap().position,
+            1
+        );
+    }
+
+    #[test]
+    fn test_sector_leadership_tracker_activates_lagged_sector_flag() {
+        let config = LeadershipOverlayConfig {
+            sectors: vec!["chips".to_string()],
+            ret5d_threshold: 0.02,
+            breadth5d_threshold: 0.55,
+            mode: LeadershipOverlayMode::SuppressShorts,
+            long_only_leverage: 1.0,
+        };
+        let mut tracker = SectorLeadershipTracker::new(
+            config,
+            HashMap::from([(
+                "chips".to_string(),
+                vec!["AMD".to_string(), "NVDA".to_string(), "INTC".to_string()],
+            )]),
+        );
+        let days = [
+            [100.0, 100.0, 100.0],
+            [101.0, 101.0, 100.0],
+            [102.0, 102.0, 101.0],
+            [103.0, 103.0, 102.0],
+            [104.0, 104.0, 103.0],
+            [105.0, 105.0, 104.0],
+        ];
+        for day in days {
+            tracker.observe_close_snapshot(&HashMap::from([
+                ("AMD".to_string(), day[0]),
+                ("NVDA".to_string(), day[1]),
+                ("INTC".to_string(), day[2]),
+            ]));
+        }
+        assert!(tracker.active_sectors_for_today().contains("chips"));
+    }
+
+    #[test]
+    fn test_leadership_long_only_notionals_equal_weight_selected_symbols() {
+        let closes = HashMap::from([
+            ("AAPL".to_string(), 200.0),
+            ("NVDA".to_string(), 100.0),
+            ("XOM".to_string(), 50.0),
+        ]);
+        let symbols = vec!["AAPL".to_string(), "NVDA".to_string()];
+        let notionals = leadership_long_only_notionals(&closes, &symbols, 10_000.0, 2.0);
+        assert_eq!(notionals.len(), 2);
+        assert_eq!(notionals.get("AAPL").copied(), Some(10_000.0));
+        assert_eq!(notionals.get("NVDA").copied(), Some(10_000.0));
+        assert!(!notionals.contains_key("XOM"));
     }
 
     #[test]
