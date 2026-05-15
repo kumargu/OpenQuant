@@ -34,6 +34,7 @@ mod simulated_broker;
 mod stream;
 
 use alpaca::ExecutionMode;
+use basket_picker::Universe;
 use clap::Parser;
 use openquant_core::config::ConfigFile;
 use openquant_core::pairs::engine::PairsEngine;
@@ -165,6 +166,29 @@ struct StreamArgs {
     /// Defaults to `<data-dir>/journal/basket_live.sqlite3`.
     #[arg(long)]
     basket_journal_path: Option<PathBuf>,
+
+    /// Basket-only: optional sector list for the leadership overlay.
+    /// Disabled by default. Intended for paper/noop validation runs.
+    #[arg(long, value_delimiter = ',')]
+    leadership_overlay_sectors: Vec<String>,
+
+    /// Basket-only: activate the leadership overlay when the prior 5d
+    /// equal-weight sector return exceeds this threshold.
+    #[arg(long)]
+    leadership_ret5d_threshold: Option<f64>,
+
+    /// Basket-only: activate the leadership overlay when the prior 5d
+    /// average sector breadth exceeds this threshold.
+    #[arg(long)]
+    leadership_breadth5d_threshold: Option<f64>,
+
+    /// Basket-only: leadership overlay mode.
+    #[arg(long, value_enum)]
+    leadership_mode: Option<LeadershipModeArg>,
+
+    /// Basket-only: leverage for `replace_with_long_only` mode.
+    #[arg(long, default_value_t = 1.0)]
+    leadership_long_only_leverage: f64,
 }
 
 /// Args for replay (adds date range).
@@ -318,37 +342,98 @@ enum LeadershipModeArg {
 }
 
 fn build_leadership_overlay_config(
-    args: &ReplayArgs,
+    universe: &Universe,
+    sectors: &[String],
+    ret5d_threshold: Option<f64>,
+    breadth5d_threshold: Option<f64>,
+    mode: Option<LeadershipModeArg>,
+    long_only_leverage: f64,
 ) -> Option<basket_live::LeadershipOverlayConfig> {
-    if args.leadership_overlay_sectors.is_empty()
-        && args.leadership_ret5d_threshold.is_none()
-        && args.leadership_breadth5d_threshold.is_none()
-        && args.leadership_mode.is_none()
+    if sectors.is_empty()
+        && ret5d_threshold.is_none()
+        && breadth5d_threshold.is_none()
+        && mode.is_none()
     {
         return None;
     }
-    if args.leadership_overlay_sectors.is_empty()
-        || args.leadership_ret5d_threshold.is_none()
-        || args.leadership_breadth5d_threshold.is_none()
-        || args.leadership_mode.is_none()
+    if sectors.is_empty()
+        || ret5d_threshold.is_none()
+        || breadth5d_threshold.is_none()
+        || mode.is_none()
     {
         error!(
             "leadership overlay requires --leadership-overlay-sectors, --leadership-mode, and both threshold flags"
         );
         std::process::exit(2);
     }
+    let unknown: Vec<String> = sectors
+        .iter()
+        .filter(|sector| !universe.sectors.contains_key(sector.as_str()))
+        .cloned()
+        .collect();
+    if !unknown.is_empty() {
+        error!(unknown = ?unknown, "leadership overlay sectors are not in the basket universe");
+        std::process::exit(2);
+    }
+    let ret5d_threshold = ret5d_threshold.unwrap();
+    if !ret5d_threshold.is_finite() {
+        error!("leadership overlay ret5d threshold must be finite");
+        std::process::exit(2);
+    }
+    let breadth5d_threshold = breadth5d_threshold.unwrap();
+    if !breadth5d_threshold.is_finite() || !(0.0..=1.0).contains(&breadth5d_threshold) {
+        error!("leadership overlay breadth5d threshold must be finite and in [0, 1]");
+        std::process::exit(2);
+    }
+    if !long_only_leverage.is_finite() || long_only_leverage <= 0.0 {
+        error!("leadership overlay long-only leverage must be finite and > 0");
+        std::process::exit(2);
+    }
+    if long_only_leverage > universe.strategy.leverage_assumed + f64::EPSILON {
+        error!(
+            requested = long_only_leverage,
+            max_allowed = universe.strategy.leverage_assumed,
+            "leadership overlay leverage exceeds configured basket leverage"
+        );
+        std::process::exit(2);
+    }
     Some(basket_live::LeadershipOverlayConfig {
-        sectors: args.leadership_overlay_sectors.clone(),
-        ret5d_threshold: args.leadership_ret5d_threshold.unwrap(),
-        breadth5d_threshold: args.leadership_breadth5d_threshold.unwrap(),
-        mode: match args.leadership_mode.unwrap() {
+        sectors: sectors.to_vec(),
+        ret5d_threshold,
+        breadth5d_threshold,
+        mode: match mode.unwrap() {
             LeadershipModeArg::SuppressShorts => basket_live::LeadershipOverlayMode::SuppressShorts,
             LeadershipModeArg::ReplaceWithLongOnly => {
                 basket_live::LeadershipOverlayMode::ReplaceWithLongOnly
             }
         },
-        long_only_leverage: args.leadership_long_only_leverage,
+        long_only_leverage,
     })
+}
+
+fn leadership_overlay_fingerprint(cfg: &basket_live::LeadershipOverlayConfig) -> String {
+    let mode = match cfg.mode {
+        basket_live::LeadershipOverlayMode::SuppressShorts => "suppress",
+        basket_live::LeadershipOverlayMode::ReplaceWithLongOnly => "replace",
+    };
+    let sectors = cfg.sectors.join("-");
+    let ret = format!("{:.4}", cfg.ret5d_threshold).replace('.', "p");
+    let breadth = format!("{:.4}", cfg.breadth5d_threshold).replace('.', "p");
+    let lev = format!("{:.2}", cfg.long_only_leverage).replace('.', "p");
+    format!("leadership-{mode}-{sectors}-r{ret}-b{breadth}-l{lev}")
+}
+
+fn path_with_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
+    let parent = path.parent().map(PathBuf::from).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("artifact");
+    let ext = path.extension().and_then(|s| s.to_str());
+    match ext {
+        Some(ext) => parent.join(format!("{stem}.{suffix}.{ext}")),
+        None => parent.join(format!("{stem}.{suffix}")),
+    }
 }
 
 /// Extract the unique symbols (leg_a/leg_b) from a candidates JSON file.
@@ -548,10 +633,6 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         .fit_artifact
         .clone()
         .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
-    let state_path = args
-        .state_path
-        .clone()
-        .unwrap_or_else(|| basket_fits::default_live_state_path(&fit_artifact_path));
 
     // Parse execution mode. Default = noop (shadow).
     // Extra safety: `paper live` must come from `Command::Live` (real-money path),
@@ -575,7 +656,36 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             std::process::exit(1);
         }
     };
-
+    let universe = match basket_picker::load_universe(&universe_path) {
+        Ok(u) => u,
+        Err(e) => {
+            error!(error = %e, "failed to load basket universe");
+            std::process::exit(1);
+        }
+    };
+    let portfolio_config = basket_engine::PortfolioConfig {
+        capital: args.capital,
+        leverage: universe.strategy.leverage_assumed,
+        n_active_baskets: args.n_active_baskets,
+    };
+    if let Err(e) = portfolio_config.validate() {
+        error!(error = %e, "invalid basket portfolio config");
+        std::process::exit(1);
+    }
+    let leadership_overlay = build_leadership_overlay_config(
+        &universe,
+        &args.leadership_overlay_sectors,
+        args.leadership_ret5d_threshold,
+        args.leadership_breadth5d_threshold,
+        args.leadership_mode,
+        args.leadership_long_only_leverage,
+    );
+    if leadership_overlay.is_some() && matches!(execution, basket_live::BasketExecution::Live) {
+        error!(
+            "leadership overlay is not enabled for real-money live execution; use paper/noop until explicitly promoted"
+        );
+        std::process::exit(1);
+    }
     let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
         Ok(c) => c,
         Err(e) => {
@@ -589,22 +699,14 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     // diagnostics. Filter refresh to only the universe's symbols to avoid
     // touching unrelated SP500 names.
     if bars_dir.exists() {
-        let filter = match basket_picker::load_universe(&universe_path) {
-            Ok(u) => {
-                let mut syms: Vec<String> = u
-                    .sectors
-                    .values()
-                    .flat_map(|s| s.members.iter().cloned())
-                    .collect();
-                syms.sort();
-                syms.dedup();
-                Some(syms)
-            }
-            Err(e) => {
-                error!(error = %e, "failed to load universe for refresh filter");
-                std::process::exit(1);
-            }
-        };
+        let mut syms: Vec<String> = universe
+            .sectors
+            .values()
+            .flat_map(|s| s.members.iter().cloned())
+            .collect();
+        syms.sort();
+        syms.dedup();
+        let filter = Some(syms);
         let target = chrono::Utc::now().format("%Y-%m-%d").to_string();
         info!(
             target = target.as_str(),
@@ -622,23 +724,17 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     } else {
         warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
     }
-
-    let universe = match basket_picker::load_universe(&universe_path) {
-        Ok(u) => u,
-        Err(e) => {
-            error!(error = %e, "failed to load basket universe");
-            std::process::exit(1);
-        }
+    let overlay_fingerprint = leadership_overlay
+        .as_ref()
+        .map(leadership_overlay_fingerprint);
+    let state_path = match (&args.state_path, overlay_fingerprint.as_deref()) {
+        (Some(path), _) => path.clone(),
+        (None, Some(fp)) => path_with_suffix(
+            &basket_fits::default_live_state_path(&fit_artifact_path),
+            fp,
+        ),
+        (None, None) => basket_fits::default_live_state_path(&fit_artifact_path),
     };
-    let portfolio_config = basket_engine::PortfolioConfig {
-        capital: args.capital,
-        leverage: universe.strategy.leverage_assumed,
-        n_active_baskets: args.n_active_baskets,
-    };
-    if let Err(e) = portfolio_config.validate() {
-        error!(error = %e, "invalid basket portfolio config");
-        std::process::exit(1);
-    }
     // Self-healing fit artifact: if missing or out-of-sync with the universe
     // (frozen_at / version mismatch / candidate-set change), rebuild it from
     // the current parquet history. Eliminates the "build it first" step in
@@ -688,10 +784,13 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     // the grace constant in sync with `basket_live::CLOSE_GRACE_MIN`.
     let clock = clock::SystemClock;
     let mut session_trigger = session_trigger::IntervalSessionTrigger::new(clock::SystemClock, 2);
-    let basket_journal_path = args
-        .basket_journal_path
-        .clone()
-        .unwrap_or_else(|| args.data_dir.join("journal").join("basket_live.sqlite3"));
+    let basket_journal_path = args.basket_journal_path.clone().unwrap_or_else(|| {
+        let base = args.data_dir.join("journal").join("basket_live.sqlite3");
+        match overlay_fingerprint.as_deref() {
+            Some(fp) => path_with_suffix(&base, fp),
+            None => base,
+        }
+    });
 
     if let Err(e) = basket_live::run_basket_live(
         &alpaca,
@@ -707,7 +806,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         basket_live::BasketRunOptions {
             fit_artifact_path: Some(fit_artifact_path.clone()),
             journal_path: Some(basket_journal_path),
-            leadership_overlay: None,
+            leadership_overlay,
         },
     )
     .await
@@ -1466,6 +1565,15 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         std::process::exit(1);
     }
 
+    let leadership_overlay = build_leadership_overlay_config(
+        &universe,
+        &args.leadership_overlay_sectors,
+        args.leadership_ret5d_threshold,
+        args.leadership_breadth5d_threshold,
+        args.leadership_mode,
+        args.leadership_long_only_leverage,
+    );
+
     // Walk-forward fit: build the basket fit using data STRICTLY BEFORE
     // the replay window (`--start`). Without this, replay leaks future
     // information into the fit and produces fantasy Sharpe numbers
@@ -1552,7 +1660,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         basket_live::BasketRunOptions {
             fit_artifact_path: None,
             journal_path: None,
-            leadership_overlay: build_leadership_overlay_config(&args),
+            leadership_overlay,
         },
     )
     .await;

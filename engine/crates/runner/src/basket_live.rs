@@ -257,6 +257,47 @@ impl SectorLeadershipTracker {
     }
 }
 
+fn previous_trading_day(mut day: NaiveDate) -> Option<NaiveDate> {
+    for _ in 0..10 {
+        day = day.pred_opt()?;
+        if market_session::is_trading_day(day) {
+            return Some(day);
+        }
+    }
+    None
+}
+
+fn warm_leadership_tracker(
+    tracker: &mut SectorLeadershipTracker,
+    bars_dir: &Path,
+    symbols: &[String],
+    today: NaiveDate,
+) -> Result<(), String> {
+    let Some(anchor_day) = previous_trading_day(today) else {
+        return Ok(());
+    };
+    let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 12, Some(anchor_day))?;
+    let mut by_day: std::collections::BTreeMap<NaiveDate, HashMap<String, f64>> =
+        std::collections::BTreeMap::new();
+    for (symbol, series) in closes {
+        for (day, _ts_us, close) in series {
+            if day <= anchor_day && close.is_finite() && close > 0.0 {
+                by_day.entry(day).or_default().insert(symbol.clone(), close);
+            }
+        }
+    }
+    for closes_for_day in by_day.values() {
+        tracker.observe_close_snapshot(closes_for_day);
+    }
+    info!(
+        warm_days = by_day.len(),
+        anchor_day = %anchor_day,
+        active_sectors = ?tracker.active_sectors_for_today(),
+        "leadership tracker warmed from historical close snapshots"
+    );
+    Ok(())
+}
+
 fn basket_sector(basket_id: &str) -> &str {
     basket_id.split(':').next().unwrap_or(basket_id)
 }
@@ -589,6 +630,9 @@ pub async fn run_basket_live(
         .leadership_overlay
         .clone()
         .map(|cfg| SectorLeadershipTracker::new(cfg, sector_members));
+    if let Some(tracker) = leadership_tracker.as_mut() {
+        warm_leadership_tracker(tracker, bars_dir, &symbols, today)?;
+    }
     if let Some(cfg) = options.leadership_overlay.as_ref() {
         info!(
             sectors = ?cfg.sectors,
@@ -599,7 +643,7 @@ pub async fn run_basket_live(
                 LeadershipOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
             },
             long_only_leverage = cfg.long_only_leverage,
-            "leadership_overlay ENABLED — replay may alter basket behavior in flagged sectors"
+            "leadership_overlay ENABLED — run may alter basket behavior in flagged sectors"
         );
     }
 
@@ -1307,6 +1351,13 @@ async fn process_session_close(
         leadership_overlay.map(|cfg| cfg.mode),
         Some(LeadershipOverlayMode::ReplaceWithLongOnly)
     ) && !leadership_long_symbols.is_empty();
+    if using_long_replacement {
+        let basket_ids: Vec<String> = engine
+            .iter_params()
+            .map(|(basket_id, _)| basket_id.clone())
+            .collect();
+        engine.flatten_baskets(&basket_ids);
+    }
     let target_notionals = if using_long_replacement {
         leadership_long_only_notionals(
             closes,
