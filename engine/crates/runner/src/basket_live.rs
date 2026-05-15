@@ -271,11 +271,8 @@ fn warm_leadership_tracker(
     tracker: &mut SectorLeadershipTracker,
     bars_dir: &Path,
     symbols: &[String],
-    today: NaiveDate,
+    anchor_day: NaiveDate,
 ) -> Result<(), String> {
-    let Some(anchor_day) = previous_trading_day(today) else {
-        return Ok(());
-    };
     let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 12, Some(anchor_day))?;
     let mut by_day: std::collections::BTreeMap<NaiveDate, HashMap<String, f64>> =
         std::collections::BTreeMap::new();
@@ -631,7 +628,14 @@ pub async fn run_basket_live(
         .clone()
         .map(|cfg| SectorLeadershipTracker::new(cfg, sector_members));
     if let Some(tracker) = leadership_tracker.as_mut() {
-        warm_leadership_tracker(tracker, bars_dir, &symbols, today)?;
+        let warm_anchor = if last_processed_trading_day == Some(today) {
+            Some(today)
+        } else {
+            previous_trading_day(today)
+        };
+        if let Some(anchor_day) = warm_anchor {
+            warm_leadership_tracker(tracker, bars_dir, &symbols, anchor_day)?;
+        }
     }
     if let Some(cfg) = options.leadership_overlay.as_ref() {
         info!(
