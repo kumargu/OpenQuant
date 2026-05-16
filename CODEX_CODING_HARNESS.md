@@ -8,6 +8,19 @@ OpenQuant should make money without hand-rolled daily intervention. The target i
 
 Agents must work from evidence. Every strategy change needs replay results, baseline comparison, code review, and logs that explain what happened.
 
+## Autonomous Operating Contract
+
+An agent owns the task until it is closed. Do not stop at analysis, a partial patch, or a promising replay. Keep working in a loop: understand, implement, measure, debug, review, and either ship or document why the task should be rejected.
+
+The loop closes only when one of these is true:
+
+- A strategy or epic task shows money-making improvement over the agreed baseline across the required replay windows, with no obvious lookahead, leverage, or state bug.
+- A bugfix proves the defect is fixed with a focused regression test, relevant replay when behavior could affect trading, and logs or metrics that make the fix observable.
+- An operations/logging/refactor task passes tests and demonstrably improves observability, safety, or single-path execution without changing trading behavior unexpectedly.
+- Research rejects the idea with a clear experiment, reproducible evidence, and a better next task posted to the issue.
+
+For any task tied to profitability, "works on one lucky month" is not closed. Mark an epic successful only after a larger replay window validates it, normally current YTD plus at least two prior quarters or the windows specified in the issue. Small known bugfixes and logging work do not need full-quarter replay unless they change decisions, sizing, orders, state, or broker reconciliation.
+
 ## Non-Negotiables
 
 - `main.rs` is the operator entrypoint. Do not create side entrypoints for trading decisions.
@@ -29,8 +42,10 @@ Agents must work from evidence. Every strategy change needs replay results, base
 6. Make the smallest coherent code change.
 7. Run focused tests, then broader tests if risk is high.
 8. Run replay baselines for strategy-impacting work.
-9. Review your own diff as if it can lose money.
-10. Commit with an audit-quality message, open a PR, monitor review, fix comments, and merge only when checks pass.
+9. If money-making metrics degrade, inspect logs and state transitions before changing more code.
+10. Review your own diff as if it can lose money.
+11. Commit with an audit-quality message, open a PR, monitor review, fix comments, and merge only when checks pass.
+12. Post the closure evidence back to the issue: tests, replay windows, metrics, failures found, and the next task if the epic continues.
 
 ## Baseline Discipline
 
@@ -41,6 +56,8 @@ For changes touching signals, sizing, state, regime, execution, or persistence:
 - Preserve a known baseline in `BASELINES.md` when a result becomes a reference point.
 - If results improve only by adding hidden leverage, concentration, or stale/future data, reject the change.
 - If a result looks too good, assume bug until checked against logs and state transitions.
+- For epic success, prefer broad validation: current YTD, two earlier quarters, and the known stress window that motivated the work.
+- For small non-strategy fixes, record why unit/integration tests are sufficient instead of replay.
 
 Current basket reference on merged `main`:
 
@@ -116,13 +133,20 @@ For epic work:
 
 Do not drift into unrelated refactors while chasing a trading result. If a new bug appears, file it or explicitly pull it into scope.
 
+Each issue update should make the next agent self-sufficient:
+
+- current hypothesis
+- exact commands or replay windows used
+- baseline metrics and candidate metrics
+- code paths touched
+- whether the task is closed or what remains
+
 ## Success Bar
 
 A change is not successful because it compiles. It is successful when:
 
-- replay says it improves the right metric
+- replay says it improves the right metric across the required windows, or tests prove a contained non-strategy fix
 - paper behavior is observable and restart-safe
 - the code path is simpler or no more complex than necessary
 - the logs explain the decision
 - future agents can maintain it without oral history
-
