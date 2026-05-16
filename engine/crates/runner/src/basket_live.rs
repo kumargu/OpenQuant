@@ -36,6 +36,7 @@ use basket_engine::{
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
 use crate::alpaca::ExecutionMode;
@@ -135,15 +136,43 @@ pub enum LeadershipOverlayMode {
 #[derive(Debug, Clone)]
 pub struct LeadershipOverlayConfig {
     pub sectors: Vec<String>,
-    pub ret5d_threshold: f64,
-    pub breadth5d_threshold: f64,
+    pub on_ret5d_threshold: f64,
+    pub on_breadth5d_threshold: f64,
+    pub off_ret5d_threshold: f64,
+    pub off_breadth5d_threshold: f64,
+    pub persistence_days: usize,
+    pub min_hold_days: usize,
     pub mode: LeadershipOverlayMode,
     pub long_only_leverage: f64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SectorLeadershipSnapshot {
     active_sectors: HashSet<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SectorLeadershipFeatures {
+    ret5d: f64,
+    breadth5d: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct SectorClassifierState {
+    enabled: bool,
+    pending_on_days: usize,
+    hold_days_remaining: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SectorLeadershipTrackerState {
+    #[serde(default)]
+    config_fingerprint: String,
+    prev_closes: Option<HashMap<String, f64>>,
+    sector_returns: HashMap<String, VecDeque<f64>>,
+    sector_breadths: HashMap<String, VecDeque<f64>>,
+    classifier_states: HashMap<String, SectorClassifierState>,
+    last_snapshot: SectorLeadershipSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +182,7 @@ struct SectorLeadershipTracker {
     prev_closes: Option<HashMap<String, f64>>,
     sector_returns: HashMap<String, VecDeque<f64>>,
     sector_breadths: HashMap<String, VecDeque<f64>>,
+    classifier_states: HashMap<String, SectorClassifierState>,
     last_snapshot: SectorLeadershipSnapshot,
 }
 
@@ -164,12 +194,18 @@ impl SectorLeadershipTracker {
             sector_returns.insert(sector.clone(), VecDeque::with_capacity(5));
             sector_breadths.insert(sector.clone(), VecDeque::with_capacity(5));
         }
+        let classifier_states = config
+            .sectors
+            .iter()
+            .map(|sector| (sector.clone(), SectorClassifierState::default()))
+            .collect();
         Self {
             config,
             sector_members,
             prev_closes: None,
             sector_returns,
             sector_breadths,
+            classifier_states,
             last_snapshot: SectorLeadershipSnapshot::default(),
         }
     }
@@ -191,69 +227,190 @@ impl SectorLeadershipTracker {
         symbols
     }
 
+    fn config_fingerprint(&self) -> String {
+        let mut sectors = self.config.sectors.clone();
+        sectors.sort();
+        let mode = match self.config.mode {
+            LeadershipOverlayMode::SuppressShorts => "suppress_shorts",
+            LeadershipOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
+        };
+        format!(
+            "sectors={}|on_ret={:.8}|on_breadth={:.8}|off_ret={:.8}|off_breadth={:.8}|persistence={}|min_hold={}|mode={}|long_only_lev={:.8}",
+            sectors.join(","),
+            self.config.on_ret5d_threshold,
+            self.config.on_breadth5d_threshold,
+            self.config.off_ret5d_threshold,
+            self.config.off_breadth5d_threshold,
+            self.config.persistence_days,
+            self.config.min_hold_days,
+            mode,
+            self.config.long_only_leverage
+        )
+    }
+
     fn observe_close_snapshot(&mut self, closes: &HashMap<String, f64>) {
-        let Some(prev) = &self.prev_closes else {
+        let Some(prev) = self.prev_closes.clone() else {
             self.prev_closes = Some(closes.clone());
             return;
         };
         let mut next_active = HashSet::new();
-        for sector in &self.config.sectors {
-            let Some(members) = self.sector_members.get(sector) else {
-                continue;
-            };
-            let mut rets = Vec::new();
-            let mut up = 0usize;
-            let mut total = 0usize;
-            for symbol in members {
-                let Some(&close) = closes.get(symbol) else {
-                    continue;
-                };
-                let Some(&prev_close) = prev.get(symbol) else {
-                    continue;
-                };
-                if !close.is_finite()
-                    || !prev_close.is_finite()
-                    || close <= 0.0
-                    || prev_close <= 0.0
-                {
-                    continue;
+        let sectors = self.config.sectors.clone();
+        for sector in &sectors {
+            if let Some(features) = self.observe_sector_features(sector, &prev, closes) {
+                let state = self.classifier_states.entry(sector.clone()).or_default();
+                let on_signal = features.ret5d > self.config.on_ret5d_threshold
+                    && features.breadth5d > self.config.on_breadth5d_threshold;
+                let off_signal = features.ret5d < self.config.off_ret5d_threshold
+                    && features.breadth5d < self.config.off_breadth5d_threshold;
+
+                if state.enabled {
+                    if state.hold_days_remaining > 0 {
+                        state.hold_days_remaining -= 1;
+                    }
+                    if state.hold_days_remaining == 0 && off_signal {
+                        state.enabled = false;
+                        state.pending_on_days = 0;
+                        info!(
+                            sector = sector.as_str(),
+                            ret5d = features.ret5d,
+                            breadth5d = features.breadth5d,
+                            "leadership overlay classifier switched OFF"
+                        );
+                    }
+                } else if on_signal {
+                    state.pending_on_days += 1;
+                    if state.pending_on_days >= self.config.persistence_days.max(1) {
+                        state.enabled = true;
+                        state.pending_on_days = 0;
+                        state.hold_days_remaining = self.config.min_hold_days;
+                        info!(
+                            sector = sector.as_str(),
+                            ret5d = features.ret5d,
+                            breadth5d = features.breadth5d,
+                            min_hold_days = self.config.min_hold_days,
+                            "leadership overlay classifier switched ON"
+                        );
+                    }
+                } else {
+                    state.pending_on_days = 0;
                 }
-                let ret = close / prev_close - 1.0;
-                rets.push(ret);
-                total += 1;
-                if ret > 0.0 {
-                    up += 1;
-                }
             }
-            if rets.is_empty() || total == 0 {
-                continue;
-            }
-            let ew_ret = rets.iter().sum::<f64>() / rets.len() as f64;
-            let breadth = up as f64 / total as f64;
-            let hist_rets = self.sector_returns.entry(sector.clone()).or_default();
-            let hist_breadths = self.sector_breadths.entry(sector.clone()).or_default();
-            hist_rets.push_back(ew_ret);
-            hist_breadths.push_back(breadth);
-            while hist_rets.len() > 5 {
-                hist_rets.pop_front();
-            }
-            while hist_breadths.len() > 5 {
-                hist_breadths.pop_front();
-            }
-            if hist_rets.len() == 5 && hist_breadths.len() == 5 {
-                let ret5d = hist_rets.iter().fold(1.0_f64, |acc, r| acc * (1.0 + r)) - 1.0;
-                let breadth5d = hist_breadths.iter().sum::<f64>() / hist_breadths.len() as f64;
-                if ret5d > self.config.ret5d_threshold
-                    && breadth5d > self.config.breadth5d_threshold
-                {
-                    next_active.insert(sector.clone());
-                }
+
+            if self
+                .classifier_states
+                .get(sector)
+                .map(|state| state.enabled)
+                .unwrap_or(false)
+            {
+                next_active.insert(sector.clone());
             }
         }
         self.last_snapshot = SectorLeadershipSnapshot {
             active_sectors: next_active,
         };
         self.prev_closes = Some(closes.clone());
+    }
+
+    fn observe_sector_features(
+        &mut self,
+        sector: &str,
+        prev: &HashMap<String, f64>,
+        closes: &HashMap<String, f64>,
+    ) -> Option<SectorLeadershipFeatures> {
+        let members = self.sector_members.get(sector)?;
+        let mut rets = Vec::new();
+        let mut up = 0usize;
+        let mut total = 0usize;
+        for symbol in members {
+            let Some(&close) = closes.get(symbol) else {
+                continue;
+            };
+            let Some(&prev_close) = prev.get(symbol) else {
+                continue;
+            };
+            if !close.is_finite() || !prev_close.is_finite() || close <= 0.0 || prev_close <= 0.0 {
+                continue;
+            }
+            let ret = close / prev_close - 1.0;
+            rets.push(ret);
+            total += 1;
+            if ret > 0.0 {
+                up += 1;
+            }
+        }
+        if rets.is_empty() || total == 0 {
+            return None;
+        }
+        let ew_ret = rets.iter().sum::<f64>() / rets.len() as f64;
+        let breadth = up as f64 / total as f64;
+        let hist_rets = self.sector_returns.entry(sector.to_string()).or_default();
+        let hist_breadths = self.sector_breadths.entry(sector.to_string()).or_default();
+        hist_rets.push_back(ew_ret);
+        hist_breadths.push_back(breadth);
+        while hist_rets.len() > 5 {
+            hist_rets.pop_front();
+        }
+        while hist_breadths.len() > 5 {
+            hist_breadths.pop_front();
+        }
+        if hist_rets.len() != 5 || hist_breadths.len() != 5 {
+            return None;
+        }
+        Some(SectorLeadershipFeatures {
+            ret5d: hist_rets.iter().fold(1.0_f64, |acc, r| acc * (1.0 + r)) - 1.0,
+            breadth5d: hist_breadths.iter().sum::<f64>() / hist_breadths.len() as f64,
+        })
+    }
+
+    fn load_state(&mut self, path: &Path) -> Result<bool, String> {
+        if !path.exists() {
+            return Ok(false);
+        }
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("read leadership classifier state {}: {e}", path.display()))?;
+        let state: SectorLeadershipTrackerState = serde_json::from_str(&content)
+            .map_err(|e| format!("parse leadership classifier state {}: {e}", path.display()))?;
+        let expected_fingerprint = self.config_fingerprint();
+        if state.config_fingerprint != expected_fingerprint {
+            warn!(
+                state_path = %path.display(),
+                "leadership classifier state config mismatch — rebuilding from warmup data"
+            );
+            return Ok(false);
+        }
+        self.prev_closes = state.prev_closes;
+        self.sector_returns = state.sector_returns;
+        self.sector_breadths = state.sector_breadths;
+        self.classifier_states = state.classifier_states;
+        for sector in &self.config.sectors {
+            self.sector_returns.entry(sector.clone()).or_default();
+            self.sector_breadths.entry(sector.clone()).or_default();
+            self.classifier_states.entry(sector.clone()).or_default();
+        }
+        self.last_snapshot = state.last_snapshot;
+        Ok(true)
+    }
+
+    fn save_state(&self, path: &Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create leadership state dir {}: {e}", parent.display()))?;
+        }
+        let state = SectorLeadershipTrackerState {
+            config_fingerprint: self.config_fingerprint(),
+            prev_closes: self.prev_closes.clone(),
+            sector_returns: self.sector_returns.clone(),
+            sector_breadths: self.sector_breadths.clone(),
+            classifier_states: self.classifier_states.clone(),
+            last_snapshot: self.last_snapshot.clone(),
+        };
+        let content = serde_json::to_string_pretty(&state)
+            .map_err(|e| format!("serialize leadership classifier state: {e}"))?;
+        let tmp = path.with_extension("leadership.tmp");
+        std::fs::write(&tmp, content)
+            .map_err(|e| format!("write leadership classifier tmp {}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .map_err(|e| format!("rename leadership classifier state {}: {e}", path.display()))
     }
 }
 
@@ -293,6 +450,15 @@ fn warm_leadership_tracker(
         "leadership tracker warmed from historical close snapshots"
     );
     Ok(())
+}
+
+pub fn leadership_classifier_state_path(engine_state_path: &Path) -> PathBuf {
+    let mut name = engine_state_path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_else(|| OsString::from("basket.state.json"));
+    name.push(".leadership.json");
+    engine_state_path.with_file_name(name)
 }
 
 fn basket_sector(basket_id: &str) -> &str {
@@ -623,25 +789,41 @@ pub async fn run_basket_live(
             &current_shares,
             execution.alpaca_mode().is_some(),
         )?;
+    let leadership_state_path = leadership_classifier_state_path(state_path);
     let mut leadership_tracker = options
         .leadership_overlay
         .clone()
         .map(|cfg| SectorLeadershipTracker::new(cfg, sector_members));
     if let Some(tracker) = leadership_tracker.as_mut() {
-        let warm_anchor = if last_processed_trading_day == Some(today) {
-            Some(today)
-        } else {
-            previous_trading_day(today)
-        };
-        if let Some(anchor_day) = warm_anchor {
-            warm_leadership_tracker(tracker, bars_dir, &symbols, anchor_day)?;
+        match tracker.load_state(&leadership_state_path) {
+            Ok(true) => info!(
+                state_path = %leadership_state_path.display(),
+                active_sectors = ?tracker.active_sectors_for_today(),
+                "loaded persisted leadership overlay classifier state"
+            ),
+            Ok(false) => {
+                let warm_anchor = if last_processed_trading_day == Some(today) {
+                    Some(today)
+                } else {
+                    previous_trading_day(today)
+                };
+                if let Some(anchor_day) = warm_anchor {
+                    warm_leadership_tracker(tracker, bars_dir, &symbols, anchor_day)?;
+                }
+                tracker.save_state(&leadership_state_path)?;
+            }
+            Err(e) => return Err(e),
         }
     }
     if let Some(cfg) = options.leadership_overlay.as_ref() {
         info!(
             sectors = ?cfg.sectors,
-            ret5d_threshold = cfg.ret5d_threshold,
-            breadth5d_threshold = cfg.breadth5d_threshold,
+            on_ret5d_threshold = cfg.on_ret5d_threshold,
+            on_breadth5d_threshold = cfg.on_breadth5d_threshold,
+            off_ret5d_threshold = cfg.off_ret5d_threshold,
+            off_breadth5d_threshold = cfg.off_breadth5d_threshold,
+            persistence_days = cfg.persistence_days,
+            min_hold_days = cfg.min_hold_days,
             mode = match cfg.mode {
                 LeadershipOverlayMode::SuppressShorts => "suppress_shorts",
                 LeadershipOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
@@ -741,6 +923,7 @@ pub async fn run_basket_live(
         .await?;
         if let Some(tracker) = leadership_tracker.as_mut() {
             tracker.observe_close_snapshot(&catchup_closes);
+            tracker.save_state(&leadership_state_path)?;
         }
         // Hook for replay's daily-equity time series. Noop on AlpacaClient.
         broker.record_eod(today).await;
@@ -996,6 +1179,7 @@ pub async fn run_basket_live(
                     .await?;
                     if let Some(tracker) = leadership_tracker.as_mut() {
                         tracker.observe_close_snapshot(&closes_for_day);
+                        tracker.save_state(&leadership_state_path)?;
                     }
                     // Hook for replay's daily-equity time series.
                     // Noop on AlpacaClient.
@@ -1736,7 +1920,11 @@ async fn process_session_close(
             // portfolio drift from partial fills / rejections (the failure mode
             // that turned yesterday's $100K config into a $341K lopsided book).
             if accepted_orders + failed_orders > 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                let reconciliation_delay_secs = broker.reconciliation_delay_secs();
+                if reconciliation_delay_secs > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs))
+                        .await;
+                }
                 let mut current_shares_after_json = None;
                 let mut current_positions_after = current_shares.len();
                 let mut actual_gross = None;
@@ -2320,8 +2508,12 @@ mod tests {
     fn test_sector_leadership_tracker_activates_lagged_sector_flag() {
         let config = LeadershipOverlayConfig {
             sectors: vec!["chips".to_string()],
-            ret5d_threshold: 0.02,
-            breadth5d_threshold: 0.55,
+            on_ret5d_threshold: 0.02,
+            on_breadth5d_threshold: 0.55,
+            off_ret5d_threshold: 0.0,
+            off_breadth5d_threshold: 0.5,
+            persistence_days: 1,
+            min_hold_days: 2,
             mode: LeadershipOverlayMode::SuppressShorts,
             long_only_leverage: 1.0,
         };
@@ -2348,6 +2540,132 @@ mod tests {
             ]));
         }
         assert!(tracker.active_sectors_for_today().contains("chips"));
+    }
+
+    #[test]
+    fn test_sector_leadership_tracker_hysteresis_and_min_hold() {
+        let config = LeadershipOverlayConfig {
+            sectors: vec!["chips".to_string()],
+            on_ret5d_threshold: 0.02,
+            on_breadth5d_threshold: 0.55,
+            off_ret5d_threshold: 0.0,
+            off_breadth5d_threshold: 0.5,
+            persistence_days: 1,
+            min_hold_days: 2,
+            mode: LeadershipOverlayMode::SuppressShorts,
+            long_only_leverage: 1.0,
+        };
+        let mut tracker = SectorLeadershipTracker::new(
+            config,
+            HashMap::from([(
+                "chips".to_string(),
+                vec!["AMD".to_string(), "NVDA".to_string()],
+            )]),
+        );
+
+        for price in [100.0, 101.0, 102.0, 103.0, 104.0, 105.0] {
+            tracker.observe_close_snapshot(&HashMap::from([
+                ("AMD".to_string(), price),
+                ("NVDA".to_string(), price),
+            ]));
+        }
+        assert!(tracker.active_sectors_for_today().contains("chips"));
+
+        for price in [99.0, 98.0] {
+            tracker.observe_close_snapshot(&HashMap::from([
+                ("AMD".to_string(), price),
+                ("NVDA".to_string(), price),
+            ]));
+            assert!(
+                tracker.active_sectors_for_today().contains("chips"),
+                "minimum hold should prevent immediate off switch"
+            );
+        }
+
+        tracker.observe_close_snapshot(&HashMap::from([
+            ("AMD".to_string(), 97.0),
+            ("NVDA".to_string(), 97.0),
+        ]));
+        assert!(!tracker.active_sectors_for_today().contains("chips"));
+    }
+
+    #[test]
+    fn test_sector_leadership_tracker_state_roundtrip_preserves_decision() {
+        let config = LeadershipOverlayConfig {
+            sectors: vec!["chips".to_string()],
+            on_ret5d_threshold: 0.02,
+            on_breadth5d_threshold: 0.55,
+            off_ret5d_threshold: 0.0,
+            off_breadth5d_threshold: 0.5,
+            persistence_days: 1,
+            min_hold_days: 3,
+            mode: LeadershipOverlayMode::SuppressShorts,
+            long_only_leverage: 1.0,
+        };
+        let sector_members = HashMap::from([(
+            "chips".to_string(),
+            vec!["AMD".to_string(), "NVDA".to_string()],
+        )]);
+        let mut tracker = SectorLeadershipTracker::new(config.clone(), sector_members.clone());
+        for price in [100.0, 101.0, 102.0, 103.0, 104.0, 105.0] {
+            tracker.observe_close_snapshot(&HashMap::from([
+                ("AMD".to_string(), price),
+                ("NVDA".to_string(), price),
+            ]));
+        }
+        assert!(tracker.active_sectors_for_today().contains("chips"));
+
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("classifier.json");
+        tracker.save_state(&path).unwrap();
+
+        let mut loaded = SectorLeadershipTracker::new(config, sector_members);
+        assert!(loaded.load_state(&path).unwrap());
+        assert_eq!(
+            loaded.active_sectors_for_today(),
+            tracker.active_sectors_for_today()
+        );
+    }
+
+    #[test]
+    fn test_sector_leadership_tracker_rejects_mismatched_state_config() {
+        let config = LeadershipOverlayConfig {
+            sectors: vec!["chips".to_string()],
+            on_ret5d_threshold: 0.02,
+            on_breadth5d_threshold: 0.55,
+            off_ret5d_threshold: 0.0,
+            off_breadth5d_threshold: 0.5,
+            persistence_days: 1,
+            min_hold_days: 3,
+            mode: LeadershipOverlayMode::SuppressShorts,
+            long_only_leverage: 1.0,
+        };
+        let sector_members = HashMap::from([(
+            "chips".to_string(),
+            vec!["AMD".to_string(), "NVDA".to_string()],
+        )]);
+        let mut tracker = SectorLeadershipTracker::new(config.clone(), sector_members.clone());
+        for price in [100.0, 101.0, 102.0, 103.0, 104.0, 105.0] {
+            tracker.observe_close_snapshot(&HashMap::from([
+                ("AMD".to_string(), price),
+                ("NVDA".to_string(), price),
+            ]));
+        }
+
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("classifier.json");
+        tracker.save_state(&path).unwrap();
+
+        let changed_config = LeadershipOverlayConfig {
+            on_ret5d_threshold: 0.03,
+            ..config
+        };
+        let mut loaded = SectorLeadershipTracker::new(changed_config, sector_members);
+        assert!(!loaded.load_state(&path).unwrap());
+        assert!(
+            loaded.active_sectors_for_today().is_empty(),
+            "mismatched classifier state must not carry old active sectors"
+        );
     }
 
     #[test]

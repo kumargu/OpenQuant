@@ -8,6 +8,8 @@ OpenQuant should make money without hand-rolled daily intervention. The target i
 
 Agents must work from evidence. Every strategy change needs replay results, baseline comparison, code review, and logs that explain what happened.
 
+Token discipline matters. Replays are frequent and verbose, so agents must preserve evidence on disk and surface only compact summaries in-chat.
+
 ## Autonomous Operating Contract
 
 An agent owns the task until it is closed. Do not stop at analysis, a partial patch, or a promising replay. Keep working in a loop: understand, implement, measure, debug, review, and either ship or document why the task should be rejected.
@@ -42,11 +44,12 @@ For any task tied to profitability, "works on one lucky month" is not closed. Ma
 6. Make the smallest coherent code change.
 7. Run focused tests, then broader tests if risk is high.
 8. Run replay baselines for strategy-impacting work.
-9. If money-making metrics degrade, inspect logs and state transitions before changing more code.
-10. Review your own diff as if it can lose money.
-11. Commit with an audit-quality message, open a PR, monitor review, fix comments, and merge only when checks pass.
-12. Post the closure evidence back to the issue: tests, replay windows, metrics, failures found, and the next task if the epic continues.
-13. After an epic is complete and evidence has been preserved, clean local leftovers without deleting credentials.
+9. Save replay stdout/stderr to evidence files, then extract only summary metrics into the issue/PR/chat response.
+10. If money-making metrics degrade, inspect logs and state transitions before changing more code.
+11. Review your own diff as if it can lose money.
+12. Commit with an audit-quality message, open a PR, monitor review, fix comments, and merge only when checks pass.
+13. Post the closure evidence back to the issue: tests, replay windows, metrics, failures found, and the next task if the epic continues.
+14. After an epic is complete and evidence has been preserved, clean local leftovers without deleting credentials.
 
 ## Baseline Discipline
 
@@ -54,11 +57,35 @@ For changes touching signals, sizing, state, regime, execution, or persistence:
 
 - Run a baseline replay and the candidate replay on the same windows.
 - Report cumulative return, Sharpe, max drawdown, active days, turnover/orders, and major mode switches.
+- Do not stream replay logs into chat. Redirect them to files under `data/replay/...` and report only compact summaries.
 - Preserve a known baseline in `BASELINES.md` when a result becomes a reference point.
 - If results improve only by adding hidden leverage, concentration, or stale/future data, reject the change.
 - If a result looks too good, assume bug until checked against logs and state transitions.
 - For epic success, prefer broad validation: current YTD, two earlier quarters, and the known stress window that motivated the work.
 - For small non-strategy fixes, record why unit/integration tests are sufficient instead of replay.
+
+Recommended replay pattern:
+
+```bash
+scripts/run_basket_replay_quiet.sh 2026_ytd_baseline 2026-01-02 2026-04-30
+scripts/run_basket_replay_quiet.sh 2026_ytd_classifier 2026-01-02 2026-04-30 \
+  --leadership-overlay-sectors faang,chips \
+  --leadership-mode replace-with-long-only \
+  --leadership-ret5d-threshold 0.02 \
+  --leadership-breadth5d-threshold 0.56 \
+  --leadership-long-only-leverage 4.0
+```
+
+The wrapper should print only:
+
+- replay name and window
+- report path and log path
+- cumulative return, Sharpe, max drawdown, trading days
+- order/turnover summary
+- overlay switch counts when applicable
+- first failure line only if the replay fails
+
+Never paste thousands of order logs into chat when the same evidence exists on disk.
 
 Current basket reference on merged `main`:
 
@@ -156,6 +183,8 @@ Important trading paths must log enough to reconstruct:
 
 Use `RUST_LOG` to switch detail levels. Paper runs should write durable logs to `data/journal/engine.log` or the configured journal path. High log volume is acceptable for now; missing decision evidence is not.
 
+For replay evidence, high log volume belongs in files, not in the chat transcript.
+
 ## PR Standard
 
 Every PR that affects trading behavior must include:
@@ -166,6 +195,11 @@ Every PR that affects trading behavior must include:
 - tests run
 - safety boundaries for paper/live
 - known risks
+
+No final response for strategy-impacting work is complete unless it explicitly says one of:
+
+- replay baseline and candidate were run, with windows and metrics
+- replay was not run, with a concrete reason and why that is acceptable for this task
 
 Do not merge with failing required checks. If GitHub state is confused, diagnose it rather than bypassing checks.
 

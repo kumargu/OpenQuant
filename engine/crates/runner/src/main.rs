@@ -182,6 +182,24 @@ struct StreamArgs {
     #[arg(long)]
     leadership_breadth5d_threshold: Option<f64>,
 
+    /// Basket-only: deactivate the leadership overlay when the prior 5d
+    /// equal-weight sector return falls below this lower hysteresis threshold.
+    #[arg(long)]
+    leadership_off_ret5d_threshold: Option<f64>,
+
+    /// Basket-only: deactivate the leadership overlay when the prior 5d
+    /// average sector breadth falls below this lower hysteresis threshold.
+    #[arg(long)]
+    leadership_off_breadth5d_threshold: Option<f64>,
+
+    /// Basket-only: consecutive close snapshots required before switching overlay on.
+    #[arg(long)]
+    leadership_persistence_days: Option<usize>,
+
+    /// Basket-only: minimum sessions to keep overlay on once activated.
+    #[arg(long)]
+    leadership_min_hold_days: Option<usize>,
+
     /// Basket-only: leadership overlay mode.
     #[arg(long, value_enum)]
     leadership_mode: Option<LeadershipModeArg>,
@@ -297,6 +315,24 @@ struct ReplayArgs {
     #[arg(long)]
     leadership_breadth5d_threshold: Option<f64>,
 
+    /// Replay-only: deactivate the leadership overlay when the prior 5d
+    /// equal-weight sector return falls below this lower hysteresis threshold.
+    #[arg(long)]
+    leadership_off_ret5d_threshold: Option<f64>,
+
+    /// Replay-only: deactivate the leadership overlay when the prior 5d
+    /// average sector breadth falls below this lower hysteresis threshold.
+    #[arg(long)]
+    leadership_off_breadth5d_threshold: Option<f64>,
+
+    /// Replay-only: consecutive close snapshots required before switching overlay on.
+    #[arg(long)]
+    leadership_persistence_days: Option<usize>,
+
+    /// Replay-only: minimum sessions to keep overlay on once activated.
+    #[arg(long)]
+    leadership_min_hold_days: Option<usize>,
+
     /// Replay-only: leadership overlay mode.
     /// `suppress_shorts` flattens and blocks shorts in flagged sectors.
     /// `replace_with_long_only` swaps the basket book for a long-only book
@@ -344,21 +380,29 @@ enum LeadershipModeArg {
 fn build_leadership_overlay_config(
     universe: &Universe,
     sectors: &[String],
-    ret5d_threshold: Option<f64>,
-    breadth5d_threshold: Option<f64>,
+    on_ret5d_threshold: Option<f64>,
+    on_breadth5d_threshold: Option<f64>,
+    off_ret5d_threshold: Option<f64>,
+    off_breadth5d_threshold: Option<f64>,
+    persistence_days: Option<usize>,
+    min_hold_days: Option<usize>,
     mode: Option<LeadershipModeArg>,
     long_only_leverage: f64,
 ) -> Option<basket_live::LeadershipOverlayConfig> {
     if sectors.is_empty()
-        && ret5d_threshold.is_none()
-        && breadth5d_threshold.is_none()
+        && on_ret5d_threshold.is_none()
+        && on_breadth5d_threshold.is_none()
+        && off_ret5d_threshold.is_none()
+        && off_breadth5d_threshold.is_none()
+        && persistence_days.is_none()
+        && min_hold_days.is_none()
         && mode.is_none()
     {
         return None;
     }
     if sectors.is_empty()
-        || ret5d_threshold.is_none()
-        || breadth5d_threshold.is_none()
+        || on_ret5d_threshold.is_none()
+        || on_breadth5d_threshold.is_none()
         || mode.is_none()
     {
         error!(
@@ -375,14 +419,33 @@ fn build_leadership_overlay_config(
         error!(unknown = ?unknown, "leadership overlay sectors are not in the basket universe");
         std::process::exit(2);
     }
-    let ret5d_threshold = ret5d_threshold.unwrap();
-    if !ret5d_threshold.is_finite() {
+    let on_ret5d_threshold = on_ret5d_threshold.unwrap();
+    if !on_ret5d_threshold.is_finite() {
         error!("leadership overlay ret5d threshold must be finite");
         std::process::exit(2);
     }
-    let breadth5d_threshold = breadth5d_threshold.unwrap();
-    if !breadth5d_threshold.is_finite() || !(0.0..=1.0).contains(&breadth5d_threshold) {
+    let on_breadth5d_threshold = on_breadth5d_threshold.unwrap();
+    if !on_breadth5d_threshold.is_finite() || !(0.0..=1.0).contains(&on_breadth5d_threshold) {
         error!("leadership overlay breadth5d threshold must be finite and in [0, 1]");
+        std::process::exit(2);
+    }
+    let off_ret5d_threshold = off_ret5d_threshold.unwrap_or(0.0);
+    let off_breadth5d_threshold = off_breadth5d_threshold.unwrap_or(0.5);
+    let persistence_days = persistence_days.unwrap_or(2);
+    let min_hold_days = min_hold_days.unwrap_or(3);
+    if !off_ret5d_threshold.is_finite() || off_ret5d_threshold > on_ret5d_threshold {
+        error!("leadership overlay off ret5d threshold must be finite and <= on threshold");
+        std::process::exit(2);
+    }
+    if !off_breadth5d_threshold.is_finite()
+        || !(0.0..=1.0).contains(&off_breadth5d_threshold)
+        || off_breadth5d_threshold > on_breadth5d_threshold
+    {
+        error!("leadership overlay off breadth threshold must be in [0, 1] and <= on threshold");
+        std::process::exit(2);
+    }
+    if persistence_days == 0 || min_hold_days == 0 {
+        error!("leadership overlay persistence/min-hold days must both be > 0");
         std::process::exit(2);
     }
     if !long_only_leverage.is_finite() || long_only_leverage <= 0.0 {
@@ -399,8 +462,12 @@ fn build_leadership_overlay_config(
     }
     Some(basket_live::LeadershipOverlayConfig {
         sectors: sectors.to_vec(),
-        ret5d_threshold,
-        breadth5d_threshold,
+        on_ret5d_threshold,
+        on_breadth5d_threshold,
+        off_ret5d_threshold,
+        off_breadth5d_threshold,
+        persistence_days,
+        min_hold_days,
         mode: match mode.unwrap() {
             LeadershipModeArg::SuppressShorts => basket_live::LeadershipOverlayMode::SuppressShorts,
             LeadershipModeArg::ReplaceWithLongOnly => {
@@ -417,10 +484,15 @@ fn leadership_overlay_fingerprint(cfg: &basket_live::LeadershipOverlayConfig) ->
         basket_live::LeadershipOverlayMode::ReplaceWithLongOnly => "replace",
     };
     let sectors = cfg.sectors.join("-");
-    let ret = format!("{:.4}", cfg.ret5d_threshold).replace('.', "p");
-    let breadth = format!("{:.4}", cfg.breadth5d_threshold).replace('.', "p");
+    let ret = format!("{:.4}", cfg.on_ret5d_threshold).replace('.', "p");
+    let breadth = format!("{:.4}", cfg.on_breadth5d_threshold).replace('.', "p");
+    let off_ret = format!("{:.4}", cfg.off_ret5d_threshold).replace('.', "p");
+    let off_breadth = format!("{:.4}", cfg.off_breadth5d_threshold).replace('.', "p");
     let lev = format!("{:.2}", cfg.long_only_leverage).replace('.', "p");
-    format!("leadership-{mode}-{sectors}-r{ret}-b{breadth}-l{lev}")
+    format!(
+        "leadership-{mode}-{sectors}-onr{ret}-onb{breadth}-offr{off_ret}-offb{off_breadth}-p{}-h{}-l{lev}",
+        cfg.persistence_days, cfg.min_hold_days
+    )
 }
 
 fn path_with_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
@@ -677,6 +749,10 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         &args.leadership_overlay_sectors,
         args.leadership_ret5d_threshold,
         args.leadership_breadth5d_threshold,
+        args.leadership_off_ret5d_threshold,
+        args.leadership_off_breadth5d_threshold,
+        args.leadership_persistence_days,
+        args.leadership_min_hold_days,
         args.leadership_mode,
         args.leadership_long_only_leverage,
     );
@@ -1514,18 +1590,26 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     // replay results deterministic across re-runs. To resume from a
     // snapshot (e.g., for debugging mid-replay state), pass
     // `--resume-state`.
-    if !args.resume_state && state_path.exists() {
-        info!(
-            path = %state_path.display(),
-            "removing prior replay state for fresh start (use --resume-state to keep)"
-        );
-        if let Err(e) = std::fs::remove_file(&state_path) {
-            error!(
-                error = %e,
-                path = %state_path.display(),
-                "failed to remove prior replay state file"
+    if !args.resume_state {
+        for path in [
+            state_path.clone(),
+            basket_live::leadership_classifier_state_path(&state_path),
+        ] {
+            if !path.exists() {
+                continue;
+            }
+            info!(
+                path = %path.display(),
+                "removing prior replay state for fresh start (use --resume-state to keep)"
             );
-            std::process::exit(1);
+            if let Err(e) = std::fs::remove_file(&path) {
+                error!(
+                    error = %e,
+                    path = %path.display(),
+                    "failed to remove prior replay state file"
+                );
+                std::process::exit(1);
+            }
         }
     }
 
@@ -1570,6 +1654,10 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         &args.leadership_overlay_sectors,
         args.leadership_ret5d_threshold,
         args.leadership_breadth5d_threshold,
+        args.leadership_off_ret5d_threshold,
+        args.leadership_off_breadth5d_threshold,
+        args.leadership_persistence_days,
+        args.leadership_min_hold_days,
         args.leadership_mode,
         args.leadership_long_only_leverage,
     );
