@@ -46,6 +46,7 @@ For any task tied to profitability, "works on one lucky month" is not closed. Ma
 10. Review your own diff as if it can lose money.
 11. Commit with an audit-quality message, open a PR, monitor review, fix comments, and merge only when checks pass.
 12. Post the closure evidence back to the issue: tests, replay windows, metrics, failures found, and the next task if the epic continues.
+13. After an epic is complete and evidence has been preserved, clean local leftovers without deleting credentials.
 
 ## Baseline Discipline
 
@@ -80,6 +81,53 @@ Good research has:
 - a recommendation to ship, revise, or reject
 
 Use `autoresearch/` as designed. Do not replace it. For exploratory scripts outside autoresearch, keep them temporary, document outputs, and do not let them become production paths.
+
+## Cleanup Standard
+
+End each completed epic from a clean, reproducible tree.
+
+- Never delete `.env` or `.env.*` at any directory level. These files contain local credentials and must survive branch switches, cleanup, and `git clean`.
+- If tracked files were deleted as local cleanup noise, restore them from `main` unless the deletion is part of the intentional PR.
+- Review `git status --short` before cleanup. Do not remove untracked source, tests, docs, config, or evidence that should be committed.
+- Prefer path-scoped cleanup for known artifact directories. Use repo-wide cleanup only when the preview is small and clearly disposable.
+- Remove stale research outputs, replay artifacts, disposable logs, and scratch files only after their useful evidence has been copied into the issue, PR, or baseline notes. Do not delete durable paper/live journal evidence unless it has been intentionally archived or summarized.
+- Do not run raw `git clean -fdx`. Ignored files may include credentials, local virtualenvs, caches, and operator-only state.
+- Before destructive cleanup of untracked files, preview it with credential exclusions:
+
+```bash
+git status --short
+git clean -nd -- . ':!.env' ':!.env.*' ':!**/.env' ':!**/.env.*'
+```
+
+- When the preview contains only disposable leftovers, clean untracked files with the same exclusions:
+
+```bash
+git clean -fd -- . ':!.env' ':!.env.*' ':!**/.env' ':!**/.env.*'
+```
+
+- To clean ignored logs, replay output, or cache files, preview ignored-only cleanup first:
+
+```bash
+git clean -ndX -- . ':!.env' ':!.env.*' ':!**/.env' ':!**/.env.*'
+```
+
+- Then run ignored-only cleanup only if the preview is disposable:
+
+```bash
+git clean -fdX -- . ':!.env' ':!.env.*' ':!**/.env' ':!**/.env.*'
+```
+
+- For tracked deletions or modifications that are not part of the task, restore only those paths explicitly:
+
+```bash
+git restore path/to/file
+```
+
+- Finish by confirming:
+
+```bash
+git status --short
+```
 
 ## Code Standards
 
