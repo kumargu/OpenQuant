@@ -2929,14 +2929,8 @@ mod tests {
 
     #[test]
     fn test_notionals_from_target_shares_uses_executable_share_book() {
-        let shares = HashMap::from([
-            ("AAA".to_string(), 2.0),
-            ("BBB".to_string(), -3.0),
-        ]);
-        let closes = HashMap::from([
-            ("AAA".to_string(), 100.0),
-            ("BBB".to_string(), 50.0),
-        ]);
+        let shares = HashMap::from([("AAA".to_string(), 2.0), ("BBB".to_string(), -3.0)]);
+        let closes = HashMap::from([("AAA".to_string(), 100.0), ("BBB".to_string(), 50.0)]);
 
         let notionals = notionals_from_target_shares(&shares, &closes);
 
@@ -3044,8 +3038,7 @@ mod tests {
             active_baskets: 2,
         };
 
-        let flattened =
-            engine_flatten_baskets_for_plan(&plan, &["suppressed".to_string()], true);
+        let flattened = engine_flatten_baskets_for_plan(&plan, &["suppressed".to_string()], true);
 
         assert!(flattened.is_empty());
     }
