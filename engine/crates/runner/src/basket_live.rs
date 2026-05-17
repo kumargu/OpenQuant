@@ -1993,12 +1993,8 @@ async fn process_session_close(
         );
         engine.flatten_baskets(&engine_flatten_baskets);
     }
-    let mut target_shares = target_shares_from_notionals(&target_notionals, closes)?;
-    trim_target_shares_to_gross_cap(
-        &mut target_shares,
-        closes,
-        effective_portfolio_config.capital * effective_portfolio_config.leverage,
-    );
+    let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
+    let executable_target_notionals = notionals_from_target_shares(&target_shares, closes);
 
     // Summary of the notional plan before we diff — this is where yesterday's
     // $340K-on-$100K problem was invisible. Emit gross long, gross short,
@@ -2006,7 +2002,8 @@ async fn process_session_close(
     // without shelling into sqlite. `gross_long + gross_short` = gross
     // notional = leverage × equity (should be ≤ equity × leverage_assumed
     // from the universe TOML).
-    let (gross_long, gross_short, max_abs, sorted_abs) = summarize_notionals(&target_notionals);
+    let (gross_long, gross_short, max_abs, sorted_abs) =
+        summarize_notionals(&executable_target_notionals);
     let median_abs = if sorted_abs.is_empty() {
         0.0
     } else {
@@ -2032,7 +2029,7 @@ async fn process_session_close(
         },
         leadership_sectors_active = ?leadership_active_sectors,
         leadership_symbols_active = leadership_long_symbols.len(),
-        targets = target_notionals.len(),
+        targets = executable_target_notionals.len(),
         target_positions = target_shares.len(),
         current_positions = current_shares.len(),
         gross_long = %format!("{:.0}", gross_long),
@@ -2042,7 +2039,7 @@ async fn process_session_close(
         net_notional = %format!("{:.0}", gross_long + gross_short),
         max_abs_leg = %format!("{:.0}", max_abs),
         median_abs_leg = %format!("{:.0}", median_abs),
-        top_abs_legs = ?top_abs_notional_legs(&target_notionals, 6),
+        top_abs_legs = ?top_abs_notional_legs(&executable_target_notionals, 6),
         "target notionals summary"
     );
     if gross_notional > gross_cap + 1.0 {
@@ -2475,7 +2472,12 @@ fn target_shares_from_notionals(
                 continue;
             }
         };
-        let shares = (notional / price).round();
+        let raw_shares = notional / price;
+        let shares = if raw_shares > 0.0 {
+            raw_shares.floor()
+        } else {
+            raw_shares.ceil()
+        };
         if shares.abs() >= 1.0 {
             target_shares.insert(symbol.clone(), shares);
         }
@@ -2491,52 +2493,23 @@ fn target_shares_from_notionals(
     }
 }
 
-fn trim_target_shares_to_gross_cap(
-    target_shares: &mut HashMap<String, f64>,
+fn notionals_from_target_shares(
+    target_shares: &HashMap<String, f64>,
     closes: &HashMap<String, f64>,
-    gross_cap: f64,
-) {
-    if !gross_cap.is_finite() || gross_cap <= 0.0 {
-        target_shares.clear();
-        return;
-    }
-
-    loop {
-        let current_gross: f64 = target_shares
-            .iter()
-            .filter_map(|(symbol, shares)| closes.get(symbol).map(|price| shares.abs() * price))
-            .sum();
-        if current_gross <= gross_cap + 1.0 {
-            break;
-        }
-
-        let Some((symbol_to_trim, _)) = target_shares
-            .iter()
-            .filter_map(|(symbol, shares)| {
-                closes
-                    .get(symbol)
-                    .filter(|price| price.is_finite() && **price > 0.0 && shares.abs() >= 1.0)
-                    .map(|price| (symbol.clone(), shares.abs() * price))
+) -> HashMap<String, f64> {
+    target_shares
+        .iter()
+        .filter_map(|(symbol, shares)| {
+            closes.get(symbol).and_then(|price| {
+                let notional = shares * price;
+                if notional.is_finite() && notional.abs() > f64::EPSILON {
+                    Some((symbol.clone(), notional))
+                } else {
+                    None
+                }
             })
-            .max_by(|(lhs_symbol, lhs_notional), (rhs_symbol, rhs_notional)| {
-                lhs_notional
-                    .partial_cmp(rhs_notional)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| lhs_symbol.cmp(rhs_symbol))
-            })
-        else {
-            break;
-        };
-
-        let remove_symbol = {
-            let shares = target_shares.get_mut(&symbol_to_trim).unwrap();
-            *shares -= shares.signum();
-            shares.abs() < 1.0
-        };
-        if remove_symbol {
-            target_shares.remove(&symbol_to_trim);
-        }
-    }
+        })
+        .collect()
 }
 
 /// Summarize a `target_notionals` map into (gross_long, gross_short, max_abs,
@@ -2940,10 +2913,10 @@ mod tests {
     }
 
     #[test]
-    fn test_target_shares_from_notionals_rounds_to_whole_shares() {
+    fn test_target_shares_from_notionals_truncates_toward_zero() {
         let mut notionals = HashMap::new();
         notionals.insert("AMD".to_string(), 5050.0);
-        notionals.insert("NVDA".to_string(), -2400.0);
+        notionals.insert("NVDA".to_string(), -2501.0);
 
         let mut closes = HashMap::new();
         closes.insert("AMD".to_string(), 101.0);
@@ -2955,25 +2928,20 @@ mod tests {
     }
 
     #[test]
-    fn test_trim_target_shares_to_gross_cap_reduces_rounded_overshoot() {
-        let mut shares = HashMap::from([
+    fn test_notionals_from_target_shares_uses_executable_share_book() {
+        let shares = HashMap::from([
             ("AAA".to_string(), 2.0),
-            ("BBB".to_string(), 2.0),
-            ("CCC".to_string(), -2.0),
+            ("BBB".to_string(), -3.0),
         ]);
         let closes = HashMap::from([
             ("AAA".to_string(), 100.0),
-            ("BBB".to_string(), 100.0),
-            ("CCC".to_string(), 100.0),
+            ("BBB".to_string(), 50.0),
         ]);
 
-        trim_target_shares_to_gross_cap(&mut shares, &closes, 500.0);
+        let notionals = notionals_from_target_shares(&shares, &closes);
 
-        let gross: f64 = shares
-            .iter()
-            .map(|(symbol, qty)| qty.abs() * closes.get(symbol).unwrap())
-            .sum();
-        assert!(gross <= 501.0, "gross remained too large: {gross}");
+        assert_eq!(notionals.get("AAA").copied(), Some(200.0));
+        assert_eq!(notionals.get("BBB").copied(), Some(-150.0));
     }
 
     #[test]

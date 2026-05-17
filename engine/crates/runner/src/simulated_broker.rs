@@ -347,7 +347,15 @@ impl Broker for SimulatedBroker {
         let positions = self.state.positions.read().unwrap();
         let cash = *self.state.cash.read().unwrap();
         let equity = self.equity_unlocked(&positions, cash);
-        let buying_power = equity * self.state.leverage;
+        let closes = self.state.closes.read().unwrap();
+        let current_gross: f64 = positions
+            .iter()
+            .map(|(symbol, (qty, avg))| {
+                let price = closes.get(symbol).copied().unwrap_or(*avg);
+                qty.abs() * price
+            })
+            .sum();
+        let buying_power = (equity * self.state.leverage - current_gross).max(0.0);
         Ok(AlpacaAccount {
             status: "ACTIVE".to_string(),
             buying_power: format!("{buying_power:.2}"),
@@ -480,6 +488,19 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("buying power exceeded"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn account_buying_power_reports_remaining_headroom() {
+        let closes = shared_closes(&[("AMD", 100.0)]);
+        let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
+        broker
+            .place_order("AMD", 100.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        let account = broker.get_account(ExecutionMode::Paper).await.unwrap();
+        let buying_power: f64 = account.buying_power.parse().unwrap();
+        assert!((buying_power - 30_000.0).abs() < 1e-6, "got {buying_power}");
     }
 
     #[tokio::test]
