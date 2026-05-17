@@ -30,7 +30,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use basket_engine::{
-    plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig, PositionIntent, Side,
+    plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig, PortfolioPlan,
+    PositionIntent, Side,
 };
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -41,8 +42,12 @@ use tracing::{debug, error, info, warn};
 use crate::alpaca::ExecutionMode;
 use crate::bar_source::BarSource;
 use crate::basket_journal::{
-    serialize_shares_map, serialize_string_vec, BasketJournal, BasketOrderEvent, BasketRunRecord,
-    BasketSessionCloseRecord,
+    serialize_shares_map, serialize_string_vec, BasketJournal, BasketOrderEvent,
+    BasketPickerDecisionRecord, BasketRunRecord, BasketSessionCloseRecord,
+};
+use crate::basket_overlay_picker::{
+    BasketOverlayMode, BasketOverlayPicker, BasketOverlayPickerFeatures, BasketOverlayPickerHandle,
+    BasketOverlayPickerKind,
 };
 use crate::broker::Broker;
 use crate::clock::Clock;
@@ -103,11 +108,23 @@ impl StartupPhase {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BasketRunOptions {
     pub fit_artifact_path: Option<PathBuf>,
     pub journal_path: Option<PathBuf>,
     pub leadership_overlay: Option<LeadershipOverlayConfig>,
+    pub overlay_picker: BasketOverlayPickerKind,
+}
+
+impl Default for BasketRunOptions {
+    fn default() -> Self {
+        Self {
+            fit_artifact_path: None,
+            journal_path: None,
+            leadership_overlay: None,
+            overlay_picker: BasketOverlayPickerKind::Fixed,
+        }
+    }
 }
 
 // Grace period after session close before firing the engine. Lets
@@ -126,13 +143,6 @@ enum StartupStateSource {
     Fresh,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LeadershipOverlayMode {
-    SuppressShorts,
-    ReplaceWithLongOnly,
-    AddCappedLongSleeve,
-}
-
 #[derive(Debug, Clone)]
 pub struct LeadershipOverlayConfig {
     pub sectors: Vec<String>,
@@ -142,7 +152,7 @@ pub struct LeadershipOverlayConfig {
     pub off_breadth5d_threshold: f64,
     pub persistence_days: usize,
     pub min_hold_days: usize,
-    pub mode: LeadershipOverlayMode,
+    pub mode: BasketOverlayMode,
     pub long_only_leverage: f64,
 }
 
@@ -231,9 +241,10 @@ impl SectorLeadershipTracker {
         let mut sectors = self.config.sectors.clone();
         sectors.sort();
         let mode = match self.config.mode {
-            LeadershipOverlayMode::SuppressShorts => "suppress_shorts",
-            LeadershipOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
-            LeadershipOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
+            BasketOverlayMode::Baseline => "baseline",
+            BasketOverlayMode::SuppressShorts => "suppress_shorts",
+            BasketOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
+            BasketOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
         };
         format!(
             "sectors={}|on_ret={:.8}|on_breadth={:.8}|off_ret={:.8}|off_breadth={:.8}|persistence={}|min_hold={}|mode={}|long_only_lev={:.8}",
@@ -456,6 +467,129 @@ fn warm_leadership_tracker(
     Ok(())
 }
 
+fn leadership_picker_features(
+    tracker: Option<&SectorLeadershipTracker>,
+    equity_features: StrategyEquityFeatures,
+) -> BasketOverlayPickerFeatures {
+    BasketOverlayPickerFeatures {
+        active_sectors: tracker
+            .map(|t| t.active_sectors_for_today().clone())
+            .unwrap_or_default(),
+        long_symbols: tracker
+            .map(|t| t.active_symbols_for_today())
+            .unwrap_or_default(),
+        leadership_short_conflict_ratio: 0.0,
+        strategy_return_20d: equity_features.return_20d,
+        strategy_drawdown_20d: equity_features.drawdown_20d,
+        baseline_scale_if_sleeve: 1.0,
+    }
+}
+
+fn add_baseline_plan_features(
+    mut features: BasketOverlayPickerFeatures,
+    baseline_notionals: &HashMap<String, f64>,
+    portfolio_config: &PortfolioConfig,
+    leadership_overlay: Option<&LeadershipOverlayConfig>,
+) -> BasketOverlayPickerFeatures {
+    let gross = baseline_notionals
+        .values()
+        .map(|notional| notional.abs())
+        .sum::<f64>();
+    if gross <= 0.0 || features.long_symbols.is_empty() {
+        features.leadership_short_conflict_ratio = 0.0;
+        return features;
+    }
+    let leadership_symbols: HashSet<&str> =
+        features.long_symbols.iter().map(String::as_str).collect();
+    let conflict = baseline_notionals
+        .iter()
+        .filter(|(symbol, notional)| {
+            **notional < 0.0 && leadership_symbols.contains(symbol.as_str())
+        })
+        .map(|(_symbol, notional)| notional.abs())
+        .sum::<f64>();
+    features.leadership_short_conflict_ratio = conflict / gross;
+    features.baseline_scale_if_sleeve =
+        baseline_scale_if_sleeve(baseline_notionals, portfolio_config, leadership_overlay);
+    features
+}
+
+fn baseline_scale_if_sleeve(
+    baseline_notionals: &HashMap<String, f64>,
+    portfolio_config: &PortfolioConfig,
+    leadership_overlay: Option<&LeadershipOverlayConfig>,
+) -> f64 {
+    let Some(cfg) = leadership_overlay else {
+        return 1.0;
+    };
+    let baseline_gross = baseline_notionals
+        .values()
+        .map(|notional| notional.abs())
+        .sum::<f64>();
+    if baseline_gross <= 0.0 {
+        return 1.0;
+    }
+    let gross_cap = portfolio_config.capital * portfolio_config.leverage;
+    let sleeve_budget = (cfg.long_only_leverage * portfolio_config.capital).min(gross_cap);
+    let baseline_budget = (gross_cap - sleeve_budget).max(0.0);
+    (baseline_budget / baseline_gross).clamp(0.0, 1.0)
+}
+
+fn engine_flatten_baskets_for_plan(
+    plan: &PortfolioPlan,
+    suppressed_baskets: &[String],
+    using_long_replacement: bool,
+) -> Vec<String> {
+    if using_long_replacement {
+        return Vec::new();
+    }
+    let mut basket_ids = suppressed_baskets.to_vec();
+    basket_ids.extend(plan.excluded_baskets.iter().cloned());
+    basket_ids.sort();
+    basket_ids.dedup();
+    basket_ids
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct StrategyEquityFeatures {
+    return_20d: f64,
+    drawdown_20d: f64,
+}
+
+fn strategy_equity_features(equity_history: &VecDeque<f64>) -> StrategyEquityFeatures {
+    let values: Vec<f64> = equity_history
+        .iter()
+        .copied()
+        .filter(|equity| equity.is_finite() && *equity > 0.0)
+        .collect();
+    if values.len() < 2 {
+        return StrategyEquityFeatures::default();
+    }
+    let last = *values.last().unwrap();
+    let window_start = values.len().saturating_sub(21);
+    let window = &values[window_start..];
+    let first = window[0];
+    let peak = window.iter().copied().fold(first, f64::max);
+    StrategyEquityFeatures {
+        return_20d: last / first - 1.0,
+        drawdown_20d: if peak > 0.0 {
+            (peak - last) / peak
+        } else {
+            0.0
+        },
+    }
+}
+
+fn push_equity_history(equity_history: &mut VecDeque<f64>, equity: f64) {
+    if !equity.is_finite() || equity <= 0.0 {
+        return;
+    }
+    equity_history.push_back(equity);
+    while equity_history.len() > 21 {
+        equity_history.pop_front();
+    }
+}
+
 pub fn leadership_classifier_state_path(engine_state_path: &Path) -> PathBuf {
     let mut name = engine_state_path
         .file_name()
@@ -465,12 +599,21 @@ pub fn leadership_classifier_state_path(engine_state_path: &Path) -> PathBuf {
     engine_state_path.with_file_name(name)
 }
 
+pub fn overlay_picker_state_path(engine_state_path: &Path) -> PathBuf {
+    let mut name = engine_state_path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_else(|| OsString::from("basket.state.json"));
+    name.push(".picker.json");
+    engine_state_path.with_file_name(name)
+}
+
 fn basket_sector(basket_id: &str) -> &str {
     basket_id.split(':').next().unwrap_or(basket_id)
 }
 
-fn apply_leadership_short_suppression(
-    engine: &mut basket_engine::BasketEngine,
+fn leadership_short_suppression_baskets(
+    engine: &basket_engine::BasketEngine,
     active_sectors: &HashSet<String>,
 ) -> Vec<String> {
     if active_sectors.is_empty() {
@@ -487,9 +630,6 @@ fn apply_leadership_short_suppression(
         if state.position < 0 {
             suppressed.push(basket_id.clone());
         }
-    }
-    if !suppressed.is_empty() {
-        engine.flatten_baskets(&suppressed);
     }
     suppressed
 }
@@ -928,6 +1068,8 @@ pub async fn run_basket_live(
         }
         Some(mode) => seed_current_shares_from_alpaca(broker, mode, &symbols).await?,
     };
+    let mut equity_history = VecDeque::new();
+    push_equity_history(&mut equity_history, portfolio_config.capital);
 
     let (mut engine, mut last_processed_trading_day, startup_state_source) =
         initialize_engine_state(
@@ -971,15 +1113,40 @@ pub async fn run_basket_live(
             off_breadth5d_threshold = cfg.off_breadth5d_threshold,
             persistence_days = cfg.persistence_days,
             min_hold_days = cfg.min_hold_days,
-            mode = match cfg.mode {
-                LeadershipOverlayMode::SuppressShorts => "suppress_shorts",
-                LeadershipOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
-                LeadershipOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
+            configured_overlay_mode = match cfg.mode {
+                BasketOverlayMode::Baseline => "baseline",
+                BasketOverlayMode::SuppressShorts => "suppress_shorts",
+                BasketOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
+                BasketOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
+            },
+            configured_picker = match options.overlay_picker {
+                BasketOverlayPickerKind::Fixed => "fixed",
+                BasketOverlayPickerKind::RuleV1 => "rule_v1",
             },
             long_only_leverage = cfg.long_only_leverage,
-            "leadership_overlay ENABLED — run may alter basket behavior in flagged sectors"
+            "leadership overlay configured; runtime mode may still be chosen by picker"
         );
     }
+    let mut overlay_picker = BasketOverlayPickerHandle::from_kind(
+        options.overlay_picker,
+        options.leadership_overlay.as_ref().map(|cfg| cfg.mode),
+    );
+    let picker_state_path = overlay_picker_state_path(state_path);
+    match overlay_picker.load_state(&picker_state_path) {
+        Ok(true) => info!(
+            state_path = %picker_state_path.display(),
+            picker_id = overlay_picker.id(),
+            "loaded persisted basket overlay picker state"
+        ),
+        Ok(false) => {
+            overlay_picker.save_state(&picker_state_path)?;
+        }
+        Err(e) => return Err(e),
+    }
+    info!(
+        picker_id = overlay_picker.id(),
+        "basket overlay picker initialized"
+    );
 
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
     let journal = match options.journal_path.as_deref() {
@@ -1058,23 +1225,25 @@ pub async fn run_basket_live(
             execution,
             journal.as_ref(),
             run_id.as_str(),
-            leadership_tracker
-                .as_ref()
-                .map(|t| t.active_sectors_for_today().clone())
-                .unwrap_or_default(),
-            leadership_tracker
-                .as_ref()
-                .map(|t| t.active_symbols_for_today())
-                .unwrap_or_default(),
+            leadership_picker_features(
+                leadership_tracker.as_ref(),
+                strategy_equity_features(&equity_history),
+            ),
+            &mut overlay_picker,
             options.leadership_overlay.as_ref(),
         )
         .await?;
+        overlay_picker.save_state(&picker_state_path)?;
         if let Some(tracker) = leadership_tracker.as_mut() {
             tracker.observe_close_snapshot(&catchup_closes);
             tracker.save_state(&leadership_state_path)?;
         }
         // Hook for replay's daily-equity time series. Noop on AlpacaClient.
         broker.record_eod(today).await;
+        if let Some(mode) = execution.alpaca_mode() {
+            let equity = parse_equity(&broker.get_account(mode).await?)?;
+            push_equity_history(&mut equity_history, equity);
+        }
         last_processed_trading_day = Some(today);
         engine.save_state_with_day(state_path, last_processed_trading_day)?;
         processed_sessions.insert(today);
@@ -1314,17 +1483,15 @@ pub async fn run_basket_live(
                         execution,
                         journal.as_ref(),
                         run_id.as_str(),
-                        leadership_tracker
-                            .as_ref()
-                            .map(|t| t.active_sectors_for_today().clone())
-                            .unwrap_or_default(),
-                        leadership_tracker
-                            .as_ref()
-                            .map(|t| t.active_symbols_for_today())
-                            .unwrap_or_default(),
+                        leadership_picker_features(
+                            leadership_tracker.as_ref(),
+                            strategy_equity_features(&equity_history),
+                        ),
+                        &mut overlay_picker,
                         options.leadership_overlay.as_ref(),
                     )
                     .await?;
+                    overlay_picker.save_state(&picker_state_path)?;
                     if let Some(tracker) = leadership_tracker.as_mut() {
                         tracker.observe_close_snapshot(&closes_for_day);
                         tracker.save_state(&leadership_state_path)?;
@@ -1332,6 +1499,10 @@ pub async fn run_basket_live(
                     // Hook for replay's daily-equity time series.
                     // Noop on AlpacaClient.
                     broker.record_eod(today).await;
+                    if let Some(mode) = execution.alpaca_mode() {
+                        let equity = parse_equity(&broker.get_account(mode).await?)?;
+                        push_equity_history(&mut equity_history, equity);
+                    }
                     last_processed_trading_day = Some(today);
                     engine.save_state_with_day(state_path, last_processed_trading_day)?;
                     info!(
@@ -1618,8 +1789,8 @@ async fn process_session_close(
     execution: BasketExecution,
     journal: Option<&BasketJournal>,
     run_id: &str,
-    leadership_active_sectors: HashSet<String>,
-    leadership_long_symbols: Vec<String>,
+    picker_features: BasketOverlayPickerFeatures,
+    overlay_picker: &mut impl BasketOverlayPicker,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
 ) -> Result<(), String> {
     debug_assert!(
@@ -1653,22 +1824,6 @@ async fn process_session_close(
         log_intent(intent);
     }
 
-    if matches!(
-        leadership_overlay.map(|cfg| cfg.mode),
-        Some(LeadershipOverlayMode::SuppressShorts)
-    ) {
-        let suppressed_baskets =
-            apply_leadership_short_suppression(engine, &leadership_active_sectors);
-        if !suppressed_baskets.is_empty() {
-            info!(
-                date = %date,
-                leadership_active_sectors = ?leadership_active_sectors,
-                suppressed_baskets = ?suppressed_baskets,
-                "leadership short suppression flattened active shorts in flagged sectors"
-            );
-        }
-    }
-
     let allowed_symbols: Vec<String> = closes.keys().cloned().collect();
     if let Some(mode) = execution.alpaca_mode() {
         *current_shares = seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await?;
@@ -1688,33 +1843,95 @@ async fn process_session_close(
         effective_execution_capital(portfolio_config.capital, execution_account_equity);
 
     // Portfolio layer: apply active-basket admission first, then convert
-    // admitted target notionals to target shares.
-    let plan = plan_portfolio(engine, &effective_portfolio_config);
-    let using_long_replacement = matches!(
-        leadership_overlay.map(|cfg| cfg.mode),
-        Some(LeadershipOverlayMode::ReplaceWithLongOnly)
-    ) && !leadership_long_symbols.is_empty();
-    let using_capped_long_sleeve = matches!(
-        leadership_overlay.map(|cfg| cfg.mode),
-        Some(LeadershipOverlayMode::AddCappedLongSleeve)
-    ) && !leadership_long_symbols.is_empty();
+    // admitted target notionals to target shares. Suppression is planned on
+    // a clone so the core basket engine state remains intact.
+    let baseline_plan = plan_portfolio(engine, &effective_portfolio_config);
+    let baseline_features = add_baseline_plan_features(
+        picker_features,
+        &baseline_plan.symbol_notionals,
+        &effective_portfolio_config,
+        leadership_overlay,
+    );
+    let picker_decision = overlay_picker.decide(&baseline_features);
+    let leadership_active_sectors = &picker_decision.active_sectors;
+    let leadership_long_symbols = &picker_decision.long_symbols;
+    info!(
+        date = %date,
+        picker_id = overlay_picker.id(),
+        picker_mode = picker_decision.mode.as_str(),
+        picker_reason = picker_decision.reason,
+        leadership_active_sectors = ?leadership_active_sectors,
+        leadership_symbols_active = leadership_long_symbols.len(),
+        leadership_short_conflict_ratio = %format!("{:.4}", baseline_features.leadership_short_conflict_ratio),
+        strategy_return_20d = %format!("{:.4}", baseline_features.strategy_return_20d),
+        strategy_drawdown_20d = %format!("{:.4}", baseline_features.strategy_drawdown_20d),
+        baseline_scale_if_sleeve = %format!("{:.4}", baseline_features.baseline_scale_if_sleeve),
+        sleeve_leverage_scale = %format!("{:.4}", picker_decision.sleeve_leverage_scale),
+        "basket overlay picker decision"
+    );
+    if let Some(journal) = journal {
+        let mut active_sectors: Vec<String> = leadership_active_sectors.iter().cloned().collect();
+        active_sectors.sort();
+        journal.record_picker_decision(&BasketPickerDecisionRecord {
+            run_id,
+            trading_day: date,
+            picker_id: overlay_picker.id(),
+            mode: picker_decision.mode.as_str(),
+            reason: picker_decision.reason,
+            active_sectors_json: serialize_string_vec(&active_sectors),
+            active_symbols_json: serialize_string_vec(leadership_long_symbols),
+            leadership_short_conflict_ratio: baseline_features.leadership_short_conflict_ratio,
+            strategy_return_20d: baseline_features.strategy_return_20d,
+            strategy_drawdown_20d: baseline_features.strategy_drawdown_20d,
+            baseline_scale_if_sleeve: baseline_features.baseline_scale_if_sleeve,
+            sleeve_leverage_scale: picker_decision.sleeve_leverage_scale,
+        })?;
+    }
+
+    let suppressed_baskets = if matches!(picker_decision.mode, BasketOverlayMode::SuppressShorts) {
+        leadership_short_suppression_baskets(engine, leadership_active_sectors)
+    } else {
+        Vec::new()
+    };
+    let plan = if suppressed_baskets.is_empty() {
+        baseline_plan
+    } else {
+        let mut planning_engine = engine.clone();
+        planning_engine.flatten_baskets(&suppressed_baskets);
+        info!(
+            date = %date,
+            leadership_active_sectors = ?leadership_active_sectors,
+            suppressed_baskets = ?suppressed_baskets,
+            "leadership short suppression removed flagged shorts from target plan"
+        );
+        plan_portfolio(&planning_engine, &effective_portfolio_config)
+    };
+    let using_long_replacement =
+        matches!(picker_decision.mode, BasketOverlayMode::ReplaceWithLongOnly)
+            && !leadership_long_symbols.is_empty();
+    let using_capped_long_sleeve =
+        matches!(picker_decision.mode, BasketOverlayMode::AddCappedLongSleeve)
+            && !leadership_long_symbols.is_empty();
     let baseline_target_notionals = plan.symbol_notionals.clone();
     let target_notionals = if using_long_replacement {
         leadership_long_only_notionals(
             closes,
-            &leadership_long_symbols,
+            leadership_long_symbols,
             effective_portfolio_config.capital,
             leadership_overlay
                 .map(|cfg| cfg.long_only_leverage)
                 .unwrap_or(1.0),
         )
     } else if using_capped_long_sleeve {
+        let sleeve_leverage = leadership_overlay
+            .map(|cfg| cfg.long_only_leverage * picker_decision.sleeve_leverage_scale)
+            .unwrap_or(0.0);
         let baseline_gross = baseline_target_notionals
             .values()
             .map(|notional| notional.abs())
             .sum::<f64>();
         let sleeve_budget = leadership_overlay
-            .map(|cfg| cfg.long_only_leverage * effective_portfolio_config.capital)
+            .map(|_| sleeve_leverage * effective_portfolio_config.capital)
             .unwrap_or(0.0)
             .min(effective_portfolio_config.capital * effective_portfolio_config.leverage);
         let baseline_budget = (effective_portfolio_config.capital
@@ -1729,11 +1946,9 @@ async fn process_session_close(
         let scaled_baseline = scale_notionals(&baseline_target_notionals, baseline_scale);
         let sleeve_notionals = leadership_long_only_notionals(
             closes,
-            &leadership_long_symbols,
+            leadership_long_symbols,
             effective_portfolio_config.capital,
-            leadership_overlay
-                .map(|cfg| cfg.long_only_leverage)
-                .unwrap_or(1.0),
+            sleeve_leverage,
         );
         merge_notionals(&scaled_baseline, &sleeve_notionals)
     } else {
@@ -1767,10 +1982,19 @@ async fn process_session_close(
             "leadership overlay transformed baseline basket portfolio"
         );
     }
-    if !using_long_replacement && !plan.excluded_baskets.is_empty() {
-        engine.flatten_baskets(&plan.excluded_baskets);
+    let engine_flatten_baskets =
+        engine_flatten_baskets_for_plan(&plan, &suppressed_baskets, using_long_replacement);
+    if !engine_flatten_baskets.is_empty() {
+        info!(
+            date = %date,
+            picker_mode = picker_decision.mode.as_str(),
+            flattened_baskets = ?engine_flatten_baskets,
+            "flattening engine state to match executed basket plan"
+        );
+        engine.flatten_baskets(&engine_flatten_baskets);
     }
     let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
+    let executable_target_notionals = notionals_from_target_shares(&target_shares, closes);
 
     // Summary of the notional plan before we diff — this is where yesterday's
     // $340K-on-$100K problem was invisible. Emit gross long, gross short,
@@ -1778,7 +2002,8 @@ async fn process_session_close(
     // without shelling into sqlite. `gross_long + gross_short` = gross
     // notional = leverage × equity (should be ≤ equity × leverage_assumed
     // from the universe TOML).
-    let (gross_long, gross_short, max_abs, sorted_abs) = summarize_notionals(&target_notionals);
+    let (gross_long, gross_short, max_abs, sorted_abs) =
+        summarize_notionals(&executable_target_notionals);
     let median_abs = if sorted_abs.is_empty() {
         0.0
     } else {
@@ -1792,18 +2017,19 @@ async fn process_session_close(
     let target_positions_len = target_shares.len();
     info!(
         date = %date,
-        leadership_mode = match leadership_overlay.map(|cfg| cfg.mode) {
-            Some(LeadershipOverlayMode::SuppressShorts) if !leadership_active_sectors.is_empty() => "suppress_shorts",
-            Some(LeadershipOverlayMode::SuppressShorts) => "suppress_shorts_inactive",
-            Some(LeadershipOverlayMode::ReplaceWithLongOnly) if using_long_replacement => "replace_with_long_only",
-            Some(LeadershipOverlayMode::ReplaceWithLongOnly) => "replace_with_long_only_inactive",
-            Some(LeadershipOverlayMode::AddCappedLongSleeve) if using_capped_long_sleeve => "add_capped_long_sleeve",
-            Some(LeadershipOverlayMode::AddCappedLongSleeve) => "add_capped_long_sleeve_inactive",
-            None => "disabled",
+        leadership_mode = match picker_decision.mode {
+            BasketOverlayMode::Baseline if leadership_overlay.is_none() => "disabled",
+            BasketOverlayMode::Baseline => "baseline",
+            BasketOverlayMode::SuppressShorts if !leadership_active_sectors.is_empty() => "suppress_shorts",
+            BasketOverlayMode::SuppressShorts => "suppress_shorts_inactive",
+            BasketOverlayMode::ReplaceWithLongOnly if using_long_replacement => "replace_with_long_only",
+            BasketOverlayMode::ReplaceWithLongOnly => "replace_with_long_only_inactive",
+            BasketOverlayMode::AddCappedLongSleeve if using_capped_long_sleeve => "add_capped_long_sleeve",
+            BasketOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve_inactive",
         },
         leadership_sectors_active = ?leadership_active_sectors,
         leadership_symbols_active = leadership_long_symbols.len(),
-        targets = target_notionals.len(),
+        targets = executable_target_notionals.len(),
         target_positions = target_shares.len(),
         current_positions = current_shares.len(),
         gross_long = %format!("{:.0}", gross_long),
@@ -1813,7 +2039,7 @@ async fn process_session_close(
         net_notional = %format!("{:.0}", gross_long + gross_short),
         max_abs_leg = %format!("{:.0}", max_abs),
         median_abs_leg = %format!("{:.0}", median_abs),
-        top_abs_legs = ?top_abs_notional_legs(&target_notionals, 6),
+        top_abs_legs = ?top_abs_notional_legs(&executable_target_notionals, 6),
         "target notionals summary"
     );
     if gross_notional > gross_cap + 1.0 {
@@ -2246,7 +2472,12 @@ fn target_shares_from_notionals(
                 continue;
             }
         };
-        let shares = (notional / price).round();
+        let raw_shares = notional / price;
+        let shares = if raw_shares > 0.0 {
+            raw_shares.floor()
+        } else {
+            raw_shares.ceil()
+        };
         if shares.abs() >= 1.0 {
             target_shares.insert(symbol.clone(), shares);
         }
@@ -2260,6 +2491,25 @@ fn target_shares_from_notionals(
             missing_prices.join(", ")
         ))
     }
+}
+
+fn notionals_from_target_shares(
+    target_shares: &HashMap<String, f64>,
+    closes: &HashMap<String, f64>,
+) -> HashMap<String, f64> {
+    target_shares
+        .iter()
+        .filter_map(|(symbol, shares)| {
+            closes.get(symbol).and_then(|price| {
+                let notional = shares * price;
+                if notional.is_finite() && notional.abs() > f64::EPSILON {
+                    Some((symbol.clone(), notional))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
 }
 
 /// Summarize a `target_notionals` map into (gross_long, gross_short, max_abs,
@@ -2663,10 +2913,10 @@ mod tests {
     }
 
     #[test]
-    fn test_target_shares_from_notionals_rounds_to_whole_shares() {
+    fn test_target_shares_from_notionals_truncates_toward_zero() {
         let mut notionals = HashMap::new();
         notionals.insert("AMD".to_string(), 5050.0);
-        notionals.insert("NVDA".to_string(), -2400.0);
+        notionals.insert("NVDA".to_string(), -2501.0);
 
         let mut closes = HashMap::new();
         closes.insert("AMD".to_string(), 101.0);
@@ -2678,7 +2928,18 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_leadership_short_suppression_flattens_only_flagged_shorts() {
+    fn test_notionals_from_target_shares_uses_executable_share_book() {
+        let shares = HashMap::from([("AAA".to_string(), 2.0), ("BBB".to_string(), -3.0)]);
+        let closes = HashMap::from([("AAA".to_string(), 100.0), ("BBB".to_string(), 50.0)]);
+
+        let notionals = notionals_from_target_shares(&shares, &closes);
+
+        assert_eq!(notionals.get("AAA").copied(), Some(200.0));
+        assert_eq!(notionals.get("BBB").copied(), Some(-150.0));
+    }
+
+    #[test]
+    fn test_leadership_short_suppression_selects_only_flagged_shorts_without_mutation() {
         let fits = make_test_fits();
         let mut engine = BasketEngine::new(&fits);
         let states = HashMap::from([
@@ -2699,17 +2960,130 @@ mod tests {
         ]);
         engine.apply_states(states).unwrap();
         let suppressed =
-            apply_leadership_short_suppression(&mut engine, &HashSet::from(["chips".to_string()]));
+            leadership_short_suppression_baskets(&engine, &HashSet::from(["chips".to_string()]));
         assert_eq!(suppressed.len(), 1);
         assert_eq!(basket_sector(&suppressed[0]), "chips");
         assert_eq!(
             engine.get_state(&fits[0].candidate.id()).unwrap().position,
-            0
+            -1
         );
         assert_eq!(
             engine.get_state(&fits[1].candidate.id()).unwrap().position,
             1
         );
+    }
+
+    #[test]
+    fn test_baseline_scale_if_sleeve_respects_gross_budget() {
+        let portfolio_config = PortfolioConfig {
+            capital: 10_000.0,
+            leverage: 4.0,
+            n_active_baskets: 5,
+        };
+        let overlay = LeadershipOverlayConfig {
+            sectors: vec!["chips".to_string()],
+            on_ret5d_threshold: 0.02,
+            on_breadth5d_threshold: 0.56,
+            off_ret5d_threshold: 0.0,
+            off_breadth5d_threshold: 0.5,
+            persistence_days: 2,
+            min_hold_days: 3,
+            mode: BasketOverlayMode::Baseline,
+            long_only_leverage: 1.0,
+        };
+        let baseline_notionals = HashMap::from([
+            ("NVDA".to_string(), -10_000.0),
+            ("AAPL".to_string(), 10_000.0),
+            ("UNH".to_string(), 10_000.0),
+            ("CNC".to_string(), -10_000.0),
+        ]);
+
+        let scale =
+            baseline_scale_if_sleeve(&baseline_notionals, &portfolio_config, Some(&overlay));
+
+        assert!((scale - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_engine_flatten_baskets_for_plan_includes_suppressed_and_replanned_exclusions() {
+        let plan = PortfolioPlan {
+            symbol_notionals: HashMap::new(),
+            selected_baskets: vec!["admitted".to_string()],
+            excluded_baskets: vec!["cap_excluded".to_string(), "suppressed".to_string()],
+            active_baskets: 3,
+        };
+
+        let flattened = engine_flatten_baskets_for_plan(
+            &plan,
+            &["suppressed".to_string(), "other_suppressed".to_string()],
+            false,
+        );
+
+        assert_eq!(
+            flattened,
+            vec![
+                "cap_excluded".to_string(),
+                "other_suppressed".to_string(),
+                "suppressed".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_engine_flatten_baskets_for_plan_skips_flattening_for_long_replacement() {
+        let plan = PortfolioPlan {
+            symbol_notionals: HashMap::new(),
+            selected_baskets: vec!["admitted".to_string()],
+            excluded_baskets: vec!["cap_excluded".to_string()],
+            active_baskets: 2,
+        };
+
+        let flattened = engine_flatten_baskets_for_plan(&plan, &["suppressed".to_string()], true);
+
+        assert!(flattened.is_empty());
+    }
+
+    #[test]
+    fn test_add_baseline_plan_features_measures_leadership_short_conflict() {
+        let portfolio_config = PortfolioConfig {
+            capital: 10_000.0,
+            leverage: 4.0,
+            n_active_baskets: 5,
+        };
+        let overlay = LeadershipOverlayConfig {
+            sectors: vec!["chips".to_string()],
+            on_ret5d_threshold: 0.02,
+            on_breadth5d_threshold: 0.56,
+            off_ret5d_threshold: 0.0,
+            off_breadth5d_threshold: 0.5,
+            persistence_days: 2,
+            min_hold_days: 3,
+            mode: BasketOverlayMode::Baseline,
+            long_only_leverage: 1.0,
+        };
+        let features = BasketOverlayPickerFeatures {
+            active_sectors: HashSet::from(["chips".to_string()]),
+            long_symbols: vec!["NVDA".to_string(), "AAPL".to_string()],
+            strategy_return_20d: 0.04,
+            strategy_drawdown_20d: 0.01,
+            ..Default::default()
+        };
+        let baseline_notionals = HashMap::from([
+            ("NVDA".to_string(), -10_000.0),
+            ("AAPL".to_string(), 10_000.0),
+            ("UNH".to_string(), 10_000.0),
+            ("CNC".to_string(), -10_000.0),
+        ]);
+
+        let features = add_baseline_plan_features(
+            features,
+            &baseline_notionals,
+            &portfolio_config,
+            Some(&overlay),
+        );
+
+        assert!((features.leadership_short_conflict_ratio - 0.25).abs() < 1e-9);
+        assert!((features.baseline_scale_if_sleeve - 0.75).abs() < 1e-9);
     }
 
     #[test]
@@ -2722,7 +3096,7 @@ mod tests {
             off_breadth5d_threshold: 0.5,
             persistence_days: 1,
             min_hold_days: 2,
-            mode: LeadershipOverlayMode::SuppressShorts,
+            mode: BasketOverlayMode::SuppressShorts,
             long_only_leverage: 1.0,
         };
         let mut tracker = SectorLeadershipTracker::new(
@@ -2760,7 +3134,7 @@ mod tests {
             off_breadth5d_threshold: 0.5,
             persistence_days: 1,
             min_hold_days: 2,
-            mode: LeadershipOverlayMode::SuppressShorts,
+            mode: BasketOverlayMode::SuppressShorts,
             long_only_leverage: 1.0,
         };
         let mut tracker = SectorLeadershipTracker::new(
@@ -2807,7 +3181,7 @@ mod tests {
             off_breadth5d_threshold: 0.5,
             persistence_days: 1,
             min_hold_days: 3,
-            mode: LeadershipOverlayMode::SuppressShorts,
+            mode: BasketOverlayMode::SuppressShorts,
             long_only_leverage: 1.0,
         };
         let sector_members = HashMap::from([(
@@ -2845,7 +3219,7 @@ mod tests {
             off_breadth5d_threshold: 0.5,
             persistence_days: 1,
             min_hold_days: 3,
-            mode: LeadershipOverlayMode::SuppressShorts,
+            mode: BasketOverlayMode::SuppressShorts,
             long_only_leverage: 1.0,
         };
         let sector_members = HashMap::from([(

@@ -33,11 +33,13 @@ state_path="$out_dir/state.json"
 
 mkdir -p "$out_dir"
 
-if [[ ! -x "$runner" ]]; then
-  echo "runner binary not found at $runner" >&2
-  echo "build it first: cargo build -p openquant-runner" >&2
-  exit 1
-fi
+# Force a clean rebuild each run so replay results cannot accidentally reuse
+# a stale runner binary from an older checkout or partial local build.
+(
+  cd "$repo_root/engine"
+  cargo clean
+  cargo build -p openquant-runner
+)
 
 RUST_LOG=info "$runner" replay --engine basket \
   --start "$start" \

@@ -62,6 +62,7 @@ pub struct EngineSnapshot {
 }
 
 /// The basket engine: manages state machines for all active baskets.
+#[derive(Clone)]
 pub struct BasketEngine {
     /// Per-basket parameters (frozen after construction).
     params: HashMap<String, BasketParams>,

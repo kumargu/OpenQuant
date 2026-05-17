@@ -252,9 +252,15 @@ impl Broker for SimulatedBroker {
         let buying_power = current_equity * self.state.leverage;
         let prev_qty_signed = positions.get(symbol).map(|(q, _)| *q).unwrap_or(0.0);
         let new_qty_signed_full = prev_qty_signed + signed_qty_full;
+        let mut current_gross: f64 = 0.0;
         let mut projected_gross: f64 = 0.0;
         let mut traded_symbol_seen = false;
         for (sym, (q, _)) in positions.iter() {
+            let current_price = closes_snapshot
+                .get(sym)
+                .copied()
+                .unwrap_or_else(|| positions.get(sym).map(|(_, a)| *a).unwrap_or(0.0));
+            current_gross += q.abs() * current_price;
             if sym == symbol {
                 projected_gross += new_qty_signed_full.abs() * price;
                 traded_symbol_seen = true;
@@ -269,7 +275,8 @@ impl Broker for SimulatedBroker {
             projected_gross += new_qty_signed_full.abs() * price;
         }
         drop(closes_snapshot);
-        if projected_gross > buying_power * 1.01 {
+        let reduces_gross = projected_gross <= current_gross + 1e-9;
+        if projected_gross > buying_power * 1.01 && !reduces_gross {
             return Err(format!(
                 "buying power exceeded: gross {projected_gross:.2} > buying_power {buying_power:.2}"
             ));
@@ -340,7 +347,15 @@ impl Broker for SimulatedBroker {
         let positions = self.state.positions.read().unwrap();
         let cash = *self.state.cash.read().unwrap();
         let equity = self.equity_unlocked(&positions, cash);
-        let buying_power = equity * self.state.leverage;
+        let closes = self.state.closes.read().unwrap();
+        let current_gross: f64 = positions
+            .iter()
+            .map(|(symbol, (qty, avg))| {
+                let price = closes.get(symbol).copied().unwrap_or(*avg);
+                qty.abs() * price
+            })
+            .sum();
+        let buying_power = (equity * self.state.leverage - current_gross).max(0.0);
         Ok(AlpacaAccount {
             status: "ACTIVE".to_string(),
             buying_power: format!("{buying_power:.2}"),
@@ -476,6 +491,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn account_buying_power_reports_remaining_headroom() {
+        let closes = shared_closes(&[("AMD", 100.0)]);
+        let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
+        broker
+            .place_order("AMD", 100.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        let account = broker.get_account(ExecutionMode::Paper).await.unwrap();
+        let buying_power: f64 = account.buying_power.parse().unwrap();
+        assert!((buying_power - 30_000.0).abs() < 1e-6, "got {buying_power}");
+    }
+
+    #[tokio::test]
     async fn closing_a_position_does_not_increase_projected_gross() {
         let closes = shared_closes(&[("AMD", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
@@ -489,6 +517,52 @@ mod tests {
             .unwrap();
         let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
         assert_eq!(positions.get("AMD").map(|(q, _)| *q), Some(50.0));
+    }
+
+    #[tokio::test]
+    async fn allows_risk_reducing_order_even_if_book_remains_over_buying_power() {
+        let closes = shared_closes(&[("A", 100.0), ("B", 100.0)]);
+        let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
+        broker
+            .place_order("A", 200.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        broker
+            .place_order("B", 200.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+
+        let positions_before = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        assert_eq!(positions_before.get("A").map(|(q, _)| *q), Some(200.0));
+        assert_eq!(positions_before.get("B").map(|(q, _)| *q), Some(200.0));
+
+        broker
+            .place_order("A", 10.0, "sell", ExecutionMode::Paper)
+            .await
+            .unwrap();
+
+        let positions_after = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        assert_eq!(positions_after.get("A").map(|(q, _)| *q), Some(190.0));
+    }
+
+    #[tokio::test]
+    async fn still_rejects_risk_increasing_order_when_over_buying_power() {
+        let closes = shared_closes(&[("A", 100.0), ("B", 100.0)]);
+        let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
+        broker
+            .place_order("A", 200.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        broker
+            .place_order("B", 200.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+
+        let err = broker
+            .place_order("A", 10.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap_err();
+        assert!(err.contains("buying power exceeded"), "got: {err}");
     }
 
     #[tokio::test]
