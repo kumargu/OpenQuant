@@ -30,7 +30,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use basket_engine::{
-    plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig, PositionIntent, Side,
+    plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig, PortfolioPlan,
+    PositionIntent, Side,
 };
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -532,6 +533,21 @@ fn baseline_scale_if_sleeve(
     let sleeve_budget = (cfg.long_only_leverage * portfolio_config.capital).min(gross_cap);
     let baseline_budget = (gross_cap - sleeve_budget).max(0.0);
     (baseline_budget / baseline_gross).clamp(0.0, 1.0)
+}
+
+fn engine_flatten_baskets_for_plan(
+    plan: &PortfolioPlan,
+    suppressed_baskets: &[String],
+    using_long_replacement: bool,
+) -> Vec<String> {
+    if using_long_replacement {
+        return Vec::new();
+    }
+    let mut basket_ids = suppressed_baskets.to_vec();
+    basket_ids.extend(plan.excluded_baskets.iter().cloned());
+    basket_ids.sort();
+    basket_ids.dedup();
+    basket_ids
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1097,14 +1113,18 @@ pub async fn run_basket_live(
             off_breadth5d_threshold = cfg.off_breadth5d_threshold,
             persistence_days = cfg.persistence_days,
             min_hold_days = cfg.min_hold_days,
-            mode = match cfg.mode {
+            configured_overlay_mode = match cfg.mode {
                 BasketOverlayMode::Baseline => "baseline",
                 BasketOverlayMode::SuppressShorts => "suppress_shorts",
                 BasketOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
                 BasketOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
             },
+            configured_picker = match options.overlay_picker {
+                BasketOverlayPickerKind::Fixed => "fixed",
+                BasketOverlayPickerKind::RuleV1 => "rule_v1",
+            },
             long_only_leverage = cfg.long_only_leverage,
-            "leadership_overlay ENABLED — run may alter basket behavior in flagged sectors"
+            "leadership overlay configured; runtime mode may still be chosen by picker"
         );
     }
     let mut overlay_picker = BasketOverlayPickerHandle::from_kind(
@@ -1832,7 +1852,6 @@ async fn process_session_close(
         &effective_portfolio_config,
         leadership_overlay,
     );
-    let baseline_excluded_baskets = baseline_plan.excluded_baskets.clone();
     let picker_decision = overlay_picker.decide(&baseline_features);
     let leadership_active_sectors = &picker_decision.active_sectors;
     let leadership_long_symbols = &picker_decision.long_symbols;
@@ -1963,13 +1982,16 @@ async fn process_session_close(
             "leadership overlay transformed baseline basket portfolio"
         );
     }
-    let engine_excluded_baskets = if suppressed_baskets.is_empty() {
-        &plan.excluded_baskets
-    } else {
-        &baseline_excluded_baskets
-    };
-    if !using_long_replacement && !engine_excluded_baskets.is_empty() {
-        engine.flatten_baskets(engine_excluded_baskets);
+    let engine_flatten_baskets =
+        engine_flatten_baskets_for_plan(&plan, &suppressed_baskets, using_long_replacement);
+    if !engine_flatten_baskets.is_empty() {
+        info!(
+            date = %date,
+            picker_mode = picker_decision.mode.as_str(),
+            flattened_baskets = ?engine_flatten_baskets,
+            "flattening engine state to match executed basket plan"
+        );
+        engine.flatten_baskets(&engine_flatten_baskets);
     }
     let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
 
@@ -2943,6 +2965,46 @@ mod tests {
             baseline_scale_if_sleeve(&baseline_notionals, &portfolio_config, Some(&overlay));
 
         assert!((scale - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_engine_flatten_baskets_for_plan_includes_suppressed_and_replanned_exclusions() {
+        let plan = PortfolioPlan {
+            symbol_notionals: HashMap::new(),
+            selected_baskets: vec!["admitted".to_string()],
+            excluded_baskets: vec!["cap_excluded".to_string(), "suppressed".to_string()],
+            active_baskets: 3,
+        };
+
+        let flattened = engine_flatten_baskets_for_plan(
+            &plan,
+            &["suppressed".to_string(), "other_suppressed".to_string()],
+            false,
+        );
+
+        assert_eq!(
+            flattened,
+            vec![
+                "cap_excluded".to_string(),
+                "other_suppressed".to_string(),
+                "suppressed".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_engine_flatten_baskets_for_plan_skips_flattening_for_long_replacement() {
+        let plan = PortfolioPlan {
+            symbol_notionals: HashMap::new(),
+            selected_baskets: vec!["admitted".to_string()],
+            excluded_baskets: vec!["cap_excluded".to_string()],
+            active_baskets: 2,
+        };
+
+        let flattened =
+            engine_flatten_baskets_for_plan(&plan, &["suppressed".to_string()], true);
+
+        assert!(flattened.is_empty());
     }
 
     #[test]
