@@ -39,6 +39,12 @@ pub trait Broker: Send + Sync {
     /// historical equity); the replay `SimulatedBroker` records into
     /// its own time series so the parity TSV writer can read it back.
     async fn record_eod(&self, _date: NaiveDate) {}
+
+    /// Seconds to wait before post-submit reconciliation. Real broker
+    /// fills need time to settle; simulated replay fills are synchronous.
+    fn reconciliation_delay_secs(&self) -> u64 {
+        30
+    }
 }
 
 impl Broker for AlpacaClient {

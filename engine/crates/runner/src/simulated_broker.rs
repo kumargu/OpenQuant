@@ -353,6 +353,10 @@ impl Broker for SimulatedBroker {
     async fn record_eod(&self, date: NaiveDate) {
         self.record_eod_inner(date);
     }
+
+    fn reconciliation_delay_secs(&self) -> u64 {
+        0
+    }
 }
 
 impl SimulatedBroker {
