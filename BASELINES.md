@@ -1,47 +1,55 @@
 # Baselines
 
-Commit notes:
-- metals / pairs references below were captured from earlier validation branches
-- basket overlay reference below is from merged `main` commit `facfa00b`
+This file tracks current, reproducible benchmark references. Older branch
+experiments and stale pre-picker basket numbers were removed because they are
+not reliable yardsticks for the current basket engine.
 
-## Metals (--engine metals)
+## Basket Overlay Picker
 
-Replay: `2025-07-01` to `2026-03-28`
+Current basket leadership work should be judged against fixed mechanism
+benchmarks, not baseline alone. The basket core remains the foundation; the
+rule picker is evaluated as a conservative allocator among:
 
-| Trades | Wins | Win Rate | Total bps | Avg bps |
-|--------|------|----------|-----------|---------|
-| 66 | 46 | 70% | +4904.2 | +74.3 |
+- basket core only
+- basket core + `suppress_shorts`
+- basket core + `add_capped_long_sleeve`
 
-## S&P 500 (--engine snp500)
+Replay command:
 
-### Q1 2026
+```bash
+scripts/run_basket_overlay_benchmark.py --prefix overlay_bench_spare_budget
+```
 
-Replay: `2026-01-02` to `2026-03-28`
+Shared replay settings:
 
-| Trades | Wins | Win Rate | Total bps | Avg bps |
-|--------|------|----------|-----------|---------|
-| 22 | 17 | 77% | +353.5 | +16.1 |
+- sectors: `faang,chips`
+- leadership on threshold: `ret5d >= 0.02`
+- leadership breadth threshold: `breadth5d >= 0.56`
+- long-only sleeve budget: `leadership_long_only_leverage = 1.0`
+- capital: `10000`
+- active basket cap: `5`
 
-### Main branch reference (Q1 2026)
+| Window | Baseline | Fixed suppress | Fixed sleeve | Rule v1 | Best fixed | Rule v1 vs best fixed |
+|--------|----------|----------------|--------------|---------|------------|-----------------------|
+| wide Q3 2025 | -4.19%, DD 17.09% | -2.22%, DD 19.57% | +10.51%, DD 12.08% | +13.02%, DD 12.08% | Fixed sleeve | +2.52%, DD +0.00% |
+| wide Q4 2025 | -5.00%, DD 13.09% | -5.00%, DD 13.09% | -2.17%, DD 10.95% | +4.42%, DD 7.25% | Fixed sleeve | +6.60%, DD -3.70% |
+| wide 2026 YTD | -9.20%, DD 15.85% | -9.20%, DD 15.85% | +42.87%, DD 7.33% | +42.87%, DD 7.33% | Fixed sleeve | +0.00%, DD +0.00% |
+| strong Q1 2025 | +27.05%, DD 3.37% | +33.74%, DD 2.57% | +8.12%, DD 9.52% | +38.42%, DD 2.48% | Fixed suppress | +4.68%, DD -0.08% |
 
-Commit: `e2ac6a3` (main)
+## Acceptance Notes
 
-| Trades | Wins | Win Rate | Total bps | Avg bps |
-|--------|------|----------|-----------|---------|
-| 25 | 16 | 64% | +383.8 | +15.4 |
+The rule picker should continue to clear these bars before promotion:
 
-## Basket (--engine basket)
+- do not degrade the best fixed mechanism materially in strong leadership windows
+- do not beat baseline by merely taking more drawdown
+- preserve basket-core behavior when leadership is absent
+- keep replay outputs deterministic and restart-stable
+- record picker decisions so regressions can be attributed to mode selection,
+  not guessed from PnL alone
 
-### Main branch reference (2026 YTD)
+Current validation:
 
-Commit: `facfa00b` (main)
-
-Replay window: `2026-01-02` to `2026-04-30`
-
-The basket runner now supports an opt-in leadership overlay in paper/noop mode.
-Baseline behavior is unchanged unless overlay flags are passed.
-
-| Mode | Cum Return | Sharpe | Max DD | Trading Days |
-|------|------------|--------|--------|--------------|
-| Basket baseline | +3.36% | 0.47 | 21.5% | 82 |
-| Basket + leadership overlay (`faang,chips`) | +76.53% | 2.54 | 30.6% | 82 |
+```bash
+cargo test -p openquant-runner
+python3 -m py_compile scripts/run_basket_overlay_benchmark.py
+```

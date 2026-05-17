@@ -20,6 +20,7 @@ mod bar_source;
 mod basket_fits;
 mod basket_journal;
 mod basket_live;
+mod basket_overlay_picker;
 mod broker;
 mod clock;
 mod earnings;
@@ -204,6 +205,10 @@ struct StreamArgs {
     #[arg(long, value_enum)]
     leadership_mode: Option<LeadershipModeArg>,
 
+    /// Basket-only: picker used to choose the overlay mechanism.
+    #[arg(long, value_enum, default_value_t = LeadershipPickerArg::Fixed)]
+    leadership_picker: LeadershipPickerArg,
+
     /// Basket-only: leverage/budget for directional leadership overlay modes.
     /// For `replace_with_long_only`, this is the long-only book leverage.
     /// For `add_capped_long_sleeve`, this is the sleeve gross budget in units of capital.
@@ -345,6 +350,10 @@ struct ReplayArgs {
     #[arg(long, value_enum)]
     leadership_mode: Option<LeadershipModeArg>,
 
+    /// Replay-only: picker used to choose the overlay mechanism.
+    #[arg(long, value_enum, default_value_t = LeadershipPickerArg::Fixed)]
+    leadership_picker: LeadershipPickerArg,
+
     /// Replay-only: leverage/budget for directional leadership overlay modes.
     #[arg(long, default_value_t = 1.0)]
     leadership_long_only_leverage: f64,
@@ -383,6 +392,21 @@ enum LeadershipModeArg {
     AddCappedLongSleeve,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum LeadershipPickerArg {
+    Fixed,
+    RuleV1,
+}
+
+impl From<LeadershipPickerArg> for basket_overlay_picker::BasketOverlayPickerKind {
+    fn from(value: LeadershipPickerArg) -> Self {
+        match value {
+            LeadershipPickerArg::Fixed => basket_overlay_picker::BasketOverlayPickerKind::Fixed,
+            LeadershipPickerArg::RuleV1 => basket_overlay_picker::BasketOverlayPickerKind::RuleV1,
+        }
+    }
+}
+
 fn build_leadership_overlay_config(
     universe: &Universe,
     sectors: &[String],
@@ -393,6 +417,7 @@ fn build_leadership_overlay_config(
     persistence_days: Option<usize>,
     min_hold_days: Option<usize>,
     mode: Option<LeadershipModeArg>,
+    picker: LeadershipPickerArg,
     long_only_leverage: f64,
 ) -> Option<basket_live::LeadershipOverlayConfig> {
     if sectors.is_empty()
@@ -403,17 +428,16 @@ fn build_leadership_overlay_config(
         && persistence_days.is_none()
         && min_hold_days.is_none()
         && mode.is_none()
+        && picker == LeadershipPickerArg::Fixed
     {
         return None;
     }
-    if sectors.is_empty()
-        || on_ret5d_threshold.is_none()
-        || on_breadth5d_threshold.is_none()
-        || mode.is_none()
-    {
-        error!(
-            "leadership overlay requires --leadership-overlay-sectors, --leadership-mode, and both threshold flags"
-        );
+    if sectors.is_empty() || on_ret5d_threshold.is_none() || on_breadth5d_threshold.is_none() {
+        error!("leadership overlay requires --leadership-overlay-sectors and both threshold flags");
+        std::process::exit(2);
+    }
+    if picker == LeadershipPickerArg::Fixed && mode.is_none() {
+        error!("fixed leadership picker requires --leadership-mode");
         std::process::exit(2);
     }
     let unknown: Vec<String> = sectors
@@ -474,24 +498,29 @@ fn build_leadership_overlay_config(
         off_breadth5d_threshold,
         persistence_days,
         min_hold_days,
-        mode: match mode.unwrap() {
-            LeadershipModeArg::SuppressShorts => basket_live::LeadershipOverlayMode::SuppressShorts,
-            LeadershipModeArg::ReplaceWithLongOnly => {
-                basket_live::LeadershipOverlayMode::ReplaceWithLongOnly
-            }
-            LeadershipModeArg::AddCappedLongSleeve => {
-                basket_live::LeadershipOverlayMode::AddCappedLongSleeve
-            }
-        },
+        mode: mode
+            .map(|mode| match mode {
+                LeadershipModeArg::SuppressShorts => {
+                    basket_overlay_picker::BasketOverlayMode::SuppressShorts
+                }
+                LeadershipModeArg::ReplaceWithLongOnly => {
+                    basket_overlay_picker::BasketOverlayMode::ReplaceWithLongOnly
+                }
+                LeadershipModeArg::AddCappedLongSleeve => {
+                    basket_overlay_picker::BasketOverlayMode::AddCappedLongSleeve
+                }
+            })
+            .unwrap_or(basket_overlay_picker::BasketOverlayMode::Baseline),
         long_only_leverage,
     })
 }
 
 fn leadership_overlay_fingerprint(cfg: &basket_live::LeadershipOverlayConfig) -> String {
     let mode = match cfg.mode {
-        basket_live::LeadershipOverlayMode::SuppressShorts => "suppress",
-        basket_live::LeadershipOverlayMode::ReplaceWithLongOnly => "replace",
-        basket_live::LeadershipOverlayMode::AddCappedLongSleeve => "sleeve",
+        basket_overlay_picker::BasketOverlayMode::Baseline => "baseline",
+        basket_overlay_picker::BasketOverlayMode::SuppressShorts => "suppress",
+        basket_overlay_picker::BasketOverlayMode::ReplaceWithLongOnly => "replace",
+        basket_overlay_picker::BasketOverlayMode::AddCappedLongSleeve => "sleeve",
     };
     let sectors = cfg.sectors.join("-");
     let ret = format!("{:.4}", cfg.on_ret5d_threshold).replace('.', "p");
@@ -764,6 +793,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         args.leadership_persistence_days,
         args.leadership_min_hold_days,
         args.leadership_mode,
+        args.leadership_picker,
         args.leadership_long_only_leverage,
     );
     if leadership_overlay.is_some() && matches!(execution, basket_live::BasketExecution::Live) {
@@ -893,6 +923,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             fit_artifact_path: Some(fit_artifact_path.clone()),
             journal_path: Some(basket_journal_path),
             leadership_overlay,
+            overlay_picker: args.leadership_picker.into(),
         },
     )
     .await
@@ -1604,6 +1635,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         for path in [
             state_path.clone(),
             basket_live::leadership_classifier_state_path(&state_path),
+            basket_live::overlay_picker_state_path(&state_path),
         ] {
             if !path.exists() {
                 continue;
@@ -1669,6 +1701,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         args.leadership_persistence_days,
         args.leadership_min_hold_days,
         args.leadership_mode,
+        args.leadership_picker,
         args.leadership_long_only_leverage,
     );
 
@@ -1759,6 +1792,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             fit_artifact_path: None,
             journal_path: None,
             leadership_overlay,
+            overlay_picker: args.leadership_picker.into(),
         },
     )
     .await;
