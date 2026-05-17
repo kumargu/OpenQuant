@@ -431,7 +431,9 @@ fn warm_leadership_tracker(
     symbols: &[String],
     anchor_day: NaiveDate,
 ) -> Result<(), String> {
-    let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 12, Some(anchor_day))?;
+    let warm_days = 5 + tracker.config.persistence_days + tracker.config.min_hold_days + 5;
+    let closes =
+        load_daily_closes_with_timestamps(bars_dir, symbols, warm_days as i64, Some(anchor_day))?;
     let mut by_day: std::collections::BTreeMap<NaiveDate, HashMap<String, f64>> =
         std::collections::BTreeMap::new();
     for (symbol, series) in closes {
@@ -445,6 +447,7 @@ fn warm_leadership_tracker(
         tracker.observe_close_snapshot(closes_for_day);
     }
     info!(
+        requested_warm_days = warm_days,
         warm_days = by_day.len(),
         anchor_day = %anchor_day,
         active_sectors = ?tracker.active_sectors_for_today(),
@@ -1696,13 +1699,6 @@ async fn process_session_close(
         Some(LeadershipOverlayMode::AddCappedLongSleeve)
     ) && !leadership_long_symbols.is_empty();
     let baseline_target_notionals = plan.symbol_notionals.clone();
-    if using_long_replacement {
-        let basket_ids: Vec<String> = engine
-            .iter_params()
-            .map(|(basket_id, _)| basket_id.clone())
-            .collect();
-        engine.flatten_baskets(&basket_ids);
-    }
     let target_notionals = if using_long_replacement {
         leadership_long_only_notionals(
             closes,
@@ -2042,14 +2038,9 @@ async fn process_session_close(
                 }
                 return Err(e);
             }
-            let mut ordered_refs: Vec<&OrderIntent> = orders.iter().collect();
-            ordered_refs.sort_by_key(|o| match o.side {
-                Side::Sell => 0_u8,
-                Side::Buy => 1_u8,
-            });
             let mut accepted_orders = 0usize;
             let mut failed_orders = 0usize;
-            for (seq, order) in ordered_refs.into_iter().enumerate() {
+            for (seq, order) in orders.iter().enumerate() {
                 log_order(order, execution.label());
                 let side_str = match order.side {
                     Side::Buy => "buy",
