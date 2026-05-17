@@ -166,6 +166,12 @@ def main() -> int:
             )
         )
 
+    print(
+        "\nDesign guardrail: treat rule_v1 as a conservative governor with dwell/hysteresis, "
+        "not a daily overlay optimizer; prefer stable mode holds unless switching clearly "
+        "earns its complexity."
+    )
+
     return 0
 
 

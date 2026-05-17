@@ -1993,7 +1993,12 @@ async fn process_session_close(
         );
         engine.flatten_baskets(&engine_flatten_baskets);
     }
-    let target_shares = target_shares_from_notionals(&target_notionals, closes)?;
+    let mut target_shares = target_shares_from_notionals(&target_notionals, closes)?;
+    trim_target_shares_to_gross_cap(
+        &mut target_shares,
+        closes,
+        effective_portfolio_config.capital * effective_portfolio_config.leverage,
+    );
 
     // Summary of the notional plan before we diff — this is where yesterday's
     // $340K-on-$100K problem was invisible. Emit gross long, gross short,
@@ -2486,6 +2491,54 @@ fn target_shares_from_notionals(
     }
 }
 
+fn trim_target_shares_to_gross_cap(
+    target_shares: &mut HashMap<String, f64>,
+    closes: &HashMap<String, f64>,
+    gross_cap: f64,
+) {
+    if !gross_cap.is_finite() || gross_cap <= 0.0 {
+        target_shares.clear();
+        return;
+    }
+
+    loop {
+        let current_gross: f64 = target_shares
+            .iter()
+            .filter_map(|(symbol, shares)| closes.get(symbol).map(|price| shares.abs() * price))
+            .sum();
+        if current_gross <= gross_cap + 1.0 {
+            break;
+        }
+
+        let Some((symbol_to_trim, _)) = target_shares
+            .iter()
+            .filter_map(|(symbol, shares)| {
+                closes
+                    .get(symbol)
+                    .filter(|price| price.is_finite() && **price > 0.0 && shares.abs() >= 1.0)
+                    .map(|price| (symbol.clone(), shares.abs() * price))
+            })
+            .max_by(|(lhs_symbol, lhs_notional), (rhs_symbol, rhs_notional)| {
+                lhs_notional
+                    .partial_cmp(rhs_notional)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| lhs_symbol.cmp(rhs_symbol))
+            })
+        else {
+            break;
+        };
+
+        let remove_symbol = {
+            let shares = target_shares.get_mut(&symbol_to_trim).unwrap();
+            *shares -= shares.signum();
+            shares.abs() < 1.0
+        };
+        if remove_symbol {
+            target_shares.remove(&symbol_to_trim);
+        }
+    }
+}
+
 /// Summarize a `target_notionals` map into (gross_long, gross_short, max_abs,
 /// sorted_abs). `gross_short` is returned as a negative number.
 fn summarize_notionals(targets: &HashMap<String, f64>) -> (f64, f64, f64, Vec<f64>) {
@@ -2899,6 +2952,28 @@ mod tests {
         let shares = target_shares_from_notionals(&notionals, &closes).unwrap();
         assert_eq!(shares.get("AMD").copied(), Some(50.0));
         assert_eq!(shares.get("NVDA").copied(), Some(-12.0));
+    }
+
+    #[test]
+    fn test_trim_target_shares_to_gross_cap_reduces_rounded_overshoot() {
+        let mut shares = HashMap::from([
+            ("AAA".to_string(), 2.0),
+            ("BBB".to_string(), 2.0),
+            ("CCC".to_string(), -2.0),
+        ]);
+        let closes = HashMap::from([
+            ("AAA".to_string(), 100.0),
+            ("BBB".to_string(), 100.0),
+            ("CCC".to_string(), 100.0),
+        ]);
+
+        trim_target_shares_to_gross_cap(&mut shares, &closes, 500.0);
+
+        let gross: f64 = shares
+            .iter()
+            .map(|(symbol, qty)| qty.abs() * closes.get(symbol).unwrap())
+            .sum();
+        assert!(gross <= 501.0, "gross remained too large: {gross}");
     }
 
     #[test]
