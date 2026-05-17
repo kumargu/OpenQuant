@@ -204,7 +204,9 @@ struct StreamArgs {
     #[arg(long, value_enum)]
     leadership_mode: Option<LeadershipModeArg>,
 
-    /// Basket-only: leverage for `replace_with_long_only` mode.
+    /// Basket-only: leverage/budget for directional leadership overlay modes.
+    /// For `replace_with_long_only`, this is the long-only book leverage.
+    /// For `add_capped_long_sleeve`, this is the sleeve gross budget in units of capital.
     #[arg(long, default_value_t = 1.0)]
     leadership_long_only_leverage: f64,
 }
@@ -337,10 +339,13 @@ struct ReplayArgs {
     /// `suppress_shorts` flattens and blocks shorts in flagged sectors.
     /// `replace_with_long_only` swaps the basket book for a long-only book
     /// over the currently flagged sector members.
+    /// `add_capped_long_sleeve` preserves the basket core and adds a capped
+    /// long-only sleeve, scaling the basket book down only as needed to stay
+    /// within the configured gross cap.
     #[arg(long, value_enum)]
     leadership_mode: Option<LeadershipModeArg>,
 
-    /// Replay-only: leverage for `replace_with_long_only` mode.
+    /// Replay-only: leverage/budget for directional leadership overlay modes.
     #[arg(long, default_value_t = 1.0)]
     leadership_long_only_leverage: f64,
 
@@ -375,6 +380,7 @@ struct BasketFitArgs {
 enum LeadershipModeArg {
     SuppressShorts,
     ReplaceWithLongOnly,
+    AddCappedLongSleeve,
 }
 
 fn build_leadership_overlay_config(
@@ -473,6 +479,9 @@ fn build_leadership_overlay_config(
             LeadershipModeArg::ReplaceWithLongOnly => {
                 basket_live::LeadershipOverlayMode::ReplaceWithLongOnly
             }
+            LeadershipModeArg::AddCappedLongSleeve => {
+                basket_live::LeadershipOverlayMode::AddCappedLongSleeve
+            }
         },
         long_only_leverage,
     })
@@ -482,6 +491,7 @@ fn leadership_overlay_fingerprint(cfg: &basket_live::LeadershipOverlayConfig) ->
     let mode = match cfg.mode {
         basket_live::LeadershipOverlayMode::SuppressShorts => "suppress",
         basket_live::LeadershipOverlayMode::ReplaceWithLongOnly => "replace",
+        basket_live::LeadershipOverlayMode::AddCappedLongSleeve => "sleeve",
     };
     let sectors = cfg.sectors.join("-");
     let ret = format!("{:.4}", cfg.on_ret5d_threshold).replace('.', "p");

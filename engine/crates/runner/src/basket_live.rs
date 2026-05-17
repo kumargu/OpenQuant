@@ -30,8 +30,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use basket_engine::{
-    diff_to_orders, plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig,
-    PositionIntent, Side,
+    plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig, PositionIntent, Side,
 };
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -131,6 +130,7 @@ enum StartupStateSource {
 pub enum LeadershipOverlayMode {
     SuppressShorts,
     ReplaceWithLongOnly,
+    AddCappedLongSleeve,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +233,7 @@ impl SectorLeadershipTracker {
         let mode = match self.config.mode {
             LeadershipOverlayMode::SuppressShorts => "suppress_shorts",
             LeadershipOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
+            LeadershipOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
         };
         format!(
             "sectors={}|on_ret={:.8}|on_breadth={:.8}|off_ret={:.8}|off_breadth={:.8}|persistence={}|min_hold={}|mode={}|long_only_lev={:.8}",
@@ -511,9 +512,81 @@ fn leadership_long_only_notionals(
         .collect()
 }
 
+fn scale_notionals(targets: &HashMap<String, f64>, scale: f64) -> HashMap<String, f64> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return HashMap::new();
+    }
+    targets
+        .iter()
+        .filter_map(|(symbol, notional)| {
+            let scaled = *notional * scale;
+            if scaled.is_finite() && scaled.abs() > f64::EPSILON {
+                Some((symbol.clone(), scaled))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn merge_notionals(lhs: &HashMap<String, f64>, rhs: &HashMap<String, f64>) -> HashMap<String, f64> {
+    let mut merged = lhs.clone();
+    for (symbol, notional) in rhs {
+        *merged.entry(symbol.clone()).or_default() += *notional;
+    }
+    merged.retain(|_, notional| notional.is_finite() && notional.abs() > f64::EPSILON);
+    merged
+}
+
+fn parse_equity(account: &crate::alpaca::AlpacaAccount) -> Result<f64, String> {
+    let equity = account
+        .equity
+        .parse::<f64>()
+        .map_err(|e| format!("invalid Alpaca equity '{}': {e}", account.equity))?;
+    if !equity.is_finite() || equity <= 0.0 {
+        return Err(format!("Alpaca equity is not positive: {}", account.equity));
+    }
+    Ok(equity)
+}
+
+fn top_abs_notional_legs(targets: &HashMap<String, f64>, limit: usize) -> Vec<String> {
+    let mut legs: Vec<(&str, f64)> = targets
+        .iter()
+        .filter_map(|(symbol, notional)| {
+            if notional.is_finite() && *notional != 0.0 {
+                Some((symbol.as_str(), *notional))
+            } else {
+                None
+            }
+        })
+        .collect();
+    legs.sort_by(|(lhs_symbol, lhs_notional), (rhs_symbol, rhs_notional)| {
+        rhs_notional
+            .abs()
+            .partial_cmp(&lhs_notional.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| lhs_symbol.cmp(rhs_symbol))
+    });
+    legs.into_iter()
+        .take(limit)
+        .map(|(symbol, notional)| format!("{symbol}:{notional:.0}"))
+        .collect()
+}
+
+fn effective_execution_capital(config_capital: f64, account_equity: Option<f64>) -> f64 {
+    if !config_capital.is_finite() || config_capital <= 0.0 {
+        return config_capital;
+    }
+    match account_equity {
+        Some(equity) if equity.is_finite() && equity > 0.0 => config_capital.min(equity),
+        _ => config_capital,
+    }
+}
+
 async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> Result<(), String> {
     let account = broker.get_account(mode).await?;
     let buying_power = parse_buying_power(&account)?;
+    let equity = parse_equity(&account)?;
     if account.status != "ACTIVE" {
         return Err(format!(
             "Alpaca account not ACTIVE: status={}",
@@ -529,6 +602,7 @@ async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> R
     info!(
         mode = ?mode,
         buying_power = %format!("{:.0}", buying_power),
+        equity = %format!("{:.0}", equity),
         status = account.status.as_str(),
         "startup account preflight passed"
     );
@@ -562,27 +636,33 @@ async fn check_order_set_affordability(
 ) -> Result<(), String> {
     let account = broker.get_account(mode).await?;
     let buying_power = parse_buying_power(&account)?;
+    let equity = parse_equity(&account)?;
     let (current_long_gross, current_short_gross) = gross_by_side(current_shares, closes);
     let (target_long_gross, target_short_gross) = gross_by_side(target_shares, closes);
     let incremental_long = (target_long_gross - current_long_gross).max(0.0);
     let incremental_short = (target_short_gross - current_short_gross).max(0.0);
     let incremental_exposure = incremental_long + incremental_short;
+    let target_gross = target_long_gross + target_short_gross;
+    let current_gross = current_long_gross + current_short_gross;
     let order_turnover: f64 = orders
         .iter()
         .filter_map(|o| closes.get(&o.symbol).map(|p| p * o.qty as f64))
         .sum();
     if incremental_exposure > buying_power + 1.0 {
         return Err(format!(
-            "incremental exposure {:.2} exceeds Alpaca buying power {:.2} on {}",
-            incremental_exposure, buying_power, date
+            "incremental exposure {:.2} exceeds Alpaca buying power {:.2} on {} (equity {:.2}, current_gross {:.2}, target_gross {:.2})",
+            incremental_exposure, buying_power, date, equity, current_gross, target_gross
         ));
     }
     info!(
         date = %date,
+        equity = %format!("{:.0}", equity),
         current_long_gross = %format!("{:.0}", current_long_gross),
         current_short_gross = %format!("{:.0}", current_short_gross),
+        current_gross = %format!("{:.0}", current_gross),
         target_long_gross = %format!("{:.0}", target_long_gross),
         target_short_gross = %format!("{:.0}", target_short_gross),
+        target_gross = %format!("{:.0}", target_gross),
         incremental_long_notional = %format!("{:.0}", incremental_long),
         incremental_short_notional = %format!("{:.0}", incremental_short),
         incremental_exposure_notional = %format!("{:.0}", incremental_exposure),
@@ -645,6 +725,70 @@ fn order_reason_fields(reason: &basket_engine::OrderReason) -> (&'static str, Op
         basket_engine::OrderReason::Rebalance => ("rebalance", None),
         basket_engine::OrderReason::Aggregated => ("aggregated", None),
     }
+}
+
+fn push_order_if_nonzero(orders: &mut Vec<OrderIntent>, symbol: &str, delta: f64) {
+    let qty = delta.abs().round() as u32;
+    if qty == 0 {
+        return;
+    }
+    let side = if delta > 0.0 { Side::Buy } else { Side::Sell };
+    orders.push(OrderIntent {
+        symbol: symbol.to_string(),
+        qty,
+        side,
+        reason: basket_engine::OrderReason::Aggregated,
+    });
+}
+
+fn staged_diff_to_orders(
+    current: &HashMap<String, f64>,
+    target: &HashMap<String, f64>,
+) -> Vec<OrderIntent> {
+    let mut reducing = Vec::new();
+    let mut expanding = Vec::new();
+
+    let mut all_symbols: Vec<&String> = current.keys().chain(target.keys()).collect();
+    all_symbols.sort();
+    all_symbols.dedup();
+
+    for symbol in all_symbols {
+        let current_shares = current.get(symbol).copied().unwrap_or(0.0);
+        let target_shares = target.get(symbol).copied().unwrap_or(0.0);
+        let current_sign = current_shares.signum() as i8;
+        let target_sign = target_shares.signum() as i8;
+
+        if (current_shares - target_shares).abs() < 0.5 {
+            continue;
+        }
+
+        if current_shares == 0.0 || target_shares == 0.0 || current_sign == target_sign {
+            let delta = target_shares - current_shares;
+            if delta == 0.0 {
+                continue;
+            }
+            let reduce_first = if current_shares == 0.0 {
+                false
+            } else if target_shares == 0.0 {
+                true
+            } else {
+                target_shares.abs() < current_shares.abs()
+            };
+            if reduce_first {
+                push_order_if_nonzero(&mut reducing, symbol, delta);
+            } else {
+                push_order_if_nonzero(&mut expanding, symbol, delta);
+            }
+            continue;
+        }
+
+        // Sign flip: close the old side completely, then open the new side.
+        push_order_if_nonzero(&mut reducing, symbol, -current_shares);
+        push_order_if_nonzero(&mut expanding, symbol, target_shares);
+    }
+
+    reducing.extend(expanding);
+    reducing
 }
 
 async fn wait_for_stream_health(
@@ -827,6 +971,7 @@ pub async fn run_basket_live(
             mode = match cfg.mode {
                 LeadershipOverlayMode::SuppressShorts => "suppress_shorts",
                 LeadershipOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
+                LeadershipOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
             },
             long_only_leverage = cfg.long_only_leverage,
             "leadership_overlay ENABLED — run may alter basket behavior in flagged sectors"
@@ -1531,14 +1676,26 @@ async fn process_session_close(
         );
     }
     let current_shares_before = current_shares.clone();
+    let execution_account_equity = match execution.alpaca_mode() {
+        Some(mode) => Some(parse_equity(&broker.get_account(mode).await?)?),
+        None => None,
+    };
+    let mut effective_portfolio_config = portfolio_config.clone();
+    effective_portfolio_config.capital =
+        effective_execution_capital(portfolio_config.capital, execution_account_equity);
 
     // Portfolio layer: apply active-basket admission first, then convert
     // admitted target notionals to target shares.
-    let plan = plan_portfolio(engine, portfolio_config);
+    let plan = plan_portfolio(engine, &effective_portfolio_config);
     let using_long_replacement = matches!(
         leadership_overlay.map(|cfg| cfg.mode),
         Some(LeadershipOverlayMode::ReplaceWithLongOnly)
     ) && !leadership_long_symbols.is_empty();
+    let using_capped_long_sleeve = matches!(
+        leadership_overlay.map(|cfg| cfg.mode),
+        Some(LeadershipOverlayMode::AddCappedLongSleeve)
+    ) && !leadership_long_symbols.is_empty();
+    let baseline_target_notionals = plan.symbol_notionals.clone();
     if using_long_replacement {
         let basket_ids: Vec<String> = engine
             .iter_params()
@@ -1550,14 +1707,70 @@ async fn process_session_close(
         leadership_long_only_notionals(
             closes,
             &leadership_long_symbols,
-            portfolio_config.capital,
+            effective_portfolio_config.capital,
             leadership_overlay
                 .map(|cfg| cfg.long_only_leverage)
                 .unwrap_or(1.0),
         )
+    } else if using_capped_long_sleeve {
+        let baseline_gross = baseline_target_notionals
+            .values()
+            .map(|notional| notional.abs())
+            .sum::<f64>();
+        let sleeve_budget = leadership_overlay
+            .map(|cfg| cfg.long_only_leverage * effective_portfolio_config.capital)
+            .unwrap_or(0.0)
+            .min(effective_portfolio_config.capital * effective_portfolio_config.leverage);
+        let baseline_budget = (effective_portfolio_config.capital
+            * effective_portfolio_config.leverage
+            - sleeve_budget)
+            .max(0.0);
+        let baseline_scale = if baseline_gross > 0.0 {
+            (baseline_budget / baseline_gross).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let scaled_baseline = scale_notionals(&baseline_target_notionals, baseline_scale);
+        let sleeve_notionals = leadership_long_only_notionals(
+            closes,
+            &leadership_long_symbols,
+            effective_portfolio_config.capital,
+            leadership_overlay
+                .map(|cfg| cfg.long_only_leverage)
+                .unwrap_or(1.0),
+        );
+        merge_notionals(&scaled_baseline, &sleeve_notionals)
     } else {
         plan.symbol_notionals.clone()
     };
+    if using_long_replacement || using_capped_long_sleeve {
+        let (baseline_gross_long, baseline_gross_short, baseline_max_abs, _) =
+            summarize_notionals(&baseline_target_notionals);
+        let baseline_gross_notional = baseline_gross_long + baseline_gross_short.abs();
+        info!(
+            date = %date,
+            leadership_active_sectors = ?leadership_active_sectors,
+            overlay_symbol_count = leadership_long_symbols.len(),
+            overlay_symbols_sample = ?leadership_long_symbols.iter().take(8).collect::<Vec<_>>(),
+            execution_effective_capital = %format!("{:.0}", effective_portfolio_config.capital),
+            execution_account_equity = execution_account_equity.map(|equity| format!("{equity:.0}")),
+            overlay_mode = if using_long_replacement {
+                "replace_with_long_only"
+            } else {
+                "add_capped_long_sleeve"
+            },
+            baseline_selected_baskets = plan.selected_baskets.len(),
+            baseline_selected_baskets_sample = ?plan.selected_baskets.iter().take(8).collect::<Vec<_>>(),
+            baseline_targets = baseline_target_notionals.len(),
+            baseline_gross_long = %format!("{:.0}", baseline_gross_long),
+            baseline_gross_short = %format!("{:.0}", baseline_gross_short),
+            baseline_gross_notional = %format!("{:.0}", baseline_gross_notional),
+            baseline_max_abs_leg = %format!("{:.0}", baseline_max_abs),
+            baseline_top_abs_legs = ?top_abs_notional_legs(&baseline_target_notionals, 6),
+            overlay_top_abs_legs = ?top_abs_notional_legs(&target_notionals, 6),
+            "leadership overlay transformed baseline basket portfolio"
+        );
+    }
     if !using_long_replacement && !plan.excluded_baskets.is_empty() {
         engine.flatten_baskets(&plan.excluded_baskets);
     }
@@ -1576,7 +1789,7 @@ async fn process_session_close(
         sorted_abs[sorted_abs.len() / 2]
     };
     let gross_notional = gross_long + gross_short.abs();
-    let gross_cap = portfolio_config.capital * portfolio_config.leverage;
+    let gross_cap = effective_portfolio_config.capital * effective_portfolio_config.leverage;
     let selected_baskets_json = serialize_string_vec(&plan.selected_baskets);
     let excluded_baskets_json = serialize_string_vec(&plan.excluded_baskets);
     let target_shares_json = serialize_shares_map(&target_shares);
@@ -1584,9 +1797,12 @@ async fn process_session_close(
     info!(
         date = %date,
         leadership_mode = match leadership_overlay.map(|cfg| cfg.mode) {
-            Some(LeadershipOverlayMode::SuppressShorts) => "suppress_shorts",
+            Some(LeadershipOverlayMode::SuppressShorts) if !leadership_active_sectors.is_empty() => "suppress_shorts",
+            Some(LeadershipOverlayMode::SuppressShorts) => "suppress_shorts_inactive",
             Some(LeadershipOverlayMode::ReplaceWithLongOnly) if using_long_replacement => "replace_with_long_only",
             Some(LeadershipOverlayMode::ReplaceWithLongOnly) => "replace_with_long_only_inactive",
+            Some(LeadershipOverlayMode::AddCappedLongSleeve) if using_capped_long_sleeve => "add_capped_long_sleeve",
+            Some(LeadershipOverlayMode::AddCappedLongSleeve) => "add_capped_long_sleeve_inactive",
             None => "disabled",
         },
         leadership_sectors_active = ?leadership_active_sectors,
@@ -1601,6 +1817,7 @@ async fn process_session_close(
         net_notional = %format!("{:.0}", gross_long + gross_short),
         max_abs_leg = %format!("{:.0}", max_abs),
         median_abs_leg = %format!("{:.0}", median_abs),
+        top_abs_legs = ?top_abs_notional_legs(&target_notionals, 6),
         "target notionals summary"
     );
     if gross_notional > gross_cap + 1.0 {
@@ -1613,7 +1830,7 @@ async fn process_session_close(
         warn!(
             date = %date,
             active_baskets = plan.active_baskets,
-            cap = portfolio_config.n_active_baskets,
+            cap = effective_portfolio_config.n_active_baskets,
             admitted = plan.selected_baskets.len(),
             excluded = plan.excluded_baskets.len(),
             excluded_sample = ?plan.excluded_baskets.iter().take(10).collect::<Vec<_>>(),
@@ -1623,13 +1840,13 @@ async fn process_session_close(
         info!(
             date = %date,
             active_baskets = plan.active_baskets,
-            cap = portfolio_config.n_active_baskets,
+            cap = effective_portfolio_config.n_active_baskets,
             admitted = plan.selected_baskets.len(),
             "portfolio admission completed without exclusions"
         );
     }
 
-    let orders = diff_to_orders(current_shares, &target_shares);
+    let orders = staged_diff_to_orders(current_shares, &target_shares);
     if orders.is_empty() {
         info!(date = %date, "no orders to emit — targets already match current");
         if let Some(journal) = journal {
@@ -2854,6 +3071,64 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_equity_rejects_nonpositive_values() {
+        let account = AlpacaAccount {
+            status: "ACTIVE".to_string(),
+            buying_power: "100000".to_string(),
+            equity: "0".to_string(),
+            trading_blocked: false,
+            account_blocked: false,
+        };
+        let err = parse_equity(&account).unwrap_err();
+        assert!(err.contains("not positive"));
+    }
+
+    #[test]
+    fn test_top_abs_notional_legs_sorts_by_magnitude() {
+        let targets = HashMap::from([
+            ("AMD".to_string(), 1000.0),
+            ("NVDA".to_string(), -2500.0),
+            ("AAPL".to_string(), 1500.0),
+        ]);
+        assert_eq!(
+            top_abs_notional_legs(&targets, 2),
+            vec!["NVDA:-2500".to_string(), "AAPL:1500".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_effective_execution_capital_never_exceeds_config_capital() {
+        assert_eq!(
+            effective_execution_capital(10_000.0, Some(8_500.0)),
+            8_500.0
+        );
+        assert_eq!(
+            effective_execution_capital(10_000.0, Some(12_500.0)),
+            10_000.0
+        );
+        assert_eq!(effective_execution_capital(10_000.0, None), 10_000.0);
+    }
+
+    #[test]
+    fn test_scale_notionals_scales_and_drops_zeroes() {
+        let targets = HashMap::from([("AMD".to_string(), 1000.0), ("NVDA".to_string(), -500.0)]);
+        let scaled = scale_notionals(&targets, 0.5);
+        assert_eq!(scaled.get("AMD"), Some(&500.0));
+        assert_eq!(scaled.get("NVDA"), Some(&-250.0));
+        assert!(scale_notionals(&targets, 0.0).is_empty());
+    }
+
+    #[test]
+    fn test_merge_notionals_adds_overlapping_symbols() {
+        let lhs = HashMap::from([("AMD".to_string(), 1000.0), ("NVDA".to_string(), -500.0)]);
+        let rhs = HashMap::from([("AMD".to_string(), 250.0), ("AAPL".to_string(), 700.0)]);
+        let merged = merge_notionals(&lhs, &rhs);
+        assert_eq!(merged.get("AMD"), Some(&1250.0));
+        assert_eq!(merged.get("NVDA"), Some(&-500.0));
+        assert_eq!(merged.get("AAPL"), Some(&700.0));
+    }
+
+    #[test]
     fn test_incremental_gross_logic_allows_self_financing_rotation_shape() {
         let mut current: HashMap<String, f64> = HashMap::new();
         current.insert("AMD".to_string(), 100.0);
@@ -2894,5 +3169,35 @@ mod tests {
         assert_eq!(target_long, 0.0);
         assert_eq!(target_short, 10_000.0);
         assert_eq!(incremental_exposure, 10_000.0);
+    }
+
+    #[test]
+    fn test_staged_diff_to_orders_splits_sign_flip_into_close_then_open() {
+        let current = HashMap::from([("AMD".to_string(), 100.0)]);
+        let target = HashMap::from([("AMD".to_string(), -80.0)]);
+
+        let orders = staged_diff_to_orders(&current, &target);
+        assert_eq!(orders.len(), 2);
+        assert_eq!(orders[0].symbol, "AMD");
+        assert_eq!(orders[0].side, Side::Sell);
+        assert_eq!(orders[0].qty, 100);
+        assert_eq!(orders[1].symbol, "AMD");
+        assert_eq!(orders[1].side, Side::Sell);
+        assert_eq!(orders[1].qty, 80);
+    }
+
+    #[test]
+    fn test_staged_diff_to_orders_reduces_before_expanding_same_sign() {
+        let current = HashMap::from([("AMD".to_string(), 100.0)]);
+        let target = HashMap::from([("AMD".to_string(), 40.0), ("NVDA".to_string(), 25.0)]);
+
+        let orders = staged_diff_to_orders(&current, &target);
+        assert_eq!(orders.len(), 2);
+        assert_eq!(orders[0].symbol, "AMD");
+        assert_eq!(orders[0].side, Side::Sell);
+        assert_eq!(orders[0].qty, 60);
+        assert_eq!(orders[1].symbol, "NVDA");
+        assert_eq!(orders[1].side, Side::Buy);
+        assert_eq!(orders[1].qty, 25);
     }
 }

@@ -29,6 +29,7 @@ runner="$repo_root/engine/target/debug/openquant-runner"
 out_dir="$repo_root/data/replay/$name"
 tsv_path="$out_dir/report.tsv"
 log_path="$out_dir/replay.log"
+state_path="$out_dir/state.json"
 
 mkdir -p "$out_dir"
 
@@ -43,6 +44,7 @@ RUST_LOG=info "$runner" replay --engine basket \
   --end "$end" \
   --capital 10000 \
   --n-active-baskets 5 \
+  --state-path "$state_path" \
   --report-tsv "$tsv_path" \
   "$@" \
   >"$log_path" 2>&1
@@ -60,8 +62,8 @@ n_days="$(printf '%s\n' "$stats_line" | sed -n 's/.*n_days=\([0-9]*\).*/\1/p')"
 orders="$(grep -c 'emitting orders' "$log_path" || true)"
 on_events="$(grep -c 'classifier switched ON' "$log_path" || true)"
 off_events="$(grep -c 'classifier switched OFF' "$log_path" || true)"
-active_days="$(grep -c 'leadership_mode="replace_with_long_only"' "$log_path" || true)"
-inactive_days="$(grep -c 'leadership_mode="replace_with_long_only_inactive"' "$log_path" || true)"
+active_days="$(grep -Ec 'leadership_mode="(suppress_shorts|replace_with_long_only|add_capped_long_sleeve)"' "$log_path" || true)"
+inactive_days="$(grep -Ec 'leadership_mode="(suppress_shorts_inactive|replace_with_long_only_inactive|add_capped_long_sleeve_inactive)"' "$log_path" || true)"
 failed_orders="$(awk '
   /submitted basket orders/ {
     if (match($0, /failed_orders=[0-9]+/)) {
@@ -77,6 +79,7 @@ replay: $name
 window: $start -> $end
 report: $tsv_path
 log: $log_path
+state: $state_path
 cum_return: $cum_return
 sharpe: $sharpe
 max_dd: $max_dd
