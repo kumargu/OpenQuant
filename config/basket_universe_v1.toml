@@ -117,3 +117,39 @@ pair_engine_reuse = false   # DO NOT port by adapting PairsEngine / PairConfig
 # Issue #321 baseline cell — last RTH bar (production behavior).
 # Variants in sibling files override this for the timing sweep.
 decision_offset_minutes_before_close = 0
+
+[runner.portfolio]
+# Default basket runtime sizing used by paper/live/replay unless CLI overrides it.
+capital = 10000
+n_active_baskets = 5
+
+[runner.leadership_overlay]
+# Default basket overlay/governor profile used by paper/live/replay.
+# Keep CLI overrides available for one-off experiments, but normal runs should
+# be able to launch without repeating these flags.
+sectors = ["faang", "chips"]
+on_ret5d_threshold = 0.02
+on_breadth5d_threshold = 0.56
+off_ret5d_threshold = 0.0
+off_breadth5d_threshold = 0.5
+persistence_days = 2
+min_hold_days = 3
+picker = "rule_v1"
+mode = "baseline"
+long_only_leverage = 1.0
+
+[runner.leadership_overlay.rule_v1]
+min_dwell_days = 5
+off_confirmation_days = 2
+suppress_conflict_on_threshold = 0.15
+suppress_conflict_off_threshold = 0.05
+weak_return_threshold = 0.0
+drawdown_on_threshold = 0.05
+recovered_return_threshold = 0.03
+recovered_drawdown_threshold = 0.03
+sleeve_return_ceiling = 0.03
+min_baseline_scale_for_sleeve = 0.70
+opportunistic_sleeve_min_baseline_scale = 0.85
+opportunistic_sleeve_return_ceiling = 0.10
+halve_sleeve_drawdown_threshold = 0.05
+quarter_sleeve_drawdown_threshold = 0.10

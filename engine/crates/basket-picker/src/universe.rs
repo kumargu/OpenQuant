@@ -57,6 +57,98 @@ fn default_dominance_max() -> f64 {
     0.60
 }
 
+fn default_runner_capital() -> f64 {
+    10_000.0
+}
+
+fn default_runner_n_active_baskets() -> usize {
+    5
+}
+
+fn default_runner_picker() -> RunnerLeadershipPickerConfig {
+    RunnerLeadershipPickerConfig::Fixed
+}
+
+fn default_runner_overlay_mode() -> RunnerLeadershipOverlayModeConfig {
+    RunnerLeadershipOverlayModeConfig::Baseline
+}
+
+fn default_runner_long_only_leverage() -> f64 {
+    1.0
+}
+
+fn default_runner_off_ret5d_threshold() -> f64 {
+    0.0
+}
+
+fn default_runner_off_breadth5d_threshold() -> f64 {
+    0.5
+}
+
+fn default_runner_persistence_days() -> usize {
+    2
+}
+
+fn default_runner_min_hold_days() -> usize {
+    3
+}
+
+fn default_rule_v1_min_dwell_days() -> usize {
+    5
+}
+
+fn default_rule_v1_off_confirmation_days() -> usize {
+    2
+}
+
+fn default_rule_v1_suppress_conflict_on_threshold() -> f64 {
+    0.15
+}
+
+fn default_rule_v1_suppress_conflict_off_threshold() -> f64 {
+    0.05
+}
+
+fn default_rule_v1_weak_return_threshold() -> f64 {
+    0.0
+}
+
+fn default_rule_v1_drawdown_on_threshold() -> f64 {
+    0.05
+}
+
+fn default_rule_v1_recovered_return_threshold() -> f64 {
+    0.03
+}
+
+fn default_rule_v1_recovered_drawdown_threshold() -> f64 {
+    0.03
+}
+
+fn default_rule_v1_sleeve_return_ceiling() -> f64 {
+    0.03
+}
+
+fn default_rule_v1_min_baseline_scale_for_sleeve() -> f64 {
+    0.70
+}
+
+fn default_rule_v1_opportunistic_sleeve_min_baseline_scale() -> f64 {
+    0.85
+}
+
+fn default_rule_v1_opportunistic_sleeve_return_ceiling() -> f64 {
+    0.10
+}
+
+fn default_rule_v1_halve_sleeve_drawdown_threshold() -> f64 {
+    0.05
+}
+
+fn default_rule_v1_quarter_sleeve_drawdown_threshold() -> f64 {
+    0.10
+}
+
 /// Sector configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SectorConfig {
@@ -85,6 +177,133 @@ pub struct DontDoConfig {
     pub pair_engine_reuse: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunnerPortfolioConfig {
+    #[serde(default = "default_runner_capital")]
+    pub capital: f64,
+    #[serde(default = "default_runner_n_active_baskets")]
+    pub n_active_baskets: usize,
+}
+
+impl Default for RunnerPortfolioConfig {
+    fn default() -> Self {
+        Self {
+            capital: default_runner_capital(),
+            n_active_baskets: default_runner_n_active_baskets(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum RunnerLeadershipPickerConfig {
+    #[default]
+    #[serde(rename = "fixed")]
+    Fixed,
+    #[serde(rename = "rule_v1", alias = "rule-v1")]
+    RuleV1,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum RunnerLeadershipOverlayModeConfig {
+    #[default]
+    #[serde(rename = "baseline")]
+    Baseline,
+    #[serde(rename = "suppress_shorts", alias = "suppress-shorts")]
+    SuppressShorts,
+    #[serde(rename = "replace_with_long_only", alias = "replace-with-long-only")]
+    ReplaceWithLongOnly,
+    #[serde(rename = "add_capped_long_sleeve", alias = "add-capped-long-sleeve")]
+    AddCappedLongSleeve,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunnerRuleV1OverlayConfig {
+    #[serde(default = "default_rule_v1_min_dwell_days")]
+    pub min_dwell_days: usize,
+    #[serde(default = "default_rule_v1_off_confirmation_days")]
+    pub off_confirmation_days: usize,
+    #[serde(default = "default_rule_v1_suppress_conflict_on_threshold")]
+    pub suppress_conflict_on_threshold: f64,
+    #[serde(default = "default_rule_v1_suppress_conflict_off_threshold")]
+    pub suppress_conflict_off_threshold: f64,
+    #[serde(default = "default_rule_v1_weak_return_threshold")]
+    pub weak_return_threshold: f64,
+    #[serde(default = "default_rule_v1_drawdown_on_threshold")]
+    pub drawdown_on_threshold: f64,
+    #[serde(default = "default_rule_v1_recovered_return_threshold")]
+    pub recovered_return_threshold: f64,
+    #[serde(default = "default_rule_v1_recovered_drawdown_threshold")]
+    pub recovered_drawdown_threshold: f64,
+    #[serde(default = "default_rule_v1_sleeve_return_ceiling")]
+    pub sleeve_return_ceiling: f64,
+    #[serde(default = "default_rule_v1_min_baseline_scale_for_sleeve")]
+    pub min_baseline_scale_for_sleeve: f64,
+    #[serde(default = "default_rule_v1_opportunistic_sleeve_min_baseline_scale")]
+    pub opportunistic_sleeve_min_baseline_scale: f64,
+    #[serde(default = "default_rule_v1_opportunistic_sleeve_return_ceiling")]
+    pub opportunistic_sleeve_return_ceiling: f64,
+    #[serde(default = "default_rule_v1_halve_sleeve_drawdown_threshold")]
+    pub halve_sleeve_drawdown_threshold: f64,
+    #[serde(default = "default_rule_v1_quarter_sleeve_drawdown_threshold")]
+    pub quarter_sleeve_drawdown_threshold: f64,
+}
+
+impl Default for RunnerRuleV1OverlayConfig {
+    fn default() -> Self {
+        Self {
+            min_dwell_days: default_rule_v1_min_dwell_days(),
+            off_confirmation_days: default_rule_v1_off_confirmation_days(),
+            suppress_conflict_on_threshold: default_rule_v1_suppress_conflict_on_threshold(),
+            suppress_conflict_off_threshold: default_rule_v1_suppress_conflict_off_threshold(),
+            weak_return_threshold: default_rule_v1_weak_return_threshold(),
+            drawdown_on_threshold: default_rule_v1_drawdown_on_threshold(),
+            recovered_return_threshold: default_rule_v1_recovered_return_threshold(),
+            recovered_drawdown_threshold: default_rule_v1_recovered_drawdown_threshold(),
+            sleeve_return_ceiling: default_rule_v1_sleeve_return_ceiling(),
+            min_baseline_scale_for_sleeve: default_rule_v1_min_baseline_scale_for_sleeve(),
+            opportunistic_sleeve_min_baseline_scale:
+                default_rule_v1_opportunistic_sleeve_min_baseline_scale(),
+            opportunistic_sleeve_return_ceiling:
+                default_rule_v1_opportunistic_sleeve_return_ceiling(),
+            halve_sleeve_drawdown_threshold: default_rule_v1_halve_sleeve_drawdown_threshold(),
+            quarter_sleeve_drawdown_threshold: default_rule_v1_quarter_sleeve_drawdown_threshold(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunnerLeadershipOverlayConfig {
+    pub sectors: Vec<String>,
+    pub on_ret5d_threshold: f64,
+    pub on_breadth5d_threshold: f64,
+    #[serde(default = "default_runner_off_ret5d_threshold")]
+    pub off_ret5d_threshold: f64,
+    #[serde(default = "default_runner_off_breadth5d_threshold")]
+    pub off_breadth5d_threshold: f64,
+    #[serde(default = "default_runner_persistence_days")]
+    pub persistence_days: usize,
+    #[serde(default = "default_runner_min_hold_days")]
+    pub min_hold_days: usize,
+    #[serde(default = "default_runner_overlay_mode")]
+    pub mode: RunnerLeadershipOverlayModeConfig,
+    #[serde(default = "default_runner_picker")]
+    pub picker: RunnerLeadershipPickerConfig,
+    #[serde(default = "default_runner_long_only_leverage")]
+    pub long_only_leverage: f64,
+    #[serde(default)]
+    pub rule_v1: RunnerRuleV1OverlayConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RunnerConfig {
+    #[serde(default)]
+    pub decision_offset_minutes_before_close: u32,
+    #[serde(default)]
+    pub portfolio: RunnerPortfolioConfig,
+    #[serde(default)]
+    pub leadership_overlay: Option<RunnerLeadershipOverlayConfig>,
+}
+
 /// Raw TOML structure for deserialization.
 #[derive(Debug, Deserialize)]
 struct RawUniverse {
@@ -93,6 +312,8 @@ struct RawUniverse {
     sectors: HashMap<String, SectorConfig>,
     #[serde(default)]
     dont_do: DontDoConfig,
+    #[serde(default)]
+    runner: RunnerConfig,
 }
 
 /// The complete basket universe.
@@ -102,6 +323,7 @@ pub struct Universe {
     pub strategy: StrategyConfig,
     pub sectors: HashMap<String, SectorConfig>,
     pub dont_do: DontDoConfig,
+    pub runner: RunnerConfig,
     /// All basket candidates derived from sectors.
     pub candidates: Vec<BasketCandidate>,
 }
@@ -224,6 +446,7 @@ pub fn load_universe_from_str(content: &str) -> Result<Universe, String> {
         strategy: raw.strategy,
         sectors: raw.sectors,
         dont_do: raw.dont_do,
+        runner: raw.runner,
         candidates,
     })
 }
@@ -257,6 +480,18 @@ traded_targets = ["AMD", "INTC"]
 
 [dont_do]
 hl_trade_gate = false
+
+[runner.portfolio]
+capital = 10000
+n_active_baskets = 5
+
+[runner.leadership_overlay]
+sectors = ["chips"]
+on_ret5d_threshold = 0.02
+on_breadth5d_threshold = 0.56
+picker = "rule_v1"
+mode = "baseline"
+long_only_leverage = 1.0
 "#;
 
     #[test]
@@ -265,6 +500,12 @@ hl_trade_gate = false
         assert_eq!(universe.version.version, "v1");
         assert_eq!(universe.strategy.threshold_clip_min, 0.15);
         assert_eq!(universe.num_baskets(), 2);
+        assert_eq!(universe.runner.portfolio.capital, 10_000.0);
+        assert_eq!(universe.runner.portfolio.n_active_baskets, 5);
+        assert_eq!(
+            universe.runner.leadership_overlay.as_ref().unwrap().picker,
+            RunnerLeadershipPickerConfig::RuleV1
+        );
     }
 
     #[test]

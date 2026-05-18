@@ -52,7 +52,7 @@ WINDOWS = [
 ]
 
 VARIANTS = [
-    Variant("baseline", ()),
+    Variant("baseline", ("--disable-leadership-overlay",)),
     Variant(
         "fixed_suppress",
         (

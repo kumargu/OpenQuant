@@ -114,6 +114,7 @@ pub struct BasketRunOptions {
     pub journal_path: Option<PathBuf>,
     pub leadership_overlay: Option<LeadershipOverlayConfig>,
     pub overlay_picker: BasketOverlayPickerKind,
+    pub rule_v1_config: Option<crate::basket_overlay_picker::RuleV1OverlayPickerConfig>,
 }
 
 impl Default for BasketRunOptions {
@@ -123,6 +124,7 @@ impl Default for BasketRunOptions {
             journal_path: None,
             leadership_overlay: None,
             overlay_picker: BasketOverlayPickerKind::Fixed,
+            rule_v1_config: None,
         }
     }
 }
@@ -1130,6 +1132,7 @@ pub async fn run_basket_live(
     let mut overlay_picker = BasketOverlayPickerHandle::from_kind(
         options.overlay_picker,
         options.leadership_overlay.as_ref().map(|cfg| cfg.mode),
+        options.rule_v1_config.clone(),
     );
     let picker_state_path = overlay_picker_state_path(state_path);
     match overlay_picker.load_state(&picker_state_path) {

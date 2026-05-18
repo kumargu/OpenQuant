@@ -348,13 +348,16 @@ impl BasketOverlayPickerHandle {
     pub fn from_kind(
         kind: BasketOverlayPickerKind,
         configured_mode: Option<BasketOverlayMode>,
+        rule_v1_config: Option<RuleV1OverlayPickerConfig>,
     ) -> Self {
         match kind {
             BasketOverlayPickerKind::Fixed => configured_mode
                 .map(FixedOverlayPicker::new)
                 .map(Self::Fixed)
                 .unwrap_or_else(|| Self::Baseline(BaselineOverlayPicker)),
-            BasketOverlayPickerKind::RuleV1 => Self::RuleV1(RuleV1OverlayPicker::default()),
+            BasketOverlayPickerKind::RuleV1 => {
+                Self::RuleV1(RuleV1OverlayPicker::new(rule_v1_config.unwrap_or_default()))
+            }
         }
     }
 
@@ -723,7 +726,7 @@ mod tests {
             baseline_scale_if_sleeve: 0.75,
         };
         let mut picker =
-            BasketOverlayPickerHandle::from_kind(BasketOverlayPickerKind::RuleV1, None);
+            BasketOverlayPickerHandle::from_kind(BasketOverlayPickerKind::RuleV1, None, None);
         assert_eq!(
             picker.decide(&features).mode,
             BasketOverlayMode::SuppressShorts
@@ -731,7 +734,7 @@ mod tests {
         picker.save_state(&path).unwrap();
 
         let mut loaded =
-            BasketOverlayPickerHandle::from_kind(BasketOverlayPickerKind::RuleV1, None);
+            BasketOverlayPickerHandle::from_kind(BasketOverlayPickerKind::RuleV1, None, None);
         assert!(loaded.load_state(&path).unwrap());
         assert_eq!(
             loaded.decide(&features).mode,

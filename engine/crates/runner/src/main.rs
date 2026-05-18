@@ -35,7 +35,11 @@ mod simulated_broker;
 mod stream;
 
 use alpaca::ExecutionMode;
-use basket_picker::Universe;
+use basket_picker::{
+    RunnerLeadershipOverlayModeConfig as UniverseLeadershipOverlayModeConfig,
+    RunnerLeadershipPickerConfig as UniverseLeadershipPickerConfig,
+    RunnerRuleV1OverlayConfig as UniverseRuleV1OverlayConfig, Universe,
+};
 use clap::Parser;
 use openquant_core::config::ConfigFile;
 use openquant_core::pairs::engine::PairsEngine;
@@ -77,7 +81,7 @@ enum Command {
 ///   openquant-runner paper --engine basket --execution paper
 ///   openquant-runner paper --engine snp500
 ///   openquant-runner replay --engine metals --start 2025-07-01 --end 2026-03-28
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 enum Engine {
     /// S&P 500 equities — ADF cointegration, GICS sector pairs.
     Snp500,
@@ -85,6 +89,7 @@ enum Engine {
     Metals,
     /// Basket spread strategy — OU/Bertram symmetric state machine.
     /// Defaults to `config/basket_universe_v1.toml`; override with `--universe`.
+    #[default]
     Basket,
     // Future: Bitcoin, etc.
 }
@@ -110,7 +115,7 @@ struct StreamArgs {
     /// Asset class / strategy variant.
     /// Pair engines (snp500, metals) use --config/--candidates;
     /// basket uses --universe/--fit-artifact.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, default_value_t = Engine::Basket)]
     engine: Engine,
 
     /// Override config file (pair engines only; basket ignores this).
@@ -141,11 +146,15 @@ struct StreamArgs {
     bars_dir: Option<PathBuf>,
 
     /// Execution mode for --engine basket.
-    ///   noop:  log intents only, no orders placed (default, shadow mode)
+    /// Defaults to the subcommand mode when omitted:
+    ///   `paper` command -> `paper`
+    ///   `live` command  -> `live`
+    /// Optional overrides:
+    ///   noop:  log intents only, no orders placed (shadow mode)
     ///   paper: paper Alpaca account
     ///   live:  real-money Alpaca (explicit opt-in required)
-    #[arg(long, default_value = "noop")]
-    execution: String,
+    #[arg(long)]
+    execution: Option<String>,
 
     /// Frozen basket fit artifact. Defaults to `<universe>.fits.json`.
     #[arg(long)]
@@ -156,17 +165,23 @@ struct StreamArgs {
     state_path: Option<PathBuf>,
 
     /// Starting capital for basket paper/live sizing (basket only).
-    #[arg(long, default_value_t = 10_000.0)]
-    capital: f64,
+    /// Defaults to the universe TOML runner profile.
+    #[arg(long)]
+    capital: Option<f64>,
 
     /// Max active baskets for basket paper/live sizing (basket only).
-    #[arg(long, default_value_t = 15)]
-    n_active_baskets: usize,
+    /// Defaults to the universe TOML runner profile.
+    #[arg(long)]
+    n_active_baskets: Option<usize>,
 
     /// Override the durable basket paper/live journal path.
     /// Defaults to `<data-dir>/journal/basket_live.sqlite3`.
     #[arg(long)]
     basket_journal_path: Option<PathBuf>,
+
+    /// Ignore leadership overlay defaults from the universe TOML for this run.
+    #[arg(long, default_value_t = false)]
+    disable_leadership_overlay: bool,
 
     /// Basket-only: optional sector list for the leadership overlay.
     /// Disabled by default. Intended for paper/noop validation runs.
@@ -206,14 +221,16 @@ struct StreamArgs {
     leadership_mode: Option<LeadershipModeArg>,
 
     /// Basket-only: picker used to choose the overlay mechanism.
-    #[arg(long, value_enum, default_value_t = LeadershipPickerArg::Fixed)]
-    leadership_picker: LeadershipPickerArg,
+    /// Defaults to the universe TOML runner profile.
+    #[arg(long, value_enum)]
+    leadership_picker: Option<LeadershipPickerArg>,
 
     /// Basket-only: leverage/budget for directional leadership overlay modes.
     /// For `replace_with_long_only`, this is the long-only book leverage.
     /// For `add_capped_long_sleeve`, this is the sleeve gross budget in units of capital.
-    #[arg(long, default_value_t = 1.0)]
-    leadership_long_only_leverage: f64,
+    /// Defaults to the universe TOML runner profile.
+    #[arg(long)]
+    leadership_long_only_leverage: Option<f64>,
 }
 
 /// Args for replay (adds date range).
@@ -222,7 +239,7 @@ struct ReplayArgs {
     /// Asset class / strategy variant.
     /// Pair engines (snp500, metals) use --config/--candidates;
     /// basket uses --universe/--fit-artifact.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, default_value_t = Engine::Basket)]
     engine: Engine,
 
     /// Override config file (pair engines only; basket ignores this).
@@ -272,12 +289,12 @@ struct ReplayArgs {
     state_path: Option<PathBuf>,
 
     /// Starting capital for the simulated broker (basket only, default 10000).
-    #[arg(long, default_value_t = 10_000.0)]
-    capital: f64,
+    #[arg(long)]
+    capital: Option<f64>,
 
     /// Max active baskets (basket only, default 5).
-    #[arg(long, default_value_t = 5)]
-    n_active_baskets: usize,
+    #[arg(long)]
+    n_active_baskets: Option<usize>,
 
     /// One-sided fill slippage in basis points (basket only, default 0).
     #[arg(long, default_value_t = 0.0)]
@@ -307,6 +324,10 @@ struct ReplayArgs {
     /// to the given path after replay completes.
     #[arg(long)]
     report_tsv: Option<PathBuf>,
+
+    /// Ignore leadership overlay defaults from the universe TOML for this run.
+    #[arg(long, default_value_t = false)]
+    disable_leadership_overlay: bool,
 
     /// Replay-only: comma-delimited sector list for the leadership overlay.
     #[arg(long, value_delimiter = ',')]
@@ -351,12 +372,12 @@ struct ReplayArgs {
     leadership_mode: Option<LeadershipModeArg>,
 
     /// Replay-only: picker used to choose the overlay mechanism.
-    #[arg(long, value_enum, default_value_t = LeadershipPickerArg::Fixed)]
-    leadership_picker: LeadershipPickerArg,
+    #[arg(long, value_enum)]
+    leadership_picker: Option<LeadershipPickerArg>,
 
     /// Replay-only: leverage/budget for directional leadership overlay modes.
-    #[arg(long, default_value_t = 1.0)]
-    leadership_long_only_leverage: f64,
+    #[arg(long)]
+    leadership_long_only_leverage: Option<f64>,
 
     /// Resume replay from an existing state snapshot at `--state-path`
     /// instead of starting from empty engine + simulated broker state.
@@ -407,6 +428,38 @@ impl From<LeadershipPickerArg> for basket_overlay_picker::BasketOverlayPickerKin
     }
 }
 
+impl From<UniverseLeadershipPickerConfig> for LeadershipPickerArg {
+    fn from(value: UniverseLeadershipPickerConfig) -> Self {
+        match value {
+            UniverseLeadershipPickerConfig::Fixed => Self::Fixed,
+            UniverseLeadershipPickerConfig::RuleV1 => Self::RuleV1,
+        }
+    }
+}
+
+struct BasketRuntimeOverrides<'a> {
+    capital: Option<f64>,
+    n_active_baskets: Option<usize>,
+    disable_leadership_overlay: bool,
+    leadership_overlay_sectors: &'a [String],
+    leadership_ret5d_threshold: Option<f64>,
+    leadership_breadth5d_threshold: Option<f64>,
+    leadership_off_ret5d_threshold: Option<f64>,
+    leadership_off_breadth5d_threshold: Option<f64>,
+    leadership_persistence_days: Option<usize>,
+    leadership_min_hold_days: Option<usize>,
+    leadership_mode: Option<LeadershipModeArg>,
+    leadership_picker: Option<LeadershipPickerArg>,
+    leadership_long_only_leverage: Option<f64>,
+}
+
+struct ResolvedBasketRuntime {
+    portfolio_config: basket_engine::PortfolioConfig,
+    leadership_overlay: Option<basket_live::LeadershipOverlayConfig>,
+    overlay_picker: basket_overlay_picker::BasketOverlayPickerKind,
+    rule_v1_config: Option<basket_overlay_picker::RuleV1OverlayPickerConfig>,
+}
+
 struct LeadershipOverlayBuildArgs<'a> {
     sectors: &'a [String],
     on_ret5d_threshold: Option<f64>,
@@ -418,6 +471,165 @@ struct LeadershipOverlayBuildArgs<'a> {
     mode: Option<LeadershipModeArg>,
     picker: LeadershipPickerArg,
     long_only_leverage: f64,
+}
+
+fn resolve_stream_execution(
+    requested: Option<&str>,
+    is_live_command: bool,
+) -> basket_live::BasketExecution {
+    match requested.unwrap_or(if is_live_command { "live" } else { "paper" }) {
+        "noop" => basket_live::BasketExecution::Noop,
+        "paper" => basket_live::BasketExecution::Paper,
+        "live" => {
+            if !is_live_command {
+                warn!(
+                    "--execution live requested but command is 'paper'; \
+                     downgrading to Paper to prevent accidental real-money orders"
+                );
+                basket_live::BasketExecution::Paper
+            } else {
+                basket_live::BasketExecution::Live
+            }
+        }
+        other => {
+            error!(requested = %other, "unknown --execution (expected noop|paper|live)");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn rule_v1_picker_config_from_universe(
+    cfg: &UniverseRuleV1OverlayConfig,
+) -> basket_overlay_picker::RuleV1OverlayPickerConfig {
+    basket_overlay_picker::RuleV1OverlayPickerConfig {
+        min_dwell_days: cfg.min_dwell_days,
+        off_confirmation_days: cfg.off_confirmation_days,
+        suppress_conflict_on_threshold: cfg.suppress_conflict_on_threshold,
+        suppress_conflict_off_threshold: cfg.suppress_conflict_off_threshold,
+        weak_return_threshold: cfg.weak_return_threshold,
+        drawdown_on_threshold: cfg.drawdown_on_threshold,
+        recovered_return_threshold: cfg.recovered_return_threshold,
+        recovered_drawdown_threshold: cfg.recovered_drawdown_threshold,
+        sleeve_return_ceiling: cfg.sleeve_return_ceiling,
+        min_baseline_scale_for_sleeve: cfg.min_baseline_scale_for_sleeve,
+        opportunistic_sleeve_min_baseline_scale: cfg.opportunistic_sleeve_min_baseline_scale,
+        opportunistic_sleeve_return_ceiling: cfg.opportunistic_sleeve_return_ceiling,
+        halve_sleeve_drawdown_threshold: cfg.halve_sleeve_drawdown_threshold,
+        quarter_sleeve_drawdown_threshold: cfg.quarter_sleeve_drawdown_threshold,
+    }
+}
+
+fn resolve_basket_runtime(
+    universe: &Universe,
+    overrides: BasketRuntimeOverrides<'_>,
+) -> ResolvedBasketRuntime {
+    let portfolio_config = basket_engine::PortfolioConfig {
+        capital: overrides
+            .capital
+            .unwrap_or(universe.runner.portfolio.capital),
+        leverage: universe.strategy.leverage_assumed,
+        n_active_baskets: overrides
+            .n_active_baskets
+            .unwrap_or(universe.runner.portfolio.n_active_baskets),
+    };
+
+    let overlay_defaults = if overrides.disable_leadership_overlay {
+        None
+    } else {
+        universe.runner.leadership_overlay.as_ref()
+    };
+    let overlay_enabled = overlay_defaults.is_some()
+        || !overrides.leadership_overlay_sectors.is_empty()
+        || overrides.leadership_ret5d_threshold.is_some()
+        || overrides.leadership_breadth5d_threshold.is_some()
+        || overrides.leadership_off_ret5d_threshold.is_some()
+        || overrides.leadership_off_breadth5d_threshold.is_some()
+        || overrides.leadership_persistence_days.is_some()
+        || overrides.leadership_min_hold_days.is_some()
+        || overrides.leadership_mode.is_some()
+        || overrides.leadership_picker.is_some()
+        || overrides.leadership_long_only_leverage.is_some();
+
+    let overlay_picker_arg = overrides.leadership_picker.unwrap_or_else(|| {
+        overlay_defaults
+            .map(|cfg| LeadershipPickerArg::from(cfg.picker))
+            .unwrap_or(LeadershipPickerArg::Fixed)
+    });
+
+    let rule_v1_config = if matches!(overlay_picker_arg, LeadershipPickerArg::RuleV1) {
+        Some(
+            overlay_defaults
+                .map(|cfg| rule_v1_picker_config_from_universe(&cfg.rule_v1))
+                .unwrap_or_default(),
+        )
+    } else {
+        None
+    };
+
+    let leadership_overlay = if overlay_enabled {
+        let sectors_storage = if !overrides.leadership_overlay_sectors.is_empty() {
+            overrides.leadership_overlay_sectors.to_vec()
+        } else {
+            overlay_defaults
+                .map(|cfg| cfg.sectors.clone())
+                .unwrap_or_default()
+        };
+        let mode = overrides.leadership_mode.or_else(|| {
+            overlay_defaults.and_then(|cfg| match cfg.mode {
+                UniverseLeadershipOverlayModeConfig::Baseline => None,
+                UniverseLeadershipOverlayModeConfig::SuppressShorts => {
+                    Some(LeadershipModeArg::SuppressShorts)
+                }
+                UniverseLeadershipOverlayModeConfig::ReplaceWithLongOnly => {
+                    Some(LeadershipModeArg::ReplaceWithLongOnly)
+                }
+                UniverseLeadershipOverlayModeConfig::AddCappedLongSleeve => {
+                    Some(LeadershipModeArg::AddCappedLongSleeve)
+                }
+            })
+        });
+
+        build_leadership_overlay_config(
+            universe,
+            LeadershipOverlayBuildArgs {
+                sectors: &sectors_storage,
+                on_ret5d_threshold: overrides
+                    .leadership_ret5d_threshold
+                    .or_else(|| overlay_defaults.map(|cfg| cfg.on_ret5d_threshold)),
+                on_breadth5d_threshold: overrides
+                    .leadership_breadth5d_threshold
+                    .or_else(|| overlay_defaults.map(|cfg| cfg.on_breadth5d_threshold)),
+                off_ret5d_threshold: overrides
+                    .leadership_off_ret5d_threshold
+                    .or_else(|| overlay_defaults.map(|cfg| cfg.off_ret5d_threshold)),
+                off_breadth5d_threshold: overrides
+                    .leadership_off_breadth5d_threshold
+                    .or_else(|| overlay_defaults.map(|cfg| cfg.off_breadth5d_threshold)),
+                persistence_days: overrides
+                    .leadership_persistence_days
+                    .or_else(|| overlay_defaults.map(|cfg| cfg.persistence_days)),
+                min_hold_days: overrides
+                    .leadership_min_hold_days
+                    .or_else(|| overlay_defaults.map(|cfg| cfg.min_hold_days)),
+                mode,
+                picker: overlay_picker_arg,
+                long_only_leverage: overrides.leadership_long_only_leverage.unwrap_or_else(|| {
+                    overlay_defaults
+                        .map(|cfg| cfg.long_only_leverage)
+                        .unwrap_or(1.0)
+                }),
+            },
+        )
+    } else {
+        None
+    };
+
+    ResolvedBasketRuntime {
+        portfolio_config,
+        leadership_overlay,
+        overlay_picker: overlay_picker_arg.into(),
+        rule_v1_config,
+    }
 }
 
 fn build_leadership_overlay_config(
@@ -754,28 +966,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         .clone()
         .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
 
-    // Parse execution mode. Default = noop (shadow).
-    // Extra safety: `paper live` must come from `Command::Live` (real-money path),
-    // otherwise treat as paper.
-    let execution = match args.execution.as_str() {
-        "noop" => basket_live::BasketExecution::Noop,
-        "paper" => basket_live::BasketExecution::Paper,
-        "live" => {
-            if !is_live_command {
-                warn!(
-                    "--execution live requested but command is 'paper'; \
-                     downgrading to Paper to prevent accidental real-money orders"
-                );
-                basket_live::BasketExecution::Paper
-            } else {
-                basket_live::BasketExecution::Live
-            }
-        }
-        other => {
-            error!(requested = %other, "unknown --execution (expected noop|paper|live)");
-            std::process::exit(1);
-        }
-    };
+    let execution = resolve_stream_execution(args.execution.as_deref(), is_live_command);
     let universe = match basket_picker::load_universe(&universe_path) {
         Ok(u) => u,
         Err(e) => {
@@ -783,30 +974,30 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             std::process::exit(1);
         }
     };
-    let portfolio_config = basket_engine::PortfolioConfig {
-        capital: args.capital,
-        leverage: universe.strategy.leverage_assumed,
-        n_active_baskets: args.n_active_baskets,
-    };
+    let runtime = resolve_basket_runtime(
+        &universe,
+        BasketRuntimeOverrides {
+            capital: args.capital,
+            n_active_baskets: args.n_active_baskets,
+            disable_leadership_overlay: args.disable_leadership_overlay,
+            leadership_overlay_sectors: &args.leadership_overlay_sectors,
+            leadership_ret5d_threshold: args.leadership_ret5d_threshold,
+            leadership_breadth5d_threshold: args.leadership_breadth5d_threshold,
+            leadership_off_ret5d_threshold: args.leadership_off_ret5d_threshold,
+            leadership_off_breadth5d_threshold: args.leadership_off_breadth5d_threshold,
+            leadership_persistence_days: args.leadership_persistence_days,
+            leadership_min_hold_days: args.leadership_min_hold_days,
+            leadership_mode: args.leadership_mode,
+            leadership_picker: args.leadership_picker,
+            leadership_long_only_leverage: args.leadership_long_only_leverage,
+        },
+    );
+    let portfolio_config = runtime.portfolio_config;
     if let Err(e) = portfolio_config.validate() {
         error!(error = %e, "invalid basket portfolio config");
         std::process::exit(1);
     }
-    let leadership_overlay = build_leadership_overlay_config(
-        &universe,
-        LeadershipOverlayBuildArgs {
-            sectors: &args.leadership_overlay_sectors,
-            on_ret5d_threshold: args.leadership_ret5d_threshold,
-            on_breadth5d_threshold: args.leadership_breadth5d_threshold,
-            off_ret5d_threshold: args.leadership_off_ret5d_threshold,
-            off_breadth5d_threshold: args.leadership_off_breadth5d_threshold,
-            persistence_days: args.leadership_persistence_days,
-            min_hold_days: args.leadership_min_hold_days,
-            mode: args.leadership_mode,
-            picker: args.leadership_picker,
-            long_only_leverage: args.leadership_long_only_leverage,
-        },
-    );
+    let leadership_overlay = runtime.leadership_overlay;
     if leadership_overlay.is_some() && matches!(execution, basket_live::BasketExecution::Live) {
         error!(
             "leadership overlay is not enabled for real-money live execution; use paper/noop until explicitly promoted"
@@ -934,7 +1125,8 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             fit_artifact_path: Some(fit_artifact_path.clone()),
             journal_path: Some(basket_journal_path),
             leadership_overlay,
-            overlay_picker: args.leadership_picker.into(),
+            overlay_picker: runtime.overlay_picker,
+            rule_v1_config: runtime.rule_v1_config,
         },
     )
     .await
@@ -1692,31 +1884,30 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     // Leverage comes from the universe TOML (`strategy.leverage_assumed`).
     // Replay must use the same leverage the strategy was designed against;
     // that's a config value, not a CLI knob.
-    let portfolio_config = basket_engine::PortfolioConfig {
-        capital: args.capital,
-        leverage: universe.strategy.leverage_assumed,
-        n_active_baskets: args.n_active_baskets,
-    };
+    let runtime = resolve_basket_runtime(
+        &universe,
+        BasketRuntimeOverrides {
+            capital: args.capital,
+            n_active_baskets: args.n_active_baskets,
+            disable_leadership_overlay: args.disable_leadership_overlay,
+            leadership_overlay_sectors: &args.leadership_overlay_sectors,
+            leadership_ret5d_threshold: args.leadership_ret5d_threshold,
+            leadership_breadth5d_threshold: args.leadership_breadth5d_threshold,
+            leadership_off_ret5d_threshold: args.leadership_off_ret5d_threshold,
+            leadership_off_breadth5d_threshold: args.leadership_off_breadth5d_threshold,
+            leadership_persistence_days: args.leadership_persistence_days,
+            leadership_min_hold_days: args.leadership_min_hold_days,
+            leadership_mode: args.leadership_mode,
+            leadership_picker: args.leadership_picker,
+            leadership_long_only_leverage: args.leadership_long_only_leverage,
+        },
+    );
+    let portfolio_config = runtime.portfolio_config;
     if let Err(e) = portfolio_config.validate() {
         error!(error = %e, "invalid portfolio config");
         std::process::exit(1);
     }
-
-    let leadership_overlay = build_leadership_overlay_config(
-        &universe,
-        LeadershipOverlayBuildArgs {
-            sectors: &args.leadership_overlay_sectors,
-            on_ret5d_threshold: args.leadership_ret5d_threshold,
-            on_breadth5d_threshold: args.leadership_breadth5d_threshold,
-            off_ret5d_threshold: args.leadership_off_ret5d_threshold,
-            off_breadth5d_threshold: args.leadership_off_breadth5d_threshold,
-            persistence_days: args.leadership_persistence_days,
-            min_hold_days: args.leadership_min_hold_days,
-            mode: args.leadership_mode,
-            picker: args.leadership_picker,
-            long_only_leverage: args.leadership_long_only_leverage,
-        },
-    );
+    let leadership_overlay = runtime.leadership_overlay;
 
     // Walk-forward fit: build the basket fit using data STRICTLY BEFORE
     // the replay window (`--start`). Without this, replay leaks future
@@ -1805,7 +1996,8 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             fit_artifact_path: None,
             journal_path: None,
             leadership_overlay,
-            overlay_picker: args.leadership_picker.into(),
+            overlay_picker: runtime.overlay_picker,
+            rule_v1_config: runtime.rule_v1_config,
         },
     )
     .await;
