@@ -48,6 +48,14 @@ use std::io::Write;
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
+macro_rules! bug {
+    ($kind:literal, $($field:tt)*) => {{
+        metrics::counter!("bug", "component" => "basket_runtime_config", "kind" => $kind)
+            .increment(1);
+        error!(bug = true, bug_marker = "BUG", kind = $kind, $($field)*);
+    }};
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────
 
 #[derive(Parser, Debug)]
@@ -533,13 +541,7 @@ fn resolve_basket_runtime(
             .unwrap_or(universe.runner.portfolio.n_active_baskets),
     };
 
-    let overlay_defaults = if overrides.disable_leadership_overlay {
-        None
-    } else {
-        universe.runner.leadership_overlay.as_ref()
-    };
-    let overlay_enabled = overlay_defaults.is_some()
-        || !overrides.leadership_overlay_sectors.is_empty()
+    let has_overlay_override = !overrides.leadership_overlay_sectors.is_empty()
         || overrides.leadership_ret5d_threshold.is_some()
         || overrides.leadership_breadth5d_threshold.is_some()
         || overrides.leadership_off_ret5d_threshold.is_some()
@@ -549,6 +551,21 @@ fn resolve_basket_runtime(
         || overrides.leadership_mode.is_some()
         || overrides.leadership_picker.is_some()
         || overrides.leadership_long_only_leverage.is_some();
+
+    if overrides.disable_leadership_overlay && has_overlay_override {
+        bug!(
+            "leadership_overlay_disabled_with_overrides",
+            "leadership overlay override flags were supplied while --disable-leadership-overlay is set; ignoring overlay overrides"
+        );
+    }
+
+    let overlay_defaults = if overrides.disable_leadership_overlay {
+        None
+    } else {
+        universe.runner.leadership_overlay.as_ref()
+    };
+    let overlay_enabled = !overrides.disable_leadership_overlay
+        && (overlay_defaults.is_some() || has_overlay_override);
 
     let overlay_picker_arg = overrides.leadership_picker.unwrap_or_else(|| {
         overlay_defaults
@@ -624,10 +641,16 @@ fn resolve_basket_runtime(
         None
     };
 
+    let (overlay_picker, rule_v1_config) = if leadership_overlay.is_some() {
+        (overlay_picker_arg.into(), rule_v1_config)
+    } else {
+        (basket_overlay_picker::BasketOverlayPickerKind::Fixed, None)
+    };
+
     ResolvedBasketRuntime {
         portfolio_config,
         leadership_overlay,
-        overlay_picker: overlay_picker_arg.into(),
+        overlay_picker,
         rule_v1_config,
     }
 }
