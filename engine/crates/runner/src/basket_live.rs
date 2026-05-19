@@ -55,6 +55,13 @@ use crate::market_session;
 use crate::session_trigger::SessionTrigger;
 use crate::stream;
 
+macro_rules! bug {
+    ($kind:literal, $($field:tt)*) => {{
+        metrics::counter!("bug", "component" => "basket_live", "kind" => $kind).increment(1);
+        error!(bug = true, bug_marker = "BUG", kind = $kind, $($field)*);
+    }};
+}
+
 /// Execution mode for basket live/paper.
 ///
 /// Distinct from [`ExecutionMode`] because basket adds a `Noop` shadow mode.
@@ -1081,18 +1088,37 @@ pub async fn run_basket_live(
             execution.alpaca_mode().is_some(),
         )?;
     let leadership_state_path = leadership_classifier_state_path(state_path);
+    let can_load_sidecar_state = matches!(startup_state_source, StartupStateSource::Snapshot);
+    if !can_load_sidecar_state {
+        move_sidecar_state_aside_if_present(
+            &leadership_state_path,
+            startup_state_source,
+            "engine_state_not_loaded_from_snapshot",
+        )?;
+    }
     let mut leadership_tracker = options
         .leadership_overlay
         .clone()
         .map(|cfg| SectorLeadershipTracker::new(cfg, sector_members));
     if let Some(tracker) = leadership_tracker.as_mut() {
-        match tracker.load_state(&leadership_state_path) {
+        match if can_load_sidecar_state {
+            tracker.load_state(&leadership_state_path)
+        } else {
+            Ok(false)
+        } {
             Ok(true) => info!(
                 state_path = %leadership_state_path.display(),
                 active_sectors = ?tracker.active_sectors_for_today(),
                 "loaded persisted leadership overlay classifier state"
             ),
             Ok(false) => {
+                if can_load_sidecar_state && leadership_state_path.exists() {
+                    move_sidecar_state_aside_if_present(
+                        &leadership_state_path,
+                        startup_state_source,
+                        "leadership_sidecar_state_mismatch",
+                    )?;
+                }
                 let warm_anchor = if last_processed_trading_day == Some(today) {
                     Some(today)
                 } else {
@@ -1135,13 +1161,31 @@ pub async fn run_basket_live(
         options.rule_v1_config.clone(),
     );
     let picker_state_path = overlay_picker_state_path(state_path);
-    match overlay_picker.load_state(&picker_state_path) {
+    if !can_load_sidecar_state {
+        move_sidecar_state_aside_if_present(
+            &picker_state_path,
+            startup_state_source,
+            "engine_state_not_loaded_from_snapshot",
+        )?;
+    }
+    match if can_load_sidecar_state {
+        overlay_picker.load_state(&picker_state_path)
+    } else {
+        Ok(false)
+    } {
         Ok(true) => info!(
             state_path = %picker_state_path.display(),
             picker_id = overlay_picker.id(),
             "loaded persisted basket overlay picker state"
         ),
         Ok(false) => {
+            if can_load_sidecar_state && picker_state_path.exists() {
+                move_sidecar_state_aside_if_present(
+                    &picker_state_path,
+                    startup_state_source,
+                    "overlay_picker_sidecar_state_mismatch",
+                )?;
+            }
             overlay_picker.save_state(&picker_state_path)?;
         }
         Err(e) => return Err(e),
@@ -1174,6 +1218,29 @@ pub async fn run_basket_live(
         broker_positions = current_shares.len(),
         "basket startup phase evaluated"
     );
+    if let Some(mode) = execution.alpaca_mode() {
+        let account = broker.get_account(mode).await?;
+        let account_equity = parse_equity(&account)?;
+        let effective_capital =
+            effective_execution_capital(portfolio_config.capital, Some(account_equity));
+        info!(
+            configured_capital = %format!("{:.0}", portfolio_config.capital),
+            account_equity = %format!("{:.0}", account_equity),
+            effective_execution_capital = %format!("{:.0}", effective_capital),
+            leverage = portfolio_config.leverage,
+            gross_cap = %format!("{:.0}", effective_capital * portfolio_config.leverage),
+            n_active_baskets = portfolio_config.n_active_baskets,
+            "basket execution capital resolved"
+        );
+        if effective_capital < portfolio_config.capital {
+            warn!(
+                configured_capital = %format!("{:.0}", portfolio_config.capital),
+                account_equity = %format!("{:.0}", account_equity),
+                effective_execution_capital = %format!("{:.0}", effective_capital),
+                "account equity is below configured basket capital; sizing will be capped to account equity"
+            );
+        }
+    }
     if let Some(journal) = &journal {
         let universe_path_str = universe_path.display().to_string();
         let state_path_str = state_path.display().to_string();
@@ -1433,7 +1500,8 @@ pub async fn run_basket_live(
                             processed_sessions.insert(today);
                             break 'session;
                         }
-                        error!(
+                        bug!(
+                            "zero_buffered_closes_on_trading_day",
                             date = %today,
                             symbols_expected,
                             buffered_days = day_closes.len(),
@@ -1462,7 +1530,8 @@ pub async fn run_basket_live(
                         "session close firing"
                     );
                     if !missing.is_empty() {
-                        error!(
+                        bug!(
+                            "incomplete_close_snapshot",
                             date = %today,
                             closes_in_buffer = closes_for_day.len(),
                             symbols_expected,
@@ -1651,7 +1720,8 @@ fn recover_from_unloadable_state(
     reason: String,
 ) -> Result<(BasketEngine, Option<NaiveDate>, StartupStateSource), String> {
     let backup_path = move_state_file_aside(state_path)?;
-    warn!(
+    bug!(
+        "engine_state_snapshot_unusable",
         state_path = %state_path.display(),
         backup_path = %backup_path.display(),
         reason = %reason,
@@ -1691,6 +1761,39 @@ fn move_state_file_aside(path: &Path) -> Result<PathBuf, String> {
         )
     })?;
     Ok(backup_path)
+}
+
+fn move_sidecar_state_aside_if_present(
+    path: &Path,
+    startup_source: StartupStateSource,
+    reason: &str,
+) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let mut backup_name: OsString = path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_else(|| OsString::from("basket.sidecar.json"));
+    backup_name.push(format!(".ignored.{ts}"));
+    let backup_path = path.with_file_name(backup_name);
+    std::fs::rename(path, &backup_path).map_err(|e| {
+        format!(
+            "failed to move stale sidecar state {} aside to {}: {e}",
+            path.display(),
+            backup_path.display()
+        )
+    })?;
+    bug!(
+        "stale_sidecar_state_ignored",
+        state_path = %path.display(),
+        backup_path = %backup_path.display(),
+        startup_state_source = ?startup_source,
+        reason,
+        "sidecar state ignored because engine state did not load from a matching snapshot"
+    );
+    Ok(())
 }
 
 /// paper/live execution (trading from an empty share map would double-size
@@ -1858,6 +1961,20 @@ async fn process_session_close(
     let picker_decision = overlay_picker.decide(&baseline_features);
     let leadership_active_sectors = &picker_decision.active_sectors;
     let leadership_long_symbols = &picker_decision.long_symbols;
+    if leadership_overlay.is_none() && picker_decision.mode != BasketOverlayMode::Baseline {
+        bug!(
+            "overlay_mode_without_config",
+            date = %date,
+            picker_id = overlay_picker.id(),
+            picker_mode = picker_decision.mode.as_str(),
+            picker_reason = picker_decision.reason,
+            "overlay picker selected a non-baseline mode without leadership overlay config"
+        );
+        return Err(format!(
+            "overlay picker selected {} without leadership overlay config",
+            picker_decision.mode.as_str()
+        ));
+    }
     info!(
         date = %date,
         picker_id = overlay_picker.id(),
@@ -2046,6 +2163,13 @@ async fn process_session_close(
         "target notionals summary"
     );
     if gross_notional > gross_cap + 1.0 {
+        bug!(
+            "target_gross_exceeds_cap",
+            date = %date,
+            gross_notional = %format!("{:.2}", gross_notional),
+            gross_cap = %format!("{:.2}", gross_cap),
+            "target gross notional exceeds configured cap"
+        );
         return Err(format!(
             "target gross notional {:.2} exceeds configured cap {:.2}",
             gross_notional, gross_cap
@@ -2314,7 +2438,8 @@ async fn process_session_close(
                     }
                     Err(e) => {
                         failed_orders += 1;
-                        error!(
+                        bug!(
+                            "broker_order_failed",
                             symbol = order.symbol.as_str(),
                             qty = order.qty,
                             side = side_str,
@@ -2383,7 +2508,8 @@ async fn process_session_close(
                         current_positions_after = actual_shares.len();
                         current_shares_after_json = Some(serialize_shares_map(&actual_shares));
                         if divergence_pct_value > 10.0 {
-                            error!(
+                            bug!(
+                                "post_submit_gross_divergence",
                                 date = %date,
                                 target_gross = %format!("{:.0}", target_gross),
                                 actual_gross = %format!("{:.0}", actual_gross_value),
@@ -2405,7 +2531,8 @@ async fn process_session_close(
                         }
                     }
                     Err(e) => {
-                        error!(
+                        bug!(
+                            "post_submit_reconciliation_failed",
                             date = %date,
                             error = e.as_str(),
                             "post-submission reconciliation failed — could not refetch broker positions"
@@ -2823,6 +2950,23 @@ mod tests {
             BasketExecution::Live.alpaca_mode(),
             Some(ExecutionMode::Live)
         );
+    }
+
+    #[test]
+    fn test_sidecar_state_is_moved_aside_when_engine_state_is_not_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("basket.state.json.picker.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        move_sidecar_state_aside_if_present(&path, StartupStateSource::Fresh, "test").unwrap();
+
+        assert!(!path.exists());
+        let backups: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0].starts_with("basket.state.json.picker.json.ignored."));
     }
 
     /// Verifies the bar-timestamp unshift needed in the live bar loop.

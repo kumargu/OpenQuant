@@ -181,6 +181,21 @@ Important trading paths must log enough to reconstruct:
 - whether reconciliation matched target
 - what state was persisted
 
+Every new or materially changed implementation path must include a complete
+operator log surface:
+
+- `info`: normal lifecycle, selected config, state source, decision summaries,
+  sizing summaries, orders, reconciliation, and persistence.
+- `warn`: recoverable degraded behavior, fallback paths, ignored stale inputs,
+  skipped optional work, or conditions requiring operator attention.
+- `error`: fatal startup/runtime failures, broker/API failures, rejected orders,
+  missing required data, or anything that stops safe execution.
+- `bug!`: should-not-happen internal states, invariant breaks, mismatched state,
+  suspicious fallback behavior, target/account divergence, or unexpected
+  sidecar/config interactions. A `bug!` must be visible in logs with
+  `bug=true bug_marker="BUG"` and counted by the metrics recorder when the
+  runner is active.
+
 Use `RUST_LOG` to switch detail levels. Paper runs should write durable logs to `data/journal/engine.log` or the configured journal path. High log volume is acceptable for now; missing decision evidence is not.
 
 For replay evidence, high log volume belongs in files, not in the chat transcript.
