@@ -1113,11 +1113,11 @@ pub async fn run_basket_live(
             ),
             Ok(false) => {
                 if can_load_sidecar_state && leadership_state_path.exists() {
-                    bug!(
-                        "leadership_sidecar_state_rebuilt",
-                        state_path = %leadership_state_path.display(),
-                        "persisted leadership sidecar state could not be reused and will be rebuilt"
-                    );
+                    move_sidecar_state_aside_if_present(
+                        &leadership_state_path,
+                        startup_state_source,
+                        "leadership_sidecar_state_mismatch",
+                    )?;
                 }
                 let warm_anchor = if last_processed_trading_day == Some(today) {
                     Some(today)
@@ -1180,12 +1180,11 @@ pub async fn run_basket_live(
         ),
         Ok(false) => {
             if can_load_sidecar_state && picker_state_path.exists() {
-                bug!(
-                    "overlay_picker_sidecar_state_rebuilt",
-                    state_path = %picker_state_path.display(),
-                    picker_id = overlay_picker.id(),
-                    "persisted overlay picker sidecar state could not be reused and will be rebuilt"
-                );
+                move_sidecar_state_aside_if_present(
+                    &picker_state_path,
+                    startup_state_source,
+                    "overlay_picker_sidecar_state_mismatch",
+                )?;
             }
             overlay_picker.save_state(&picker_state_path)?;
         }

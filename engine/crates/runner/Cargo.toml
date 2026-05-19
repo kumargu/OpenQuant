@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 openquant-core = { path = "../core" }
+openquant-metrics = { path = "../metrics" }
 pair-picker = { path = "../pair-picker" }
 basket-picker = { path = "../basket-picker" }
 basket-engine = { path = "../basket-engine" }

@@ -1777,6 +1777,7 @@ dependencies = [
  "metrics",
  "nyse-holiday-cal",
  "openquant-core",
+ "openquant-metrics",
  "pair-picker",
  "parquet",
  "rand 0.8.5",

@@ -888,18 +888,29 @@ async fn main() {
         .with_writer(tee)
         .init();
 
+    let metrics_dir = data_dir.join("metrics");
+    match openquant_metrics::install(
+        metrics_dir.to_string_lossy().as_ref(),
+        std::time::Duration::from_secs(10),
+    ) {
+        Ok(()) => info!(metrics_dir = %metrics_dir.display(), "metrics recorder installed"),
+        Err(e) => warn!(error = e.as_str(), "metrics recorder not installed"),
+    }
+
     // Basket engine in Live/Paper mode takes a dedicated path — it uses
     // BasketEngine (continuous state machine) driven by 1-min bars, not the
     // PairsEngine pipeline below. Early-return after the basket runner finishes.
     if let Command::Live(a) | Command::Paper(a) = &cli.command {
         if a.engine.is_basket() {
             run_basket_stream(a.clone(), matches!(&cli.command, Command::Live(_))).await;
+            openquant_metrics::shutdown().await;
             return;
         }
     }
 
     if let Command::FreezeBasketFits(a) = &cli.command {
         run_freeze_basket_fits(a.clone());
+        openquant_metrics::shutdown().await;
         return;
     }
 
@@ -932,6 +943,7 @@ async fn main() {
         Command::Replay(a) => {
             if a.engine.is_basket() {
                 run_basket_replay_live_path(a).await;
+                openquant_metrics::shutdown().await;
                 return;
             }
 
@@ -962,6 +974,7 @@ async fn main() {
         run_mode,
     )
     .await;
+    openquant_metrics::shutdown().await;
 }
 
 // ── Basket live/paper dispatch ──────────────────────────────────────
