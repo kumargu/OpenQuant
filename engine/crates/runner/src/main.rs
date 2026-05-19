@@ -44,9 +44,9 @@ use clap::Parser;
 use openquant_core::config::ConfigFile;
 use openquant_core::pairs::engine::PairsEngine;
 use pair_picker::pipeline::PipelineConfig;
-use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 macro_rules! bug {
     ($kind:literal, $($field:tt)*) => {{
@@ -791,6 +791,69 @@ fn path_with_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
     }
 }
 
+fn default_stream_state_path(data_dir: &Path, fit_artifact_path: &Path) -> PathBuf {
+    let stem = fit_artifact_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("basket_fits");
+    data_dir.join("state").join(format!("{stem}.state.json"))
+}
+
+fn maybe_migrate_legacy_stream_state(legacy_path: &Path, state_path: &Path) {
+    if legacy_path == state_path || !legacy_path.exists() || state_path.exists() {
+        return;
+    }
+    if let Some(parent) = state_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!(
+                legacy_state_path = %legacy_path.display(),
+                state_path = %state_path.display(),
+                error = %e,
+                "could not create state dir for legacy basket state migration"
+            );
+            return;
+        }
+    }
+    match std::fs::rename(legacy_path, state_path) {
+        Ok(()) => info!(
+            legacy_state_path = %legacy_path.display(),
+            state_path = %state_path.display(),
+            "migrated legacy basket state out of config tree"
+        ),
+        Err(e) => {
+            warn!(
+                legacy_state_path = %legacy_path.display(),
+                state_path = %state_path.display(),
+                error = %e,
+                "failed to migrate legacy basket state"
+            );
+            return;
+        }
+    }
+
+    let legacy_sidecars = [
+        basket_live::leadership_classifier_state_path(legacy_path),
+        basket_live::overlay_picker_state_path(legacy_path),
+    ];
+    let target_sidecars = [
+        basket_live::leadership_classifier_state_path(state_path),
+        basket_live::overlay_picker_state_path(state_path),
+    ];
+    for (legacy_sidecar, target_sidecar) in legacy_sidecars.iter().zip(target_sidecars.iter()) {
+        if !legacy_sidecar.exists() || target_sidecar.exists() {
+            continue;
+        }
+        if let Err(e) = std::fs::rename(legacy_sidecar, target_sidecar) {
+            warn!(
+                legacy_state_path = %legacy_sidecar.display(),
+                state_path = %target_sidecar.display(),
+                error = %e,
+                "failed to migrate legacy basket sidecar state"
+            );
+        }
+    }
+}
+
 /// Extract the unique symbols (leg_a/leg_b) from a candidates JSON file.
 ///
 /// Used to narrow the refresh pass in live/paper mode — the engine only reads bars
@@ -870,23 +933,7 @@ async fn main() {
         Command::FreezeBasketFits(a) => &a.data_dir,
     };
 
-    let journal_dir = data_dir.join("journal");
-    std::fs::create_dir_all(&journal_dir).ok();
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(journal_dir.join("engine.log"))
-        .expect("cannot open engine.log");
-    let tee = TeeWriter(std::sync::Mutex::new(log_file));
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_ansi(false)
-        .with_writer(tee)
-        .init();
+    init_tracing(data_dir);
 
     let metrics_dir = data_dir.join("metrics");
     match openquant_metrics::install(
@@ -1081,14 +1128,26 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     let overlay_fingerprint = leadership_overlay
         .as_ref()
         .map(leadership_overlay_fingerprint);
+    let default_state_base = default_stream_state_path(&args.data_dir, &fit_artifact_path);
+    let legacy_state_base = basket_fits::default_live_state_path(&fit_artifact_path);
     let state_path = match (&args.state_path, overlay_fingerprint.as_deref()) {
         (Some(path), _) => path.clone(),
-        (None, Some(fp)) => path_with_suffix(
-            &basket_fits::default_live_state_path(&fit_artifact_path),
-            fp,
-        ),
-        (None, None) => basket_fits::default_live_state_path(&fit_artifact_path),
+        (None, Some(fp)) => path_with_suffix(&default_state_base, fp),
+        (None, None) => default_state_base,
     };
+    if args.state_path.is_none() {
+        let legacy_path = match overlay_fingerprint.as_deref() {
+            Some(fp) => path_with_suffix(&legacy_state_base, fp),
+            None => legacy_state_base,
+        };
+        maybe_migrate_legacy_stream_state(&legacy_path, &state_path);
+    }
+    if let Some(parent) = state_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            error!(state_path = %state_path.display(), error = %e, "failed to create basket state directory");
+            std::process::exit(1);
+        }
+    }
     // Self-healing fit artifact: if missing or out-of-sync with the universe
     // (frozen_at / version mismatch / candidate-set change), rebuild it from
     // the current parquet history. Eliminates the "build it first" step in
@@ -2097,42 +2156,86 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     }
 }
 
-// ── TeeWriter (stderr + file) ────────────────────────────────────────
+// ── Logging ─────────────────────────────────────────────────────────
 
-struct TeeWriter(std::sync::Mutex<std::fs::File>);
+fn init_tracing(data_dir: &Path) {
+    let journal_dir = data_dir.join("journal");
+    std::fs::create_dir_all(&journal_dir).expect("cannot create journal dir");
+    cleanup_old_engine_logs(&journal_dir, 14);
 
-impl Write for TeeWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        std::io::stderr().write_all(buf)?;
-        self.0.lock().unwrap().write_all(buf)?;
-        Ok(buf.len())
-    }
+    let file_appender = tracing_appender::rolling::daily(&journal_dir, "engine.log");
+    let writer = std::io::stderr.and(file_appender);
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        std::io::stderr().flush()?;
-        self.0.lock().unwrap().flush()
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_ansi(false)
+        .with_writer(writer)
+        .init();
+
+    info!(
+        log_dir = %journal_dir.display(),
+        log_retention_days = 14,
+        "daily engine log rotation enabled"
+    );
+}
+
+fn cleanup_old_engine_logs(journal_dir: &Path, retention_days: u64) {
+    let Ok(entries) = std::fs::read_dir(journal_dir) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(
+            retention_days.saturating_mul(24 * 60 * 60),
+        ))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("engine.log.") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if modified < cutoff {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TeeWriter {
-    type Writer = TeeWriterGuard<'a>;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    fn make_writer(&'a self) -> Self::Writer {
-        TeeWriterGuard(&self.0)
+    #[test]
+    fn stream_state_defaults_under_data_state() {
+        let path = default_stream_state_path(
+            Path::new("data"),
+            Path::new("config/basket_universe_v1.fits.json"),
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("data/state/basket_universe_v1.fits.state.json")
+        );
     }
-}
 
-struct TeeWriterGuard<'a>(&'a std::sync::Mutex<std::fs::File>);
-
-impl<'a> Write for TeeWriterGuard<'a> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        std::io::stderr().write_all(buf)?;
-        self.0.lock().unwrap().write_all(buf)?;
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        std::io::stderr().flush()?;
-        self.0.lock().unwrap().flush()
+    #[test]
+    fn suffix_preserves_state_extension() {
+        let path = path_with_suffix(
+            Path::new("data/state/basket_universe_v1.fits.state.json"),
+            "leadership-rule-v1",
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("data/state/basket_universe_v1.fits.state.leadership-rule-v1.json")
+        );
     }
 }

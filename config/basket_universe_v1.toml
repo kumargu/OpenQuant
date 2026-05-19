@@ -9,8 +9,7 @@
 #   chosen — dual-OOS lift +0.58 / +2.59 vs no-gate baseline, mean +1.03,
 #   12 baskets always rejected for single-name dominance.
 #
-# Differences vs the prior frozen v1 (`basket_universe_v1.toml`, removed
-# in the same PR):
+# Differences vs the prior frozen basket universe:
 #   - mining sector dropped (cointegration fragile across gold / steel /
 #     aggregates macro drivers; metals replacement deferred to a later
 #     frozen revision).
@@ -114,8 +113,8 @@ hl_derived_max_hold = false # DO NOT derive max_hold from half-life
 pair_engine_reuse = false   # DO NOT port by adapting PairsEngine / PairConfig
 
 [runner]
-# Issue #321 baseline cell — last RTH bar (production behavior).
-# Variants in sibling files override this for the timing sweep.
+# Last RTH bar production behavior. Kept here for universe compatibility;
+# basket paper/live currently make decisions from the session-close trigger.
 decision_offset_minutes_before_close = 0
 
 [runner.portfolio]
