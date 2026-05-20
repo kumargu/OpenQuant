@@ -791,16 +791,57 @@ async fn check_order_set_affordability(
     let equity = parse_equity(&account)?;
     let (current_long_gross, current_short_gross) = gross_by_side(current_shares, closes);
     let (target_long_gross, target_short_gross) = gross_by_side(target_shares, closes);
-    let incremental_long = (target_long_gross - current_long_gross).max(0.0);
-    let incremental_short = (target_short_gross - current_short_gross).max(0.0);
-    let incremental_exposure = incremental_long + incremental_short;
     let target_gross = target_long_gross + target_short_gross;
     let current_gross = current_long_gross + current_short_gross;
+    let gross_delta = target_gross - current_gross;
+    let peak_gross = peak_gross_during_order_path(current_shares, orders, closes);
+    let incremental_exposure = (peak_gross - current_gross).max(0.0);
     let order_turnover: f64 = orders
         .iter()
         .filter_map(|o| closes.get(&o.symbol).map(|p| p * o.qty as f64))
         .sum();
+    let top_share_deltas = top_abs_share_deltas(current_shares, target_shares, closes, 8);
+    let (opens, closes_count, increases, reductions, flips) =
+        order_flow_breakdown(current_shares, target_shares);
     if incremental_exposure > buying_power + 1.0 {
+        if target_gross <= current_gross + 1.0 {
+            bug!(
+                "affordability_failure_while_degrossing",
+                date = %date,
+                equity = %format!("{:.0}", equity),
+                current_gross = %format!("{:.0}", current_gross),
+                target_gross = %format!("{:.0}", target_gross),
+                peak_gross = %format!("{:.0}", peak_gross),
+                gross_delta = %format!("{:+.0}", gross_delta),
+                incremental_exposure_notional = %format!("{:.0}", incremental_exposure),
+                buying_power = %format!("{:.0}", buying_power),
+                opens,
+                closes = closes_count,
+                increases,
+                reductions,
+                flips,
+                top_share_deltas = ?top_share_deltas,
+                "affordability failed even though target gross did not increase"
+            );
+        } else {
+            warn!(
+                date = %date,
+                equity = %format!("{:.0}", equity),
+                current_gross = %format!("{:.0}", current_gross),
+                target_gross = %format!("{:.0}", target_gross),
+                peak_gross = %format!("{:.0}", peak_gross),
+                gross_delta = %format!("{:+.0}", gross_delta),
+                incremental_exposure_notional = %format!("{:.0}", incremental_exposure),
+                buying_power = %format!("{:.0}", buying_power),
+                opens,
+                closes = closes_count,
+                increases,
+                reductions,
+                flips,
+                top_share_deltas = ?top_share_deltas,
+                "affordability failed while expanding exposure"
+            );
+        }
         return Err(format!(
             "incremental exposure {:.2} exceeds Alpaca buying power {:.2} on {} (equity {:.2}, current_gross {:.2}, target_gross {:.2})",
             incremental_exposure, buying_power, date, equity, current_gross, target_gross
@@ -815,11 +856,17 @@ async fn check_order_set_affordability(
         target_long_gross = %format!("{:.0}", target_long_gross),
         target_short_gross = %format!("{:.0}", target_short_gross),
         target_gross = %format!("{:.0}", target_gross),
-        incremental_long_notional = %format!("{:.0}", incremental_long),
-        incremental_short_notional = %format!("{:.0}", incremental_short),
+        peak_gross = %format!("{:.0}", peak_gross),
         incremental_exposure_notional = %format!("{:.0}", incremental_exposure),
         order_turnover_notional = %format!("{:.0}", order_turnover),
         buying_power = %format!("{:.0}", buying_power),
+        gross_delta = %format!("{:+.0}", gross_delta),
+        opens,
+        closes = closes_count,
+        increases,
+        reductions,
+        flips,
+        top_share_deltas = ?top_share_deltas,
         "order-set affordability check passed"
     );
     Ok(())
@@ -840,6 +887,107 @@ fn gross_by_side(shares: &HashMap<String, f64>, closes: &HashMap<String, f64>) -
         }
     }
     (long_gross, short_gross)
+}
+
+fn top_abs_share_deltas(
+    current_shares: &HashMap<String, f64>,
+    target_shares: &HashMap<String, f64>,
+    closes: &HashMap<String, f64>,
+    limit: usize,
+) -> Vec<String> {
+    let mut symbols: HashSet<String> = current_shares.keys().cloned().collect();
+    symbols.extend(target_shares.keys().cloned());
+    let mut deltas: Vec<(f64, String)> = symbols
+        .into_iter()
+        .filter_map(|symbol| {
+            let price = *closes.get(&symbol)?;
+            let current = *current_shares.get(&symbol).unwrap_or(&0.0);
+            let target = *target_shares.get(&symbol).unwrap_or(&0.0);
+            let delta = target - current;
+            if delta.abs() < f64::EPSILON {
+                return None;
+            }
+            let current_notional = current * price;
+            let target_notional = target * price;
+            let delta_notional = delta * price;
+            Some((
+                delta_notional.abs(),
+                format!(
+                    "{symbol}:{current:.0}->{target:.0} shares ({current_notional:.0}->{target_notional:.0}, delta {delta_notional:+.0})"
+                ),
+            ))
+        })
+        .collect();
+    deltas.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    deltas
+        .into_iter()
+        .take(limit)
+        .map(|(_, text)| text)
+        .collect()
+}
+
+fn order_flow_breakdown(
+    current_shares: &HashMap<String, f64>,
+    target_shares: &HashMap<String, f64>,
+) -> (usize, usize, usize, usize, usize) {
+    let mut symbols: HashSet<String> = current_shares.keys().cloned().collect();
+    symbols.extend(target_shares.keys().cloned());
+
+    let mut opens = 0usize;
+    let mut closes = 0usize;
+    let mut increases = 0usize;
+    let mut reductions = 0usize;
+    let mut flips = 0usize;
+
+    for symbol in symbols {
+        let current = *current_shares.get(&symbol).unwrap_or(&0.0);
+        let target = *target_shares.get(&symbol).unwrap_or(&0.0);
+        if (target - current).abs() < f64::EPSILON {
+            continue;
+        }
+        if current.abs() < f64::EPSILON && target.abs() > f64::EPSILON {
+            opens += 1;
+        } else if target.abs() < f64::EPSILON && current.abs() > f64::EPSILON {
+            closes += 1;
+        } else if current.signum() != target.signum() {
+            flips += 1;
+        } else if target.abs() > current.abs() {
+            increases += 1;
+        } else {
+            reductions += 1;
+        }
+    }
+
+    (opens, closes, increases, reductions, flips)
+}
+
+fn gross_notional(shares: &HashMap<String, f64>, closes: &HashMap<String, f64>) -> f64 {
+    shares
+        .iter()
+        .filter_map(|(symbol, qty)| closes.get(symbol).map(|price| qty.abs() * price))
+        .sum()
+}
+
+fn peak_gross_during_order_path(
+    current_shares: &HashMap<String, f64>,
+    orders: &[OrderIntent],
+    closes: &HashMap<String, f64>,
+) -> f64 {
+    let mut simulated = current_shares.clone();
+    let mut peak = gross_notional(&simulated, closes);
+    for order in orders {
+        let signed_delta = match order.side {
+            Side::Buy => order.qty as f64,
+            Side::Sell => -(order.qty as f64),
+        };
+        let entry = simulated.entry(order.symbol.clone()).or_insert(0.0);
+        *entry += signed_delta;
+        if entry.abs() < f64::EPSILON {
+            simulated.remove(&order.symbol);
+        }
+        peak = peak.max(gross_notional(&simulated, closes));
+    }
+    peak
 }
 
 fn summarize_orders_by_side(
@@ -3664,7 +3812,7 @@ mod tests {
     }
 
     #[test]
-    fn test_incremental_gross_logic_allows_self_financing_rotation_shape() {
+    fn test_peak_gross_logic_allows_self_financing_rotation_shape() {
         let mut current: HashMap<String, f64> = HashMap::new();
         current.insert("AMD".to_string(), 100.0);
         let mut target: HashMap<String, f64> = HashMap::new();
@@ -3672,38 +3820,44 @@ mod tests {
         let mut closes: HashMap<String, f64> = HashMap::new();
         closes.insert("AMD".to_string(), 100.0);
         closes.insert("NVDA".to_string(), 200.0);
+        let orders = staged_diff_to_orders(&current, &target);
+        let peak_gross = peak_gross_during_order_path(&current, &orders, &closes);
 
-        let (current_long, current_short) = gross_by_side(&current, &closes);
-        let (target_long, target_short) = gross_by_side(&target, &closes);
-        let incremental_exposure =
-            (target_long - current_long).max(0.0) + (target_short - current_short).max(0.0);
-
-        assert_eq!(current_long, 10_000.0);
-        assert_eq!(current_short, 0.0);
-        assert_eq!(target_long, 10_000.0);
-        assert_eq!(target_short, 0.0);
-        assert_eq!(incremental_exposure, 0.0);
+        assert_eq!(gross_notional(&current, &closes), 10_000.0);
+        assert_eq!(peak_gross, 10_000.0);
     }
 
     #[test]
-    fn test_incremental_exposure_counts_long_to_short_reversal() {
+    fn test_peak_gross_logic_allows_long_to_short_reversal_after_close() {
         let mut current: HashMap<String, f64> = HashMap::new();
         current.insert("AMD".to_string(), 100.0);
         let mut target: HashMap<String, f64> = HashMap::new();
         target.insert("AMD".to_string(), -100.0);
         let mut closes: HashMap<String, f64> = HashMap::new();
         closes.insert("AMD".to_string(), 100.0);
+        let orders = staged_diff_to_orders(&current, &target);
+        let peak_gross = peak_gross_during_order_path(&current, &orders, &closes);
 
-        let (current_long, current_short) = gross_by_side(&current, &closes);
-        let (target_long, target_short) = gross_by_side(&target, &closes);
-        let incremental_exposure =
-            (target_long - current_long).max(0.0) + (target_short - current_short).max(0.0);
+        assert_eq!(orders.len(), 2);
+        assert_eq!(gross_notional(&current, &closes), 10_000.0);
+        assert_eq!(peak_gross, 10_000.0);
+    }
 
-        assert_eq!(current_long, 10_000.0);
-        assert_eq!(current_short, 0.0);
-        assert_eq!(target_long, 0.0);
-        assert_eq!(target_short, 10_000.0);
-        assert_eq!(incremental_exposure, 10_000.0);
+    #[test]
+    fn test_peak_gross_logic_counts_new_exposure_after_flatten() {
+        let mut current: HashMap<String, f64> = HashMap::new();
+        current.insert("AMD".to_string(), 100.0);
+        let mut target: HashMap<String, f64> = HashMap::new();
+        target.insert("AMD".to_string(), -100.0);
+        target.insert("NVDA".to_string(), 50.0);
+        let mut closes: HashMap<String, f64> = HashMap::new();
+        closes.insert("AMD".to_string(), 100.0);
+        closes.insert("NVDA".to_string(), 300.0);
+        let orders = staged_diff_to_orders(&current, &target);
+        let peak_gross = peak_gross_during_order_path(&current, &orders, &closes);
+
+        assert_eq!(gross_notional(&current, &closes), 10_000.0);
+        assert_eq!(peak_gross, 25_000.0);
     }
 
     #[test]
