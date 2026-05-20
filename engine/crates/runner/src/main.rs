@@ -415,6 +415,11 @@ struct BasketFitArgs {
     #[arg(long)]
     bars_dir: Option<PathBuf>,
 
+    /// Build the fit artifact using data strictly before this date.
+    /// Useful for replay-era analysis so fits cannot peek into the window.
+    #[arg(long)]
+    as_of: Option<chrono::NaiveDate>,
+
     /// Output fit artifact path. Defaults to `<universe>.fits.json`.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -1273,11 +1278,19 @@ fn run_freeze_basket_fits(args: BasketFitArgs) {
     info!(
         universe = %universe_path.display(),
         bars_dir = %bars_dir.display(),
+        as_of = ?args.as_of,
         out = %out.display(),
         "========== FREEZE BASKET FITS =========="
     );
 
-    let artifact = match basket_fits::build_live_fit_artifact(&universe_path, &bars_dir) {
+    let artifact_result = match args.as_of {
+        Some(as_of) => {
+            basket_fits::build_replay_fit_artifact_as_of(&universe_path, &bars_dir, as_of)
+        }
+        None => basket_fits::build_live_fit_artifact(&universe_path, &bars_dir),
+    };
+
+    let artifact = match artifact_result {
         Ok(a) => a,
         Err(e) => {
             error!(error = %e, "failed to build basket fit artifact");
