@@ -148,11 +148,6 @@ struct StreamArgs {
     #[arg(long)]
     universe: Option<PathBuf>,
 
-    /// Optional alternate basket universe TOML selected when the regime-switch
-    /// signal is ON at startup.
-    #[arg(long)]
-    alternate_universe: Option<PathBuf>,
-
     /// Directory containing per-symbol 1-min parquets. Required when --engine basket.
     /// Defaults to $QUANT_DATA_DIR if set, else `~/quant-data/bars/v3_sp500_2024-2026_1min_adjusted`.
     #[arg(long)]
@@ -173,24 +168,6 @@ struct StreamArgs {
     #[arg(long)]
     fit_artifact: Option<PathBuf>,
 
-    /// Optional basket regime-switch symbol set used to decide whether to
-    /// launch the primary universe or `--alternate-universe`.
-    #[arg(long, value_delimiter = ',')]
-    regime_switch_symbols: Vec<String>,
-
-    /// Activate the alternate universe when the regime-switch basket's 5d
-    /// equal-weight return is at or above this threshold.
-    #[arg(long)]
-    regime_switch_ret5d_threshold: Option<f64>,
-
-    /// Activate the alternate universe when the regime-switch basket's breadth
-    /// fraction above SMA is at or above this threshold.
-    #[arg(long)]
-    regime_switch_breadth_threshold: Option<f64>,
-
-    /// Breadth lookback window in trading days for the regime-switch basket.
-    #[arg(long)]
-    regime_switch_sma_window: Option<usize>,
 
     /// Persisted basket engine state. Defaults to `<fit-artifact>.state.json`.
     #[arg(long)]
@@ -309,11 +286,6 @@ struct ReplayArgs {
     #[arg(long)]
     universe: Option<PathBuf>,
 
-    /// Optional alternate basket universe TOML selected when the regime-switch
-    /// signal is ON at startup.
-    #[arg(long)]
-    alternate_universe: Option<PathBuf>,
-
     /// Directory containing per-symbol 1-min parquets. Required when --engine basket.
     /// Defaults to $QUANT_DATA_DIR if set, else /Users/$USER/quant-data/bars/v3_sp500_2024-2026_1min_adjusted
     #[arg(long)]
@@ -362,24 +334,6 @@ struct ReplayArgs {
     #[arg(long)]
     report_tsv: Option<PathBuf>,
 
-    /// Optional basket regime-switch symbol set used to decide whether to
-    /// launch the primary universe or `--alternate-universe`.
-    #[arg(long, value_delimiter = ',')]
-    regime_switch_symbols: Vec<String>,
-
-    /// Activate the alternate universe when the regime-switch basket's 5d
-    /// equal-weight return is at or above this threshold.
-    #[arg(long)]
-    regime_switch_ret5d_threshold: Option<f64>,
-
-    /// Activate the alternate universe when the regime-switch basket's breadth
-    /// fraction above SMA is at or above this threshold.
-    #[arg(long)]
-    regime_switch_breadth_threshold: Option<f64>,
-
-    /// Breadth lookback window in trading days for the regime-switch basket.
-    #[arg(long)]
-    regime_switch_sma_window: Option<usize>,
 
     /// Ignore leadership overlay defaults from the universe TOML for this run.
     #[arg(long, default_value_t = false)]
@@ -529,22 +483,6 @@ struct LeadershipOverlayBuildArgs<'a> {
     long_only_leverage: f64,
 }
 
-struct UniverseSwitchArgs<'a> {
-    primary_universe_path: &'a Path,
-    alternate_universe_path: Option<&'a Path>,
-    regime_switch_symbols: &'a [String],
-    regime_switch_ret5d_threshold: Option<f64>,
-    regime_switch_breadth_threshold: Option<f64>,
-    regime_switch_sma_window: Option<usize>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RegimeSignalMetrics {
-    ret5d: f64,
-    breadth: f64,
-    ret_symbol_count: usize,
-    breadth_symbol_count: usize,
-}
 
 fn resolve_stream_execution(
     requested: Option<&str>,
@@ -824,160 +762,6 @@ fn build_leadership_overlay_config(
     })
 }
 
-fn maybe_resolve_regime_switch_universe(
-    bars_dir: &Path,
-    as_of: chrono::NaiveDate,
-    args: UniverseSwitchArgs<'_>,
-) -> PathBuf {
-    let primary = args.primary_universe_path.to_path_buf();
-    let Some(alternate) = args.alternate_universe_path else {
-        return primary;
-    };
-
-    let has_switch_overrides = !args.regime_switch_symbols.is_empty()
-        || args.regime_switch_ret5d_threshold.is_some()
-        || args.regime_switch_breadth_threshold.is_some()
-        || args.regime_switch_sma_window.is_some();
-    if !has_switch_overrides {
-        return primary;
-    }
-
-    if args.regime_switch_symbols.is_empty()
-        || args.regime_switch_ret5d_threshold.is_none()
-        || args.regime_switch_breadth_threshold.is_none()
-    {
-        error!(
-            "regime switch requires --alternate-universe, --regime-switch-symbols, --regime-switch-ret5d-threshold, and --regime-switch-breadth-threshold"
-        );
-        std::process::exit(2);
-    }
-
-    let ret5d_threshold = args.regime_switch_ret5d_threshold.unwrap();
-    let breadth_threshold = args.regime_switch_breadth_threshold.unwrap();
-    let sma_window = args.regime_switch_sma_window.unwrap_or(20);
-    if !ret5d_threshold.is_finite() {
-        error!("regime-switch ret5d threshold must be finite");
-        std::process::exit(2);
-    }
-    if !breadth_threshold.is_finite() || !(0.0..=1.0).contains(&breadth_threshold) {
-        error!("regime-switch breadth threshold must be finite and in [0, 1]");
-        std::process::exit(2);
-    }
-    if sma_window == 0 {
-        error!("regime-switch SMA window must be > 0");
-        std::process::exit(2);
-    }
-
-    let switch_window_days = (sma_window.max(20) + 10) as i64;
-    let closes = match crate::basket_live::load_warmup_closes_as_of(
-        bars_dir,
-        args.regime_switch_symbols,
-        switch_window_days,
-        as_of,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(
-                error = %e,
-                universe = %primary.display(),
-                alternate_universe = %alternate.display(),
-                "regime-switch warmup load failed — staying on primary universe"
-            );
-            return primary;
-        }
-    };
-
-    let Some(metrics) = compute_regime_signal_metrics(
-        &closes,
-        args.regime_switch_symbols,
-        sma_window,
-    ) else {
-        warn!(
-            symbols = args.regime_switch_symbols.len(),
-            universe = %primary.display(),
-            alternate_universe = %alternate.display(),
-            "regime-switch signal had insufficient history — staying on primary universe"
-        );
-        return primary;
-    };
-
-    let switch_on = metrics.ret5d >= ret5d_threshold && metrics.breadth >= breadth_threshold;
-    info!(
-        as_of = %as_of,
-        primary_universe = %primary.display(),
-        alternate_universe = %alternate.display(),
-        switch_symbols = ?args.regime_switch_symbols,
-        ret5d = %format!("{:+.4}", metrics.ret5d),
-        breadth = %format!("{:.4}", metrics.breadth),
-        ret_symbol_count = metrics.ret_symbol_count,
-        breadth_symbol_count = metrics.breadth_symbol_count,
-        ret5d_threshold = %format!("{:+.4}", ret5d_threshold),
-        breadth_threshold = %format!("{:.4}", breadth_threshold),
-        sma_window,
-        switch_on,
-        "basket regime-switch evaluated"
-    );
-
-    if switch_on {
-        alternate.to_path_buf()
-    } else {
-        primary
-    }
-}
-
-fn compute_regime_signal_metrics(
-    closes: &std::collections::HashMap<String, Vec<(chrono::NaiveDate, f64)>>,
-    switch_symbols: &[String],
-    sma_window: usize,
-) -> Option<RegimeSignalMetrics> {
-    if sma_window == 0 {
-        return None;
-    }
-
-    let mut ret_sum = 0.0;
-    let mut ret_count = 0usize;
-    let mut breadth_count = 0usize;
-    let mut breadth_above = 0usize;
-
-    for symbol in switch_symbols {
-        let Some(series) = closes.get(symbol) else {
-            continue;
-        };
-        if series.len() >= 6 {
-            let last = series.last().map(|(_, px)| *px).unwrap_or(0.0);
-            let base = series[series.len() - 6].1;
-            if last.is_finite() && base.is_finite() && last > 0.0 && base > 0.0 {
-                ret_sum += last / base - 1.0;
-                ret_count += 1;
-            }
-        }
-        if series.len() >= sma_window {
-            let last = series.last().map(|(_, px)| *px).unwrap_or(0.0);
-            let sma = series[series.len() - sma_window..]
-                .iter()
-                .map(|(_, px)| *px)
-                .sum::<f64>()
-                / sma_window as f64;
-            if last.is_finite() && sma.is_finite() && last > 0.0 && sma > 0.0 {
-                breadth_count += 1;
-                if last > sma {
-                    breadth_above += 1;
-                }
-            }
-        }
-    }
-
-    if ret_count == 0 || breadth_count == 0 {
-        return None;
-    }
-
-    Some(RegimeSignalMetrics {
-        ret5d: ret_sum / ret_count as f64,
-        breadth: breadth_above as f64 / breadth_count as f64,
-        ret_symbol_count: ret_count,
-        breadth_symbol_count: breadth_count,
-    })
-}
 
 fn leadership_overlay_fingerprint(cfg: &basket_live::LeadershipOverlayConfig) -> String {
     let mode = match cfg.mode {
@@ -1247,7 +1031,7 @@ async fn main() {
 // ── Basket live/paper dispatch ──────────────────────────────────────
 
 async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
-    let requested_universe_path = args
+    let universe_path = args
         .universe
         .clone()
         .or_else(|| args.engine.universe_path().map(PathBuf::from))
@@ -1264,18 +1048,6 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
                 PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
             })
     });
-    let universe_path = maybe_resolve_regime_switch_universe(
-        &bars_dir,
-        chrono::Utc::now().date_naive(),
-        UniverseSwitchArgs {
-            primary_universe_path: &requested_universe_path,
-            alternate_universe_path: args.alternate_universe.as_deref(),
-            regime_switch_symbols: &args.regime_switch_symbols,
-            regime_switch_ret5d_threshold: args.regime_switch_ret5d_threshold,
-            regime_switch_breadth_threshold: args.regime_switch_breadth_threshold,
-            regime_switch_sma_window: args.regime_switch_sma_window,
-        },
-    );
     let fit_artifact_path = args
         .fit_artifact
         .clone()
@@ -2112,7 +1884,7 @@ fn log_intent(intent: &openquant_core::pairs::PairOrderIntent, side: &str) {
 // entirely at the call site.
 
 async fn run_basket_replay_live_path(args: ReplayArgs) {
-    let requested_universe_path = args
+    let universe_path = args
         .universe
         .clone()
         .or_else(|| args.engine.universe_path().map(PathBuf::from))
@@ -2144,19 +1916,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         error!(start = %start, end = %end, "--end must be on or after --start");
         std::process::exit(1);
     }
-
-    let universe_path = maybe_resolve_regime_switch_universe(
-        &bars_dir,
-        start,
-        UniverseSwitchArgs {
-            primary_universe_path: &requested_universe_path,
-            alternate_universe_path: args.alternate_universe.as_deref(),
-            regime_switch_symbols: &args.regime_switch_symbols,
-            regime_switch_ret5d_threshold: args.regime_switch_ret5d_threshold,
-            regime_switch_breadth_threshold: args.regime_switch_breadth_threshold,
-            regime_switch_sma_window: args.regime_switch_sma_window,
-        },
-    );
 
     // Replay state isolation: never touch the live default state path.
     let state_path = args.state_path.clone().unwrap_or_else(|| {
@@ -2449,8 +2208,6 @@ fn cleanup_old_engine_logs(journal_dir: &Path, retention_days: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
-    use std::collections::HashMap;
 
     #[test]
     fn stream_state_defaults_under_data_state() {
@@ -2476,46 +2233,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compute_regime_signal_metrics_turns_on_for_strong_breadth_and_return() {
-        let mut closes: HashMap<String, Vec<(NaiveDate, f64)>> = HashMap::new();
-        let mk = |vals: &[f64]| {
-            vals.iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    (
-                        NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
-                            + chrono::Days::new(i as u64),
-                        *v,
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        closes.insert("A".to_string(), mk(&[
-            100.0, 101.0, 102.0, 103.0, 104.0, 110.0, 111.0, 112.0, 113.0, 114.0,
-            115.0, 116.0, 117.0, 118.0, 119.0, 120.0, 121.0, 122.0, 123.0, 124.0,
-            125.0,
-        ]));
-        closes.insert("B".to_string(), mk(&[
-            50.0, 50.5, 51.0, 51.5, 52.0, 55.0, 55.5, 56.0, 56.5, 57.0, 57.5, 58.0,
-            58.5, 59.0, 59.5, 60.0, 60.5, 61.0, 61.5, 62.0, 62.5,
-        ]));
-        let symbols = vec!["A".to_string(), "B".to_string()];
-        let metrics = compute_regime_signal_metrics(&closes, &symbols, 20).unwrap();
-        assert!(metrics.ret5d > 0.02);
-        assert_eq!(metrics.breadth, 1.0);
-    }
-
-    #[test]
-    fn compute_regime_signal_metrics_returns_none_without_enough_history() {
-        let closes: HashMap<String, Vec<(NaiveDate, f64)>> = HashMap::from([(
-            "A".to_string(),
-            vec![
-                (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 100.0),
-                (NaiveDate::from_ymd_opt(2026, 1, 2).unwrap(), 101.0),
-            ],
-        )]);
-        let symbols = vec!["A".to_string()];
-        assert!(compute_regime_signal_metrics(&closes, &symbols, 20).is_none());
-    }
 }
