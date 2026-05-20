@@ -34,7 +34,8 @@ use std::sync::RwLock as StdRwLock;
 
 use arrow::array::{Array, Float64Array, TimestampMicrosecondArray};
 use basket_engine::PortfolioConfig;
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Timelike, Utc};
+use chrono_tz::America::New_York;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -57,6 +58,12 @@ pub struct ReplayComponents {
     pub session_trigger: BarDrivenSessionTrigger,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayExecutionTime {
+    Close,
+    TenThirtyEt,
+}
+
 /// Bar source that reads per-symbol parquet files in `bars_dir` and
 /// emits their RTH bars in chronological order.
 pub struct ParquetBarSource {
@@ -64,6 +71,7 @@ pub struct ParquetBarSource {
     start: NaiveDate,
     end: NaiveDate,
     closes: SharedCloses,
+    execution_time: ReplayExecutionTime,
     channels: StdRwLock<Option<ReplayChannels>>,
 }
 
@@ -86,10 +94,22 @@ impl BarSource for ParquetBarSource {
         let start = self.start;
         let end = self.end;
         let closes = self.closes.clone();
+        let execution_time = self.execution_time;
         let symbols: Vec<String> = symbols.to_vec();
 
         tokio::spawn(async move {
-            if let Err(e) = emit_loop(&bars_dir, start, end, &symbols, tx, channels, closes).await {
+            if let Err(e) = emit_loop(
+                &bars_dir,
+                start,
+                end,
+                &symbols,
+                tx,
+                channels,
+                closes,
+                execution_time,
+            )
+            .await
+            {
                 warn!(error = %e, "parquet replay emitter terminated with error");
             }
         });
@@ -107,6 +127,7 @@ pub fn new_replay_components(
     end: NaiveDate,
     portfolio_config: &PortfolioConfig,
     broker_config: crate::simulated_broker::SimulatedBrokerConfig,
+    execution_time: ReplayExecutionTime,
 ) -> ReplayComponents {
     // Initial clock = start of the first session in the window. Updated
     // by the emitter task as bars flow.
@@ -121,6 +142,7 @@ pub fn new_replay_components(
         start,
         end,
         closes,
+        execution_time,
         channels: StdRwLock::new(Some(channels)),
     };
 
@@ -192,12 +214,14 @@ async fn emit_loop(
     bar_tx: mpsc::Sender<StreamBar>,
     mut channels: ReplayChannels,
     closes: SharedCloses,
+    execution_time: ReplayExecutionTime,
 ) -> Result<(), String> {
     info!(
         bars_dir = %bars_dir.display(),
         start = %start,
         end = %end,
         symbol_count = symbols.len(),
+        execution_time = ?execution_time,
         "replay emit loop starting"
     );
 
@@ -246,6 +270,7 @@ async fn emit_loop(
     }
 
     let mut current_date: Option<NaiveDate> = None;
+    let mut current_date_signaled = false;
     let mut bars_emitted: u64 = 0;
 
     while let Some(entry) = heap.pop() {
@@ -279,13 +304,16 @@ async fn emit_loop(
         // races would land fills at prices the engine never saw.
         if let Some(prev_date) = current_date {
             if bar_date != prev_date {
-                drain_signal_and_wait_ack(
-                    &bar_tx,
-                    &channels.session_tx,
-                    &mut channels.done_rx,
-                    prev_date,
-                )
-                .await;
+                if !current_date_signaled {
+                    drain_signal_and_wait_ack(
+                        &bar_tx,
+                        &channels.session_tx,
+                        &mut channels.done_rx,
+                        prev_date,
+                    )
+                    .await;
+                }
+                current_date_signaled = false;
             }
         }
         current_date = Some(bar_date);
@@ -320,6 +348,17 @@ async fn emit_loop(
             return Ok(());
         }
         bars_emitted += 1;
+
+        if !current_date_signaled && replay_trigger_due(execution_time, dt_open) {
+            drain_signal_and_wait_ack(
+                &bar_tx,
+                &channels.session_tx,
+                &mut channels.done_rx,
+                bar_date,
+            )
+            .await;
+            current_date_signaled = true;
+        }
     }
 
     // Final session: signal close for the last date AND wait for the
@@ -327,19 +366,61 @@ async fn emit_loop(
     // happen against the last day's snapshot, not a half-overwritten
     // SharedCloses.
     if let Some(last_date) = current_date {
-        drain_signal_and_wait_ack(
-            &bar_tx,
-            &channels.session_tx,
-            &mut channels.done_rx,
-            last_date,
-        )
-        .await;
+        if !current_date_signaled {
+            drain_signal_and_wait_ack(
+                &bar_tx,
+                &channels.session_tx,
+                &mut channels.done_rx,
+                last_date,
+            )
+            .await;
+        }
     }
 
     info!(bars_emitted, "replay emit loop drained");
     // Senders dropped here → channels close → basket_live exits via
     // session_trigger.next() returning None.
     Ok(())
+}
+
+fn replay_trigger_due(execution_time: ReplayExecutionTime, dt_open: DateTime<Utc>) -> bool {
+    match execution_time {
+        ReplayExecutionTime::Close => false,
+        ReplayExecutionTime::TenThirtyEt => {
+            let dt_close = dt_open + Duration::minutes(1);
+            let local = dt_close.with_timezone(&New_York);
+            local.hour() == 10 && local.minute() == 30
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ten_thirty_trigger_fires_on_bar_closing_at_1030_et_in_winter() {
+        let dt_open = Utc.with_ymd_and_hms(2026, 1, 15, 15, 29, 0).unwrap();
+        assert!(replay_trigger_due(
+            ReplayExecutionTime::TenThirtyEt,
+            dt_open
+        ));
+    }
+
+    #[test]
+    fn ten_thirty_trigger_fires_on_bar_closing_at_1030_et_in_summer() {
+        let dt_open = Utc.with_ymd_and_hms(2026, 7, 1, 14, 29, 0).unwrap();
+        assert!(replay_trigger_due(
+            ReplayExecutionTime::TenThirtyEt,
+            dt_open
+        ));
+    }
+
+    #[test]
+    fn close_mode_never_fires_intraday() {
+        let dt_open = Utc.with_ymd_and_hms(2026, 1, 15, 15, 29, 0).unwrap();
+        assert!(!replay_trigger_due(ReplayExecutionTime::Close, dt_open));
+    }
 }
 
 /// Wait for the bar channel to drain, signal the session-close trigger

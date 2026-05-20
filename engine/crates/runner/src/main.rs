@@ -333,6 +333,12 @@ struct ReplayArgs {
     #[arg(long)]
     report_tsv: Option<PathBuf>,
 
+    /// Basket replay only: when to run the daily decision/fill cycle.
+    /// `close` preserves the current behavior. `ten-thirty-et` is an
+    /// experimental replay-only timing mode.
+    #[arg(long, value_enum, default_value_t = ReplayExecutionTimeArg::Close)]
+    replay_execution_time: ReplayExecutionTimeArg,
+
     /// Ignore leadership overlay defaults from the universe TOML for this run.
     #[arg(long, default_value_t = false)]
     disable_leadership_overlay: bool,
@@ -427,6 +433,12 @@ enum LeadershipPickerArg {
     RuleV1,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplayExecutionTimeArg {
+    Close,
+    TenThirtyEt,
+}
+
 impl From<LeadershipPickerArg> for basket_overlay_picker::BasketOverlayPickerKind {
     fn from(value: LeadershipPickerArg) -> Self {
         match value {
@@ -441,6 +453,17 @@ impl From<UniverseLeadershipPickerConfig> for LeadershipPickerArg {
         match value {
             UniverseLeadershipPickerConfig::Fixed => Self::Fixed,
             UniverseLeadershipPickerConfig::RuleV1 => Self::RuleV1,
+        }
+    }
+}
+
+impl From<ReplayExecutionTimeArg> for parquet_bar_source::ReplayExecutionTime {
+    fn from(value: ReplayExecutionTimeArg) -> Self {
+        match value {
+            ReplayExecutionTimeArg::Close => parquet_bar_source::ReplayExecutionTime::Close,
+            ReplayExecutionTimeArg::TenThirtyEt => {
+                parquet_bar_source::ReplayExecutionTime::TenThirtyEt
+            }
         }
     }
 }
@@ -2041,6 +2064,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         state_path = %state_path.display(),
         start = %start,
         end = %end,
+        replay_execution_time = ?args.replay_execution_time,
         capital = portfolio_config.capital,
         leverage = portfolio_config.leverage,
         n_active_baskets = portfolio_config.n_active_baskets,
@@ -2062,6 +2086,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         end,
         &portfolio_config,
         broker_config,
+        args.replay_execution_time.into(),
     );
     let parquet_bar_source::ReplayComponents {
         bar_source,
