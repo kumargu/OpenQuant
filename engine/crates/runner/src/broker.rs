@@ -68,4 +68,11 @@ impl Broker for AlpacaClient {
     async fn get_account(&self, execution: ExecutionMode) -> Result<AlpacaAccount, String> {
         AlpacaClient::get_account(self, execution).await
     }
+
+    fn reconciliation_delay_secs(&self) -> u64 {
+        // Paper/live MOC-style orders can remain accepted for a while after the
+        // close before positions reflect the fills. Give Alpaca more time than
+        // replay's synchronous broker path before judging reconciliation.
+        120
+    }
 }

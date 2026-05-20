@@ -870,6 +870,10 @@ fn summarize_orders_by_side(
     (buy_count, sell_count, buy_notional, sell_notional)
 }
 
+fn order_status_indicates_fill(status: &str) -> bool {
+    matches!(status, "filled" | "partially_filled" | "partially-filled")
+}
+
 fn order_reason_fields(reason: &basket_engine::OrderReason) -> (&'static str, Option<&str>) {
     match reason {
         basket_engine::OrderReason::Entry { basket_id } => ("entry", Some(basket_id.as_str())),
@@ -2393,6 +2397,7 @@ async fn process_session_close(
             }
             let mut accepted_orders = 0usize;
             let mut failed_orders = 0usize;
+            let mut accepted_unfilled_orders = 0usize;
             for (seq, order) in orders.iter().enumerate() {
                 log_order(order, execution.label());
                 let side_str = match order.side {
@@ -2416,6 +2421,9 @@ async fn process_session_close(
                             "ORDER PLACED"
                         );
                         accepted_orders += 1;
+                        if !order_status_indicates_fill(o.status.as_str()) {
+                            accepted_unfilled_orders += 1;
+                        }
                         if let Some(journal) = journal {
                             journal.record_order_event(&BasketOrderEvent {
                                 run_id,
@@ -2503,11 +2511,25 @@ async fn process_session_close(
                         } else {
                             0.0
                         };
+                        let settlement_pending = accepted_unfilled_orders > 0
+                            && target_positions_len > 0
+                            && actual_shares.is_empty();
                         actual_gross = Some(actual_gross_value);
                         divergence_pct = Some(divergence_pct_value);
                         current_positions_after = actual_shares.len();
                         current_shares_after_json = Some(serialize_shares_map(&actual_shares));
-                        if divergence_pct_value > 10.0 {
+                        if settlement_pending {
+                            warn!(
+                                date = %date,
+                                target_gross = %format!("{:.0}", target_gross),
+                                actual_gross = %format!("{:.0}", actual_gross_value),
+                                divergence_pct = %format!("{:.1}", divergence_pct_value),
+                                accepted_orders,
+                                accepted_unfilled_orders,
+                                broker_positions = actual_shares.len(),
+                                "post-submission reconciliation is still waiting for broker fills to settle"
+                            );
+                        } else if divergence_pct_value > 10.0 {
                             bug!(
                                 "post_submit_gross_divergence",
                                 date = %date,
@@ -2515,6 +2537,7 @@ async fn process_session_close(
                                 actual_gross = %format!("{:.0}", actual_gross_value),
                                 divergence_pct = %format!("{:.1}", divergence_pct_value),
                                 accepted_orders,
+                                accepted_unfilled_orders,
                                 failed_orders,
                                 broker_positions = actual_shares.len(),
                                 "BROKER DIVERGENCE: actual gross differs from target by >10%"
