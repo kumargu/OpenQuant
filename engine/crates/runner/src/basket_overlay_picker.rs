@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BasketOverlayMode {
-    Baseline,
+    BasketOnly,
     SuppressShorts,
     ReplaceWithLongOnly,
     AddCappedLongSleeve,
@@ -13,7 +13,7 @@ pub enum BasketOverlayMode {
 impl BasketOverlayMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Baseline => "baseline",
+            Self::BasketOnly => "basket_only",
             Self::SuppressShorts => "suppress_shorts",
             Self::ReplaceWithLongOnly => "replace_with_long_only",
             Self::AddCappedLongSleeve => "add_capped_long_sleeve",
@@ -34,7 +34,7 @@ pub struct BasketOverlayPickerFeatures {
     pub leadership_short_conflict_ratio: f64,
     pub strategy_return_20d: f64,
     pub strategy_drawdown_20d: f64,
-    pub baseline_scale_if_sleeve: f64,
+    pub basket_only_scale_if_sleeve: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,9 +47,9 @@ pub struct BasketOverlayPickerDecision {
 }
 
 impl BasketOverlayPickerDecision {
-    pub fn baseline(reason: &'static str) -> Self {
+    pub fn basket_only(reason: &'static str) -> Self {
         Self {
-            mode: BasketOverlayMode::Baseline,
+            mode: BasketOverlayMode::BasketOnly,
             reason,
             active_sectors: HashSet::new(),
             long_symbols: Vec::new(),
@@ -62,8 +62,8 @@ impl BasketOverlayPickerDecision {
         reason: &'static str,
         features: &BasketOverlayPickerFeatures,
     ) -> Self {
-        if mode == BasketOverlayMode::Baseline {
-            return Self::baseline(reason);
+        if mode == BasketOverlayMode::BasketOnly {
+            return Self::basket_only(reason);
         }
         Self {
             mode,
@@ -91,15 +91,15 @@ pub trait BasketOverlayPicker {
 }
 
 #[derive(Debug, Default)]
-pub struct BaselineOverlayPicker;
+pub struct BasketOnlyOverlayPicker;
 
-impl BasketOverlayPicker for BaselineOverlayPicker {
+impl BasketOverlayPicker for BasketOnlyOverlayPicker {
     fn id(&self) -> &'static str {
-        "baseline"
+        "basket_only"
     }
 
     fn decide(&mut self, _features: &BasketOverlayPickerFeatures) -> BasketOverlayPickerDecision {
-        BasketOverlayPickerDecision::baseline("no_picker_configured")
+        BasketOverlayPickerDecision::basket_only("no_picker_configured")
     }
 }
 
@@ -135,8 +135,8 @@ pub struct RuleV1OverlayPickerConfig {
     pub recovered_return_threshold: f64,
     pub recovered_drawdown_threshold: f64,
     pub sleeve_return_ceiling: f64,
-    pub min_baseline_scale_for_sleeve: f64,
-    pub opportunistic_sleeve_min_baseline_scale: f64,
+    pub min_basket_only_scale_for_sleeve: f64,
+    pub opportunistic_sleeve_min_basket_only_scale: f64,
     pub opportunistic_sleeve_return_ceiling: f64,
     pub halve_sleeve_drawdown_threshold: f64,
     pub quarter_sleeve_drawdown_threshold: f64,
@@ -154,8 +154,8 @@ impl Default for RuleV1OverlayPickerConfig {
             recovered_return_threshold: 0.03,
             recovered_drawdown_threshold: 0.03,
             sleeve_return_ceiling: 0.03,
-            min_baseline_scale_for_sleeve: 0.70,
-            opportunistic_sleeve_min_baseline_scale: 0.85,
+            min_basket_only_scale_for_sleeve: 0.70,
+            opportunistic_sleeve_min_basket_only_scale: 0.85,
             opportunistic_sleeve_return_ceiling: 0.10,
             halve_sleeve_drawdown_threshold: 0.05,
             quarter_sleeve_drawdown_threshold: 0.10,
@@ -175,7 +175,7 @@ impl RuleV1OverlayPicker {
     pub fn new(config: RuleV1OverlayPickerConfig) -> Self {
         Self {
             config,
-            current_mode: BasketOverlayMode::Baseline,
+            current_mode: BasketOverlayMode::BasketOnly,
             dwell_remaining_days: 0,
             off_signal_days: 0,
         }
@@ -196,13 +196,13 @@ impl RuleV1OverlayPicker {
     }
 
     fn sleeve_allowed(&self, features: &BasketOverlayPickerFeatures) -> bool {
-        features.baseline_scale_if_sleeve >= self.config.min_baseline_scale_for_sleeve
+        features.basket_only_scale_if_sleeve >= self.config.min_basket_only_scale_for_sleeve
             && (self.strategy_weak(features)
                 || features.strategy_return_20d <= self.config.sleeve_return_ceiling)
     }
 
     fn opportunistic_sleeve_allowed(&self, features: &BasketOverlayPickerFeatures) -> bool {
-        features.baseline_scale_if_sleeve >= self.config.opportunistic_sleeve_min_baseline_scale
+        features.basket_only_scale_if_sleeve >= self.config.opportunistic_sleeve_min_basket_only_scale
             && features.strategy_return_20d <= self.config.opportunistic_sleeve_return_ceiling
             && features.leadership_short_conflict_ratio < self.config.suppress_conflict_on_threshold
     }
@@ -264,10 +264,10 @@ impl BasketOverlayPicker for RuleV1OverlayPicker {
 
         let leadership_on = Self::leadership_on(features);
         match self.current_mode {
-            BasketOverlayMode::Baseline => {
+            BasketOverlayMode::BasketOnly => {
                 self.off_signal_days = 0;
                 if !leadership_on {
-                    return BasketOverlayPickerDecision::baseline("no_leadership");
+                    return BasketOverlayPickerDecision::basket_only("no_leadership");
                 }
                 let material_short_conflict = features.leadership_short_conflict_ratio
                     >= self.config.suppress_conflict_on_threshold;
@@ -289,9 +289,9 @@ impl BasketOverlayPicker for RuleV1OverlayPicker {
                             .with_sleeve_scale(self.sleeve_scale(features));
                     }
                     if !self.strategy_weak(features) {
-                        return BasketOverlayPickerDecision::baseline("leadership_basket_healthy");
+                        return BasketOverlayPickerDecision::basket_only("leadership_basket_healthy");
                     }
-                    return BasketOverlayPickerDecision::baseline("sleeve_crowds_baseline");
+                    return BasketOverlayPickerDecision::basket_only("sleeve_crowds_basket_only");
                 }
                 self.enter(
                     BasketOverlayMode::AddCappedLongSleeve,
@@ -310,9 +310,9 @@ impl BasketOverlayPicker for RuleV1OverlayPicker {
                     self.off_signal_days = 0;
                 }
                 if self.off_signal_days >= self.config.off_confirmation_days {
-                    self.current_mode = BasketOverlayMode::Baseline;
+                    self.current_mode = BasketOverlayMode::BasketOnly;
                     self.off_signal_days = 0;
-                    return BasketOverlayPickerDecision::baseline("suppress_signal_cleared");
+                    return BasketOverlayPickerDecision::basket_only("suppress_signal_cleared");
                 }
                 self.hold("suppress_signal_still_active", features)
             }
@@ -323,23 +323,23 @@ impl BasketOverlayPicker for RuleV1OverlayPicker {
                     self.off_signal_days = 0;
                 }
                 if self.off_signal_days >= self.config.off_confirmation_days {
-                    self.current_mode = BasketOverlayMode::Baseline;
+                    self.current_mode = BasketOverlayMode::BasketOnly;
                     self.off_signal_days = 0;
-                    return BasketOverlayPickerDecision::baseline("sleeve_signal_cleared");
+                    return BasketOverlayPickerDecision::basket_only("sleeve_signal_cleared");
                 }
                 self.hold("sleeve_signal_still_active", features)
                     .with_sleeve_scale(self.sleeve_scale(features))
             }
             BasketOverlayMode::ReplaceWithLongOnly => {
-                self.current_mode = BasketOverlayMode::Baseline;
-                BasketOverlayPickerDecision::baseline("replace_not_allowed")
+                self.current_mode = BasketOverlayMode::BasketOnly;
+                BasketOverlayPickerDecision::basket_only("replace_not_allowed")
             }
         }
     }
 }
 
 pub enum BasketOverlayPickerHandle {
-    Baseline(BaselineOverlayPicker),
+    BasketOnly(BasketOnlyOverlayPicker),
     Fixed(FixedOverlayPicker),
     RuleV1(RuleV1OverlayPicker),
 }
@@ -354,7 +354,7 @@ impl BasketOverlayPickerHandle {
             BasketOverlayPickerKind::Fixed => configured_mode
                 .map(FixedOverlayPicker::new)
                 .map(Self::Fixed)
-                .unwrap_or_else(|| Self::Baseline(BaselineOverlayPicker)),
+                .unwrap_or_else(|| Self::BasketOnly(BasketOnlyOverlayPicker)),
             BasketOverlayPickerKind::RuleV1 => {
                 Self::RuleV1(RuleV1OverlayPicker::new(rule_v1_config.unwrap_or_default()))
             }
@@ -380,7 +380,7 @@ impl BasketOverlayPickerHandle {
                 *picker = rule_state;
                 Ok(true)
             }
-            (Self::Baseline(_), None) | (Self::Fixed(_), None) => Ok(true),
+            (Self::BasketOnly(_), None) | (Self::Fixed(_), None) => Ok(true),
             _ => Ok(false),
         }
     }
@@ -394,7 +394,7 @@ impl BasketOverlayPickerHandle {
             picker_id: self.id().to_string(),
             rule_v1: match self {
                 Self::RuleV1(picker) => Some(picker.clone()),
-                Self::Baseline(_) | Self::Fixed(_) => None,
+                Self::BasketOnly(_) | Self::Fixed(_) => None,
             },
         };
         let content = serde_json::to_string_pretty(&state)
@@ -416,7 +416,7 @@ struct BasketOverlayPickerState {
 impl BasketOverlayPicker for BasketOverlayPickerHandle {
     fn id(&self) -> &'static str {
         match self {
-            Self::Baseline(picker) => picker.id(),
+            Self::BasketOnly(picker) => picker.id(),
             Self::Fixed(picker) => picker.id(),
             Self::RuleV1(picker) => picker.id(),
         }
@@ -424,7 +424,7 @@ impl BasketOverlayPicker for BasketOverlayPickerHandle {
 
     fn decide(&mut self, features: &BasketOverlayPickerFeatures) -> BasketOverlayPickerDecision {
         match self {
-            Self::Baseline(picker) => picker.decide(features),
+            Self::BasketOnly(picker) => picker.decide(features),
             Self::Fixed(picker) => picker.decide(features),
             Self::RuleV1(picker) => picker.decide(features),
         }
@@ -436,20 +436,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn baseline_picker_ignores_feature_payload() {
+    fn basket_only_picker_ignores_feature_payload() {
         let features = BasketOverlayPickerFeatures {
             active_sectors: HashSet::from(["chips".to_string()]),
             long_symbols: vec!["NVDA".to_string()],
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.0,
             strategy_drawdown_20d: 0.0,
-            baseline_scale_if_sleeve: 1.0,
+            basket_only_scale_if_sleeve: 1.0,
         };
 
-        let mut picker = BaselineOverlayPicker;
+        let mut picker = BasketOnlyOverlayPicker;
         let decision = picker.decide(&features);
 
-        assert_eq!(decision.mode, BasketOverlayMode::Baseline);
+        assert_eq!(decision.mode, BasketOverlayMode::BasketOnly);
         assert!(decision.active_sectors.is_empty());
         assert!(decision.long_symbols.is_empty());
     }
@@ -462,7 +462,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.0,
             strategy_drawdown_20d: 0.0,
-            baseline_scale_if_sleeve: 1.0,
+            basket_only_scale_if_sleeve: 1.0,
         };
 
         let mut picker = FixedOverlayPicker::new(BasketOverlayMode::AddCappedLongSleeve);
@@ -488,7 +488,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.25,
             strategy_return_20d: 0.10,
             strategy_drawdown_20d: 0.0,
-            baseline_scale_if_sleeve: 1.0,
+            basket_only_scale_if_sleeve: 1.0,
         };
 
         let decision = picker.decide(&features);
@@ -512,7 +512,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: -0.02,
             strategy_drawdown_20d: 0.06,
-            baseline_scale_if_sleeve: 0.75,
+            basket_only_scale_if_sleeve: 0.75,
         };
 
         let decision = picker.decide(&features);
@@ -522,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn rule_v1_stays_baseline_when_basket_is_healthy() {
+    fn rule_v1_stays_basket_only_when_basket_is_healthy() {
         let mut picker = RuleV1OverlayPicker::new(RuleV1OverlayPickerConfig {
             min_dwell_days: 0,
             off_confirmation_days: 2,
@@ -536,12 +536,12 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.07,
             strategy_drawdown_20d: 0.01,
-            baseline_scale_if_sleeve: 0.75,
+            basket_only_scale_if_sleeve: 0.75,
         };
 
         let decision = picker.decide(&features);
 
-        assert_eq!(decision.mode, BasketOverlayMode::Baseline);
+        assert_eq!(decision.mode, BasketOverlayMode::BasketOnly);
         assert_eq!(decision.reason, "leadership_basket_healthy");
     }
 
@@ -558,7 +558,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.10,
             strategy_return_20d: 0.08,
             strategy_drawdown_20d: 0.01,
-            baseline_scale_if_sleeve: 0.90,
+            basket_only_scale_if_sleeve: 0.90,
         };
 
         let decision = picker.decide(&features);
@@ -580,12 +580,12 @@ mod tests {
             leadership_short_conflict_ratio: 0.10,
             strategy_return_20d: 0.12,
             strategy_drawdown_20d: 0.01,
-            baseline_scale_if_sleeve: 0.90,
+            basket_only_scale_if_sleeve: 0.90,
         };
 
         let decision = picker.decide(&features);
 
-        assert_eq!(decision.mode, BasketOverlayMode::Baseline);
+        assert_eq!(decision.mode, BasketOverlayMode::BasketOnly);
         assert_eq!(decision.reason, "leadership_basket_healthy");
     }
 
@@ -602,7 +602,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.18,
             strategy_return_20d: 0.08,
             strategy_drawdown_20d: 0.01,
-            baseline_scale_if_sleeve: 0.90,
+            basket_only_scale_if_sleeve: 0.90,
         };
 
         let decision = picker.decide(&features);
@@ -624,7 +624,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: -0.02,
             strategy_drawdown_20d: 0.04,
-            baseline_scale_if_sleeve: 0.90,
+            basket_only_scale_if_sleeve: 0.90,
         };
         let recovered_features = BasketOverlayPickerFeatures {
             active_sectors: HashSet::from(["faang".to_string()]),
@@ -632,7 +632,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.12,
             strategy_drawdown_20d: 0.0,
-            baseline_scale_if_sleeve: 0.90,
+            basket_only_scale_if_sleeve: 0.90,
         };
 
         assert_eq!(
@@ -660,7 +660,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.25,
             strategy_return_20d: -0.01,
             strategy_drawdown_20d: 0.04,
-            baseline_scale_if_sleeve: 0.90,
+            basket_only_scale_if_sleeve: 0.90,
         };
 
         let decision = picker.decide(&features);
@@ -682,7 +682,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.02,
             strategy_drawdown_20d: 0.08,
-            baseline_scale_if_sleeve: 0.90,
+            basket_only_scale_if_sleeve: 0.90,
         };
 
         let decision = picker.decide(&features);
@@ -704,7 +704,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: -0.02,
             strategy_drawdown_20d: 0.08,
-            baseline_scale_if_sleeve: 0.90,
+            basket_only_scale_if_sleeve: 0.90,
         };
 
         let decision = picker.decide(&features);
@@ -723,7 +723,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.25,
             strategy_return_20d: 0.08,
             strategy_drawdown_20d: 0.01,
-            baseline_scale_if_sleeve: 0.75,
+            basket_only_scale_if_sleeve: 0.75,
         };
         let mut picker =
             BasketOverlayPickerHandle::from_kind(BasketOverlayPickerKind::RuleV1, None, None);

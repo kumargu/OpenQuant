@@ -6,7 +6,7 @@
 # Frozen: 2026-05-04
 # Research basis: issue #321 frozen-rule walk-forward across 4 OOS blocks
 #   (2024-07 -> 2026-03), 5 variants compared. dom060 (this file) was
-#   chosen — dual-OOS lift +0.58 / +2.59 vs no-gate baseline, mean +1.03,
+#   chosen — dual-OOS lift +0.58 / +2.59 vs no-gate basket-only reference, mean +1.03,
 #   12 baskets always rejected for single-name dominance.
 #
 # Differences vs the prior frozen basket universe:
@@ -28,17 +28,13 @@
 #   1. Re-running the walk-forward across the 4 OOS blocks.
 #   2. Opening a GitHub issue describing the change and the experimental
 #      evidence that justified it.
-#   3. Updating the baseline metrics below.
+#   3. Updating the reference metrics below.
 # ----------------------------------------------------------------------
 
 [version]
 schema = "basket_universe"
 version = "v1"
 frozen_at = "2026-05-04"
-baseline_sharpe_point = 2.31
-baseline_ci_95_lo = 1.64
-baseline_ci_95_hi = 3.08
-baseline_ci_method = "walk-forward across 4 OOS blocks; min/max as CI bounds"
 
 [strategy]
 method = "basket_spread_ou_bertram"
@@ -134,7 +130,6 @@ off_breadth5d_threshold = 0.5
 persistence_days = 2
 min_hold_days = 3
 picker = "rule_v1"
-mode = "baseline"
 long_only_leverage = 1.0
 
 [runner.leadership_overlay.rule_v1]
@@ -147,8 +142,8 @@ drawdown_on_threshold = 0.05
 recovered_return_threshold = 0.03
 recovered_drawdown_threshold = 0.03
 sleeve_return_ceiling = 0.03
-min_baseline_scale_for_sleeve = 0.70
-opportunistic_sleeve_min_baseline_scale = 0.85
+min_basket_only_scale_for_sleeve = 0.70
+opportunistic_sleeve_min_basket_only_scale = 0.85
 opportunistic_sleeve_return_ceiling = 0.10
 halve_sleeve_drawdown_threshold = 0.05
 quarter_sleeve_drawdown_threshold = 0.10

@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS basket_picker_decisions (
     leadership_short_conflict_ratio REAL NOT NULL,
     strategy_return_20d REAL NOT NULL,
     strategy_drawdown_20d REAL NOT NULL,
-    baseline_scale_if_sleeve REAL NOT NULL,
+    basket_only_scale_if_sleeve REAL NOT NULL,
     sleeve_leverage_scale REAL NOT NULL DEFAULT 1.0,
     created_at_utc TEXT NOT NULL
 );
@@ -202,7 +202,7 @@ pub struct BasketPickerDecisionRecord<'a> {
     pub leadership_short_conflict_ratio: f64,
     pub strategy_return_20d: f64,
     pub strategy_drawdown_20d: f64,
-    pub baseline_scale_if_sleeve: f64,
+    pub basket_only_scale_if_sleeve: f64,
     pub sleeve_leverage_scale: f64,
 }
 
@@ -373,7 +373,7 @@ impl BasketJournal {
                 run_id, trading_day, picker_id, mode, reason,
                 active_sectors_json, active_symbols_json,
                 leadership_short_conflict_ratio, strategy_return_20d,
-                strategy_drawdown_20d, baseline_scale_if_sleeve,
+                strategy_drawdown_20d, basket_only_scale_if_sleeve,
                 sleeve_leverage_scale, created_at_utc
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
@@ -387,7 +387,7 @@ impl BasketJournal {
                 rec.leadership_short_conflict_ratio,
                 rec.strategy_return_20d,
                 rec.strategy_drawdown_20d,
-                rec.baseline_scale_if_sleeve,
+                rec.basket_only_scale_if_sleeve,
                 rec.sleeve_leverage_scale,
                 Utc::now().to_rfc3339(),
             ],
@@ -454,14 +454,14 @@ mod tests {
                 run_id: "run-1",
                 trading_day: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap(),
                 picker_id: "rule_v1",
-                mode: "baseline",
+                mode: "basket_only",
                 reason: "no_leadership",
                 active_sectors_json: "[]".to_string(),
                 active_symbols_json: "[]".to_string(),
                 leadership_short_conflict_ratio: 0.0,
                 strategy_return_20d: 0.0,
                 strategy_drawdown_20d: 0.0,
-                baseline_scale_if_sleeve: 1.0,
+                basket_only_scale_if_sleeve: 1.0,
                 sleeve_leverage_scale: 1.0,
             })
             .unwrap();

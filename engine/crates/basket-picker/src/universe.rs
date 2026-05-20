@@ -15,14 +15,6 @@ pub struct VersionInfo {
     pub schema: String,
     pub version: String,
     pub frozen_at: String,
-    #[serde(default)]
-    pub baseline_sharpe_point: Option<f64>,
-    #[serde(default)]
-    pub baseline_ci_95_lo: Option<f64>,
-    #[serde(default)]
-    pub baseline_ci_95_hi: Option<f64>,
-    #[serde(default)]
-    pub baseline_ci_method: Option<String>,
 }
 
 /// Strategy configuration from the universe file.
@@ -70,7 +62,7 @@ fn default_runner_picker() -> RunnerLeadershipPickerConfig {
 }
 
 fn default_runner_overlay_mode() -> RunnerLeadershipOverlayModeConfig {
-    RunnerLeadershipOverlayModeConfig::Baseline
+    RunnerLeadershipOverlayModeConfig::BasketOnly
 }
 
 fn default_runner_long_only_leverage() -> f64 {
@@ -129,11 +121,11 @@ fn default_rule_v1_sleeve_return_ceiling() -> f64 {
     0.03
 }
 
-fn default_rule_v1_min_baseline_scale_for_sleeve() -> f64 {
+fn default_rule_v1_min_basket_only_scale_for_sleeve() -> f64 {
     0.70
 }
 
-fn default_rule_v1_opportunistic_sleeve_min_baseline_scale() -> f64 {
+fn default_rule_v1_opportunistic_sleeve_min_basket_only_scale() -> f64 {
     0.85
 }
 
@@ -206,8 +198,8 @@ pub enum RunnerLeadershipPickerConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum RunnerLeadershipOverlayModeConfig {
     #[default]
-    #[serde(rename = "baseline")]
-    Baseline,
+    #[serde(rename = "basket_only")]
+    BasketOnly,
     #[serde(rename = "suppress_shorts", alias = "suppress-shorts")]
     SuppressShorts,
     #[serde(rename = "replace_with_long_only", alias = "replace-with-long-only")]
@@ -236,10 +228,10 @@ pub struct RunnerRuleV1OverlayConfig {
     pub recovered_drawdown_threshold: f64,
     #[serde(default = "default_rule_v1_sleeve_return_ceiling")]
     pub sleeve_return_ceiling: f64,
-    #[serde(default = "default_rule_v1_min_baseline_scale_for_sleeve")]
-    pub min_baseline_scale_for_sleeve: f64,
-    #[serde(default = "default_rule_v1_opportunistic_sleeve_min_baseline_scale")]
-    pub opportunistic_sleeve_min_baseline_scale: f64,
+    #[serde(default = "default_rule_v1_min_basket_only_scale_for_sleeve")]
+    pub min_basket_only_scale_for_sleeve: f64,
+    #[serde(default = "default_rule_v1_opportunistic_sleeve_min_basket_only_scale")]
+    pub opportunistic_sleeve_min_basket_only_scale: f64,
     #[serde(default = "default_rule_v1_opportunistic_sleeve_return_ceiling")]
     pub opportunistic_sleeve_return_ceiling: f64,
     #[serde(default = "default_rule_v1_halve_sleeve_drawdown_threshold")]
@@ -260,9 +252,9 @@ impl Default for RunnerRuleV1OverlayConfig {
             recovered_return_threshold: default_rule_v1_recovered_return_threshold(),
             recovered_drawdown_threshold: default_rule_v1_recovered_drawdown_threshold(),
             sleeve_return_ceiling: default_rule_v1_sleeve_return_ceiling(),
-            min_baseline_scale_for_sleeve: default_rule_v1_min_baseline_scale_for_sleeve(),
-            opportunistic_sleeve_min_baseline_scale:
-                default_rule_v1_opportunistic_sleeve_min_baseline_scale(),
+            min_basket_only_scale_for_sleeve: default_rule_v1_min_basket_only_scale_for_sleeve(),
+            opportunistic_sleeve_min_basket_only_scale:
+                default_rule_v1_opportunistic_sleeve_min_basket_only_scale(),
             opportunistic_sleeve_return_ceiling:
                 default_rule_v1_opportunistic_sleeve_return_ceiling(),
             halve_sleeve_drawdown_threshold: default_rule_v1_halve_sleeve_drawdown_threshold(),
@@ -490,7 +482,6 @@ sectors = ["chips"]
 on_ret5d_threshold = 0.02
 on_breadth5d_threshold = 0.56
 picker = "rule_v1"
-mode = "baseline"
 long_only_leverage = 1.0
 "#;
 

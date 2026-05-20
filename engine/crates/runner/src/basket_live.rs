@@ -250,7 +250,7 @@ impl SectorLeadershipTracker {
         let mut sectors = self.config.sectors.clone();
         sectors.sort();
         let mode = match self.config.mode {
-            BasketOverlayMode::Baseline => "baseline",
+            BasketOverlayMode::BasketOnly => "basket_only",
             BasketOverlayMode::SuppressShorts => "suppress_shorts",
             BasketOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
             BasketOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
@@ -490,17 +490,17 @@ fn leadership_picker_features(
         leadership_short_conflict_ratio: 0.0,
         strategy_return_20d: equity_features.return_20d,
         strategy_drawdown_20d: equity_features.drawdown_20d,
-        baseline_scale_if_sleeve: 1.0,
+        basket_only_scale_if_sleeve: 1.0,
     }
 }
 
-fn add_baseline_plan_features(
+fn add_basket_only_plan_features(
     mut features: BasketOverlayPickerFeatures,
-    baseline_notionals: &HashMap<String, f64>,
+    basket_only_notionals: &HashMap<String, f64>,
     portfolio_config: &PortfolioConfig,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
 ) -> BasketOverlayPickerFeatures {
-    let gross = baseline_notionals
+    let gross = basket_only_notionals
         .values()
         .map(|notional| notional.abs())
         .sum::<f64>();
@@ -510,7 +510,7 @@ fn add_baseline_plan_features(
     }
     let leadership_symbols: HashSet<&str> =
         features.long_symbols.iter().map(String::as_str).collect();
-    let conflict = baseline_notionals
+    let conflict = basket_only_notionals
         .iter()
         .filter(|(symbol, notional)| {
             **notional < 0.0 && leadership_symbols.contains(symbol.as_str())
@@ -518,30 +518,30 @@ fn add_baseline_plan_features(
         .map(|(_symbol, notional)| notional.abs())
         .sum::<f64>();
     features.leadership_short_conflict_ratio = conflict / gross;
-    features.baseline_scale_if_sleeve =
-        baseline_scale_if_sleeve(baseline_notionals, portfolio_config, leadership_overlay);
+    features.basket_only_scale_if_sleeve =
+        basket_only_scale_if_sleeve(basket_only_notionals, portfolio_config, leadership_overlay);
     features
 }
 
-fn baseline_scale_if_sleeve(
-    baseline_notionals: &HashMap<String, f64>,
+fn basket_only_scale_if_sleeve(
+    basket_only_notionals: &HashMap<String, f64>,
     portfolio_config: &PortfolioConfig,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
 ) -> f64 {
     let Some(cfg) = leadership_overlay else {
         return 1.0;
     };
-    let baseline_gross = baseline_notionals
+    let basket_only_gross = basket_only_notionals
         .values()
         .map(|notional| notional.abs())
         .sum::<f64>();
-    if baseline_gross <= 0.0 {
+    if basket_only_gross <= 0.0 {
         return 1.0;
     }
     let gross_cap = portfolio_config.capital * portfolio_config.leverage;
     let sleeve_budget = (cfg.long_only_leverage * portfolio_config.capital).min(gross_cap);
-    let baseline_budget = (gross_cap - sleeve_budget).max(0.0);
-    (baseline_budget / baseline_gross).clamp(0.0, 1.0)
+    let basket_only_budget = (gross_cap - sleeve_budget).max(0.0);
+    (basket_only_budget / basket_only_gross).clamp(0.0, 1.0)
 }
 
 fn engine_flatten_baskets_for_plan(
@@ -1294,7 +1294,7 @@ pub async fn run_basket_live(
             persistence_days = cfg.persistence_days,
             min_hold_days = cfg.min_hold_days,
             configured_overlay_mode = match cfg.mode {
-                BasketOverlayMode::Baseline => "baseline",
+                BasketOverlayMode::BasketOnly => "basket_only",
                 BasketOverlayMode::SuppressShorts => "suppress_shorts",
                 BasketOverlayMode::ReplaceWithLongOnly => "replace_with_long_only",
                 BasketOverlayMode::AddCappedLongSleeve => "add_capped_long_sleeve",
@@ -2103,24 +2103,24 @@ async fn process_session_close(
     // Portfolio layer: apply active-basket admission first, then convert
     // admitted target notionals to target shares. Suppression is planned on
     // a clone so the core basket engine state remains intact.
-    let baseline_plan = plan_portfolio(engine, &effective_portfolio_config);
-    let baseline_features = add_baseline_plan_features(
+    let basket_only_plan = plan_portfolio(engine, &effective_portfolio_config);
+    let basket_only_features = add_basket_only_plan_features(
         picker_features,
-        &baseline_plan.symbol_notionals,
+        &basket_only_plan.symbol_notionals,
         &effective_portfolio_config,
         leadership_overlay,
     );
-    let picker_decision = overlay_picker.decide(&baseline_features);
+    let picker_decision = overlay_picker.decide(&basket_only_features);
     let leadership_active_sectors = &picker_decision.active_sectors;
     let leadership_long_symbols = &picker_decision.long_symbols;
-    if leadership_overlay.is_none() && picker_decision.mode != BasketOverlayMode::Baseline {
+    if leadership_overlay.is_none() && picker_decision.mode != BasketOverlayMode::BasketOnly {
         bug!(
             "overlay_mode_without_config",
             date = %date,
             picker_id = overlay_picker.id(),
             picker_mode = picker_decision.mode.as_str(),
             picker_reason = picker_decision.reason,
-            "overlay picker selected a non-baseline mode without leadership overlay config"
+            "overlay picker selected a non-basket-only mode without leadership overlay config"
         );
         return Err(format!(
             "overlay picker selected {} without leadership overlay config",
@@ -2134,10 +2134,10 @@ async fn process_session_close(
         picker_reason = picker_decision.reason,
         leadership_active_sectors = ?leadership_active_sectors,
         leadership_symbols_active = leadership_long_symbols.len(),
-        leadership_short_conflict_ratio = %format!("{:.4}", baseline_features.leadership_short_conflict_ratio),
-        strategy_return_20d = %format!("{:.4}", baseline_features.strategy_return_20d),
-        strategy_drawdown_20d = %format!("{:.4}", baseline_features.strategy_drawdown_20d),
-        baseline_scale_if_sleeve = %format!("{:.4}", baseline_features.baseline_scale_if_sleeve),
+        leadership_short_conflict_ratio = %format!("{:.4}", basket_only_features.leadership_short_conflict_ratio),
+        strategy_return_20d = %format!("{:.4}", basket_only_features.strategy_return_20d),
+        strategy_drawdown_20d = %format!("{:.4}", basket_only_features.strategy_drawdown_20d),
+        basket_only_scale_if_sleeve = %format!("{:.4}", basket_only_features.basket_only_scale_if_sleeve),
         sleeve_leverage_scale = %format!("{:.4}", picker_decision.sleeve_leverage_scale),
         "basket overlay picker decision"
     );
@@ -2152,10 +2152,10 @@ async fn process_session_close(
             reason: picker_decision.reason,
             active_sectors_json: serialize_string_vec(&active_sectors),
             active_symbols_json: serialize_string_vec(leadership_long_symbols),
-            leadership_short_conflict_ratio: baseline_features.leadership_short_conflict_ratio,
-            strategy_return_20d: baseline_features.strategy_return_20d,
-            strategy_drawdown_20d: baseline_features.strategy_drawdown_20d,
-            baseline_scale_if_sleeve: baseline_features.baseline_scale_if_sleeve,
+            leadership_short_conflict_ratio: basket_only_features.leadership_short_conflict_ratio,
+            strategy_return_20d: basket_only_features.strategy_return_20d,
+            strategy_drawdown_20d: basket_only_features.strategy_drawdown_20d,
+            basket_only_scale_if_sleeve: basket_only_features.basket_only_scale_if_sleeve,
             sleeve_leverage_scale: picker_decision.sleeve_leverage_scale,
         })?;
     }
@@ -2166,7 +2166,7 @@ async fn process_session_close(
         Vec::new()
     };
     let plan = if suppressed_baskets.is_empty() {
-        baseline_plan
+        basket_only_plan
     } else {
         let mut planning_engine = engine.clone();
         planning_engine.flatten_baskets(&suppressed_baskets);
@@ -2184,7 +2184,7 @@ async fn process_session_close(
     let using_capped_long_sleeve =
         matches!(picker_decision.mode, BasketOverlayMode::AddCappedLongSleeve)
             && !leadership_long_symbols.is_empty();
-    let baseline_target_notionals = plan.symbol_notionals.clone();
+    let basket_only_target_notionals = plan.symbol_notionals.clone();
     let target_notionals = if using_long_replacement {
         leadership_long_only_notionals(
             closes,
@@ -2198,7 +2198,7 @@ async fn process_session_close(
         let sleeve_leverage = leadership_overlay
             .map(|cfg| cfg.long_only_leverage * picker_decision.sleeve_leverage_scale)
             .unwrap_or(0.0);
-        let baseline_gross = baseline_target_notionals
+        let basket_only_gross = basket_only_target_notionals
             .values()
             .map(|notional| notional.abs())
             .sum::<f64>();
@@ -2206,30 +2206,30 @@ async fn process_session_close(
             .map(|_| sleeve_leverage * effective_portfolio_config.capital)
             .unwrap_or(0.0)
             .min(effective_portfolio_config.capital * effective_portfolio_config.leverage);
-        let baseline_budget = (effective_portfolio_config.capital
+        let basket_only_budget = (effective_portfolio_config.capital
             * effective_portfolio_config.leverage
             - sleeve_budget)
             .max(0.0);
-        let baseline_scale = if baseline_gross > 0.0 {
-            (baseline_budget / baseline_gross).clamp(0.0, 1.0)
+        let basket_only_scale = if basket_only_gross > 0.0 {
+            (basket_only_budget / basket_only_gross).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        let scaled_baseline = scale_notionals(&baseline_target_notionals, baseline_scale);
+        let scaled_basket_only = scale_notionals(&basket_only_target_notionals, basket_only_scale);
         let sleeve_notionals = leadership_long_only_notionals(
             closes,
             leadership_long_symbols,
             effective_portfolio_config.capital,
             sleeve_leverage,
         );
-        merge_notionals(&scaled_baseline, &sleeve_notionals)
+        merge_notionals(&scaled_basket_only, &sleeve_notionals)
     } else {
         plan.symbol_notionals.clone()
     };
     if using_long_replacement || using_capped_long_sleeve {
-        let (baseline_gross_long, baseline_gross_short, baseline_max_abs, _) =
-            summarize_notionals(&baseline_target_notionals);
-        let baseline_gross_notional = baseline_gross_long + baseline_gross_short.abs();
+        let (basket_only_gross_long, basket_only_gross_short, basket_only_max_abs, _) =
+            summarize_notionals(&basket_only_target_notionals);
+        let basket_only_gross_notional = basket_only_gross_long + basket_only_gross_short.abs();
         info!(
             date = %date,
             leadership_active_sectors = ?leadership_active_sectors,
@@ -2242,16 +2242,16 @@ async fn process_session_close(
             } else {
                 "add_capped_long_sleeve"
             },
-            baseline_selected_baskets = plan.selected_baskets.len(),
-            baseline_selected_baskets_sample = ?plan.selected_baskets.iter().take(8).collect::<Vec<_>>(),
-            baseline_targets = baseline_target_notionals.len(),
-            baseline_gross_long = %format!("{:.0}", baseline_gross_long),
-            baseline_gross_short = %format!("{:.0}", baseline_gross_short),
-            baseline_gross_notional = %format!("{:.0}", baseline_gross_notional),
-            baseline_max_abs_leg = %format!("{:.0}", baseline_max_abs),
-            baseline_top_abs_legs = ?top_abs_notional_legs(&baseline_target_notionals, 6),
+            basket_only_selected_baskets = plan.selected_baskets.len(),
+            basket_only_selected_baskets_sample = ?plan.selected_baskets.iter().take(8).collect::<Vec<_>>(),
+            basket_only_targets = basket_only_target_notionals.len(),
+            basket_only_gross_long = %format!("{:.0}", basket_only_gross_long),
+            basket_only_gross_short = %format!("{:.0}", basket_only_gross_short),
+            basket_only_gross_notional = %format!("{:.0}", basket_only_gross_notional),
+            basket_only_max_abs_leg = %format!("{:.0}", basket_only_max_abs),
+            basket_only_top_abs_legs = ?top_abs_notional_legs(&basket_only_target_notionals, 6),
             overlay_top_abs_legs = ?top_abs_notional_legs(&target_notionals, 6),
-            "leadership overlay transformed baseline basket portfolio"
+            "leadership overlay transformed basket-only basket portfolio"
         );
     }
     let engine_flatten_baskets =
@@ -2290,8 +2290,8 @@ async fn process_session_close(
     info!(
         date = %date,
         leadership_mode = match picker_decision.mode {
-            BasketOverlayMode::Baseline if leadership_overlay.is_none() => "disabled",
-            BasketOverlayMode::Baseline => "baseline",
+            BasketOverlayMode::BasketOnly if leadership_overlay.is_none() => "disabled",
+            BasketOverlayMode::BasketOnly => "basket_only",
             BasketOverlayMode::SuppressShorts if !leadership_active_sectors.is_empty() => "suppress_shorts",
             BasketOverlayMode::SuppressShorts => "suppress_shorts_inactive",
             BasketOverlayMode::ReplaceWithLongOnly if using_long_replacement => "replace_with_long_only",
@@ -2335,7 +2335,7 @@ async fn process_session_close(
             admitted = plan.selected_baskets.len(),
             excluded = plan.excluded_baskets.len(),
             excluded_sample = ?plan.excluded_baskets.iter().take(10).collect::<Vec<_>>(),
-            "active-basket cap excluded baskets from the baseline target portfolio"
+            "active-basket cap excluded baskets from the basket-only target portfolio"
         );
     } else {
         info!(
@@ -3292,7 +3292,7 @@ mod tests {
     }
 
     #[test]
-    fn test_baseline_scale_if_sleeve_respects_gross_budget() {
+    fn test_basket_only_scale_if_sleeve_respects_gross_budget() {
         let portfolio_config = PortfolioConfig {
             capital: 10_000.0,
             leverage: 4.0,
@@ -3306,7 +3306,7 @@ mod tests {
             off_breadth5d_threshold: 0.5,
             persistence_days: 2,
             min_hold_days: 3,
-            mode: BasketOverlayMode::Baseline,
+            mode: BasketOverlayMode::BasketOnly,
             long_only_leverage: 1.0,
         };
         let baseline_notionals = HashMap::from([
@@ -3317,7 +3317,7 @@ mod tests {
         ]);
 
         let scale =
-            baseline_scale_if_sleeve(&baseline_notionals, &portfolio_config, Some(&overlay));
+            basket_only_scale_if_sleeve(&baseline_notionals, &portfolio_config, Some(&overlay));
 
         assert!((scale - 0.75).abs() < 1e-9);
     }
@@ -3362,7 +3362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_baseline_plan_features_measures_leadership_short_conflict() {
+    fn test_add_basket_only_plan_features_measures_leadership_short_conflict() {
         let portfolio_config = PortfolioConfig {
             capital: 10_000.0,
             leverage: 4.0,
@@ -3376,7 +3376,7 @@ mod tests {
             off_breadth5d_threshold: 0.5,
             persistence_days: 2,
             min_hold_days: 3,
-            mode: BasketOverlayMode::Baseline,
+            mode: BasketOverlayMode::BasketOnly,
             long_only_leverage: 1.0,
         };
         let features = BasketOverlayPickerFeatures {
@@ -3393,7 +3393,7 @@ mod tests {
             ("CNC".to_string(), -10_000.0),
         ]);
 
-        let features = add_baseline_plan_features(
+        let features = add_basket_only_plan_features(
             features,
             &baseline_notionals,
             &portfolio_config,
@@ -3401,7 +3401,7 @@ mod tests {
         );
 
         assert!((features.leadership_short_conflict_ratio - 0.25).abs() < 1e-9);
-        assert!((features.baseline_scale_if_sleeve - 0.75).abs() < 1e-9);
+        assert!((features.basket_only_scale_if_sleeve - 0.75).abs() < 1e-9);
     }
 
     #[test]
