@@ -7,7 +7,7 @@ Usage:
   scripts/run_basket_replay_quiet.sh <name> <start> <end> [extra replay args...]
 
 Example:
-  scripts/run_basket_replay_quiet.sh 2026_ytd_baseline 2026-01-02 2026-04-30
+  scripts/run_basket_replay_quiet.sh 2026_ytd_basket_only 2026-01-02 2026-04-30
 
   scripts/run_basket_replay_quiet.sh 2026_ytd_classifier 2026-01-02 2026-04-30 \
     --leadership-overlay-sectors faang,chips \

@@ -1,4 +1,4 @@
-# Baselines
+# Benchmarks
 
 This file tracks current, reproducible benchmark references. Older branch
 experiments and stale pre-picker basket numbers were removed because they are
@@ -7,10 +7,10 @@ not reliable yardsticks for the current basket engine.
 ## Basket Overlay Picker
 
 Current basket leadership work should be judged against fixed mechanism
-benchmarks, not baseline alone. The basket core remains the foundation; the
-rule picker is evaluated as a conservative allocator among:
+benchmarks, not `basket_only` alone. The basket core remains the foundation;
+the rule picker is evaluated as a conservative allocator among:
 
-- basket core only
+- `basket_only`
 - basket core + `suppress_shorts`
 - basket core + `add_capped_long_sleeve`
 
@@ -29,7 +29,7 @@ Shared replay settings:
 - capital: `10000`
 - active basket cap: `5`
 
-| Window | Baseline | Fixed suppress | Fixed sleeve | Rule v1 | Best fixed | Rule v1 vs best fixed |
+| Window | Basket only | Fixed suppress | Fixed sleeve | Rule v1 | Best fixed | Rule v1 vs best fixed |
 |--------|----------|----------------|--------------|---------|------------|-----------------------|
 | wide Q3 2025 | -4.19%, DD 17.09% | -2.22%, DD 19.57% | +10.51%, DD 12.08% | +13.02%, DD 12.08% | Fixed sleeve | +2.52%, DD +0.00% |
 | wide Q4 2025 | -5.00%, DD 13.09% | -5.00%, DD 13.09% | -2.17%, DD 10.95% | +4.42%, DD 7.25% | Fixed sleeve | +6.60%, DD -3.70% |
@@ -41,7 +41,7 @@ Shared replay settings:
 The rule picker should continue to clear these bars before promotion:
 
 - do not degrade the best fixed mechanism materially in strong leadership windows
-- do not beat baseline by merely taking more drawdown
+- do not beat `basket_only` by merely taking more drawdown
 - preserve basket-core behavior when leadership is absent
 - keep replay outputs deterministic and restart-stable
 - record picker decisions so regressions can be attributed to mode selection,

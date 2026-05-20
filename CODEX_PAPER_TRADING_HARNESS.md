@@ -28,11 +28,11 @@ Before starting:
 2. Confirm working tree is clean or identify unrelated local output.
 3. Confirm no stale runner is active.
 4. Confirm the intended mode:
-   - baseline basket
+   - basket_only
    - basket with leadership overlay
 5. Start the runner through `openquant-runner`, not ad hoc scripts.
 
-Example baseline paper run:
+Example `basket_only` paper run:
 
 ```bash
 RUST_LOG=info openquant-runner paper --engine basket --execution paper
@@ -158,7 +158,7 @@ If reconciliation fails:
 If the strategy loses money:
 
 - do not hand-wave it as noise
-- compare against baseline and overlay expectations
+- compare against `basket_only` and overlay expectations
 - inspect whether the day was a mean-reversion regime or leadership/trend regime
 - open or update a research issue when the loss exposes a new failure mode
 
@@ -173,7 +173,6 @@ A mode is paper-worthy only if:
 - restart behavior is tested
 - logs explain decisions
 - operator command is simple
-- baseline behavior remains available
+- `basket_only` behavior remains available
 
 Live-money promotion requires a separate decision. Do not infer live approval from paper success.
-

@@ -52,7 +52,7 @@ WINDOWS = [
 ]
 
 VARIANTS = [
-    Variant("baseline", ("--disable-leadership-overlay",)),
+    Variant("basket_only", ("--disable-leadership-overlay",)),
     Variant(
         "fixed_suppress",
         (
@@ -137,16 +137,16 @@ def main() -> int:
             )
 
     print(
-        "\nwindow\tbaseline\tfixed_suppress\tfixed_sleeve\t"
+        "\nwindow\tbasket_only\tfixed_suppress\tfixed_sleeve\t"
         "rule_v1\tbest_fixed\trule_vs_best_fixed"
     )
     for window in WINDOWS:
-        baseline = results[(window.name, "baseline")]
+        basket_only = results[(window.name, "basket_only")]
         suppress = results[(window.name, "fixed_suppress")]
         sleeve = results[(window.name, "fixed_sleeve")]
         rule = results[(window.name, "rule_v1")]
         fixed = {
-            "baseline": baseline,
+            "basket_only": basket_only,
             "fixed_suppress": suppress,
             "fixed_sleeve": sleeve,
         }
@@ -155,7 +155,7 @@ def main() -> int:
             "\t".join(
                 [
                     window.name,
-                    f"{fmt_pct(baseline.cum_return)} / DD {fmt_dd(baseline.max_dd)}",
+                    f"{fmt_pct(basket_only.cum_return)} / DD {fmt_dd(basket_only.max_dd)}",
                     f"{fmt_pct(suppress.cum_return)} / DD {fmt_dd(suppress.max_dd)}",
                     f"{fmt_pct(sleeve.cum_return)} / DD {fmt_dd(sleeve.max_dd)}",
                     f"{fmt_pct(rule.cum_return)} / DD {fmt_dd(rule.max_dd)}",
