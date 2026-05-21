@@ -124,7 +124,7 @@ fn default_stream_universe_path(engine: Engine, is_live_command: bool) -> Option
             if is_live_command {
                 Some("config/basket_universe_v1.toml")
             } else {
-                Some("config/basket_universe_v2.toml")
+                Some("config/basket_universe_buildout.toml")
             }
         }
     }
@@ -158,7 +158,7 @@ struct StreamArgs {
     pipeline: Option<String>,
 
     /// Basket universe TOML file. For basket paper, defaults to
-    /// `config/basket_universe_v2.toml`. For basket live/replay/fits, defaults
+    /// `config/basket_universe_buildout.toml`. For basket live/replay/fits, defaults
     /// to `config/basket_universe_v1.toml`.
     #[arg(long)]
     universe: Option<PathBuf>,

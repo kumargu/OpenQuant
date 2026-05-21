@@ -92,7 +92,7 @@ traded_targets = ["ALL", "TRV", "PGR", "AIG", "MET", "PRU"]
 #   - biotech, big_retail, pharma, reits — net-negative mean contribution
 #   - industrials, payments, defense, banks_money — marginal, within CI noise
 #
-# Candidates for v2 (NOT to be added without re-running the full gauntlet):
+# Candidates for the buildout regime (NOT to be added without re-running the full gauntlet):
 #   - Box-Tiao weights instead of equal-weight
 #   - Vine-copula partner selection
 #   - Ex-ante sector rotation (weak signal ρ=0.12, needs more research)

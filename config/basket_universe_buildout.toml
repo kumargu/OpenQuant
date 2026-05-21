@@ -1,11 +1,15 @@
-# basket_universe_v2.toml — EXPERIMENTAL UNIVERSE CONFIG
-# ------------------------------------------------------
-# Research experiment only. This file extends the frozen v1 basket universe
-# with additional sectors tied to the AI power / electrification buildout so
-# we can replay them against the same runner path and compare results.
+# basket_universe_buildout.toml — AI Buildout Regime Universe
+# -----------------------------------------------------------
+# This file extends the frozen v1 basket universe with additional sectors tied
+# to the AI power / electrification buildout regime.
 #
-# This does NOT replace production defaults. Keep v1 frozen until a wider
-# replay gauntlet shows durable improvement.
+# Naming note:
+# - repo shorthand: `buildout`
+# - basket-only mode: `buildout_core`
+# - adaptive overlay mode: `buildout_overlay`
+#
+# Internally the overlay picker key remains `rule_v1` for compatibility, but
+# user-facing discussion should prefer `adaptive overlay`.
 
 [version]
 schema = "basket_universe"
@@ -59,7 +63,7 @@ traded_targets = ["AAPL", "GOOGL", "META", "AMZN"]
 members = ["ALL", "TRV", "PGR", "AIG", "MET", "PRU"]
 traded_targets = ["ALL", "TRV", "PGR", "AIG", "MET", "PRU"]
 
-# Experimental sectors for the AI power / industrial buildout thesis.
+# Buildout-regime sectors for the AI power / industrial buildout thesis.
 # Keep these narrow and replayable with the current parquet dataset.
 
 [sectors.electrification]
@@ -96,6 +100,7 @@ capital = 10000
 n_active_baskets = 5
 
 [runner.leadership_overlay]
+# Adaptive overlay uses the existing `rule_v1` picker under the hood.
 sectors = ["faang", "chips"]
 on_ret5d_threshold = 0.02
 on_breadth5d_threshold = 0.56

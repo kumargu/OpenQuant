@@ -1,6 +1,6 @@
 # Regime Overlay Playbook
 
-This note captures the reusable lesson from the `v2` research cycle:
+This note captures the reusable lesson from the `buildout` research cycle:
 
 - the trading universe and the overlay do different jobs
 - the best overlay is not always the same thing as the best new regime basket
@@ -22,9 +22,10 @@ Treat a new regime in three separate pieces:
 
 Do not force these three pieces to be the same.
 
-## What we learned from `v2`
+## What we learned from `buildout`
 
-`v2` improved the basket universe in `2026-01-02` to `2026-04-30`, but the
+The `buildout` universe improved the basket book in `2026-01-02` to
+`2026-04-30`, but the
 best overlay signal still came from `faang,chips`, not from the newer
 `ai_power,gas_infra` sectors.
 
@@ -47,7 +48,8 @@ That combination can outperform either piece on its own:
 
 - `basket_only` keeps us grounded in the basket engine
 - the overlay lets us participate when leadership is obvious
-- `rule_v1` is useful because it behaves like a governor, not a daily toggle
+- the current adaptive overlay implementation (`rule_v1` internally) is useful
+  because it behaves like a governor, not a daily toggle
 
 The overlay should be chosen for signal quality, not story purity.
 
