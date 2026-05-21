@@ -454,7 +454,11 @@ fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool
 }
 
 fn migrate_picker_decisions_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
-    let has_new = table_has_column(conn, "basket_picker_decisions", "basket_only_scale_if_sleeve")?;
+    let has_new = table_has_column(
+        conn,
+        "basket_picker_decisions",
+        "basket_only_scale_if_sleeve",
+    )?;
     if has_new {
         return Ok(());
     }

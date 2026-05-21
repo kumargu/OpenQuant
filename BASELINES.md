@@ -4,6 +4,30 @@ This file tracks current, reproducible benchmark references. Older branch
 experiments and stale pre-picker basket numbers were removed because they are
 not reliable yardsticks for the current basket engine.
 
+## Buildout Regime
+
+For the AI buildout regime, the default evaluation pair is:
+
+- `buildout_core`
+- `buildout_overlay`
+
+Definitions:
+
+- `buildout_core` = `config/basket_universe_buildout.toml` with leadership
+  overlay disabled
+- `buildout_overlay` = the same buildout universe with the adaptive overlay
+  enabled
+
+Why both must be run:
+
+- `buildout_core` tells us whether the basket universe itself improved
+- `buildout_overlay` tells us whether the money-making combined expression
+  improved
+
+Do not evaluate buildout changes with `buildout_core` alone. The overlay is a
+material part of the regime edge and must be treated as a default companion
+run, not as an optional extra.
+
 ## Basket Overlay Picker
 
 Current basket leadership work should be judged against fixed mechanism

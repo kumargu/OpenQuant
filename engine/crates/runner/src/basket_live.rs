@@ -1086,10 +1086,9 @@ fn staged_diff_to_orders(
             continue;
         }
 
-        // Sign flip: issue a single net delta order. Splitting +10 -> -10 into
-        // sell 10 then sell 10 causes Alpaca to hold the shares for the first
-        // order and reject the second as insufficient quantity available.
-        push_order_if_nonzero(&mut reducing, symbol, target_shares - current_shares);
+        // Sign flip: close the old side completely, then open the new side.
+        push_order_if_nonzero(&mut reducing, symbol, -current_shares);
+        push_order_if_nonzero(&mut expanding, symbol, target_shares);
     }
 
     reducing.extend(expanding);
@@ -3839,7 +3838,7 @@ mod tests {
         let orders = staged_diff_to_orders(&current, &target);
         let peak_gross = peak_gross_during_order_path(&current, &orders, &closes);
 
-        assert_eq!(orders.len(), 1);
+        assert_eq!(orders.len(), 2);
         assert_eq!(gross_notional(&current, &closes), 10_000.0);
         assert_eq!(peak_gross, 10_000.0);
     }
@@ -3862,15 +3861,18 @@ mod tests {
     }
 
     #[test]
-    fn test_staged_diff_to_orders_collapses_sign_flip_to_single_net_order() {
+    fn test_staged_diff_to_orders_splits_sign_flip_into_close_then_open() {
         let current = HashMap::from([("AMD".to_string(), 100.0)]);
         let target = HashMap::from([("AMD".to_string(), -80.0)]);
 
         let orders = staged_diff_to_orders(&current, &target);
-        assert_eq!(orders.len(), 1);
+        assert_eq!(orders.len(), 2);
         assert_eq!(orders[0].symbol, "AMD");
         assert_eq!(orders[0].side, Side::Sell);
-        assert_eq!(orders[0].qty, 180);
+        assert_eq!(orders[0].qty, 100);
+        assert_eq!(orders[1].symbol, "AMD");
+        assert_eq!(orders[1].side, Side::Sell);
+        assert_eq!(orders[1].qty, 80);
     }
 
     #[test]

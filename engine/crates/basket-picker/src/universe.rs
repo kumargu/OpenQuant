@@ -670,8 +670,6 @@ opportunistic_sleeve_min_baseline_scale = 0.80
         let overlay = universe.runner.leadership_overlay.unwrap();
         assert_eq!(overlay.mode, RunnerLeadershipOverlayModeConfig::BasketOnly);
         assert!((overlay.rule_v1.min_basket_only_scale_for_sleeve - 0.65).abs() < 1e-9);
-        assert!(
-            (overlay.rule_v1.opportunistic_sleeve_min_basket_only_scale - 0.80).abs() < 1e-9
-        );
+        assert!((overlay.rule_v1.opportunistic_sleeve_min_basket_only_scale - 0.80).abs() < 1e-9);
     }
 }
