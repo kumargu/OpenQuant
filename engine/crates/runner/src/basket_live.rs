@@ -122,6 +122,7 @@ pub struct BasketRunOptions {
     pub leadership_overlay: Option<LeadershipOverlayConfig>,
     pub overlay_picker: BasketOverlayPickerKind,
     pub rule_v1_config: Option<crate::basket_overlay_picker::RuleV1OverlayPickerConfig>,
+    pub direction_filter: BasketDirectionFilter,
 }
 
 impl Default for BasketRunOptions {
@@ -132,8 +133,16 @@ impl Default for BasketRunOptions {
             leadership_overlay: None,
             overlay_picker: BasketOverlayPickerKind::Fixed,
             rule_v1_config: None,
+            direction_filter: BasketDirectionFilter::Both,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BasketDirectionFilter {
+    Both,
+    LongOnly,
+    ShortOnly,
 }
 
 // Grace period after session close before firing the engine. Lets
@@ -1453,6 +1462,7 @@ pub async fn run_basket_live(
             ),
             &mut overlay_picker,
             options.leadership_overlay.as_ref(),
+            options.direction_filter,
         )
         .await?;
         overlay_picker.save_state(&picker_state_path)?;
@@ -1713,6 +1723,7 @@ pub async fn run_basket_live(
                         ),
                         &mut overlay_picker,
                         options.leadership_overlay.as_ref(),
+                        options.direction_filter,
                     )
                     .await?;
                     overlay_picker.save_state(&picker_state_path)?;
@@ -2050,6 +2061,7 @@ async fn process_session_close(
     picker_features: BasketOverlayPickerFeatures,
     overlay_picker: &mut impl BasketOverlayPicker,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
+    direction_filter: BasketDirectionFilter,
 ) -> Result<(), String> {
     debug_assert!(
         portfolio_config.validate().is_ok(),
@@ -2080,6 +2092,31 @@ async fn process_session_close(
 
     for intent in &intents {
         log_intent(intent);
+    }
+
+    if !matches!(direction_filter, BasketDirectionFilter::Both) {
+        let blocked_baskets: Vec<String> = engine
+            .iter_params()
+            .filter_map(|(basket_id, _params)| {
+                let state = engine.get_state(basket_id)?;
+                let blocked = match direction_filter {
+                    BasketDirectionFilter::Both => false,
+                    BasketDirectionFilter::LongOnly => state.position < 0,
+                    BasketDirectionFilter::ShortOnly => state.position > 0,
+                };
+                blocked.then(|| basket_id.clone())
+            })
+            .collect();
+        if !blocked_baskets.is_empty() {
+            info!(
+                date = %date,
+                direction_filter = ?direction_filter,
+                blocked_baskets = blocked_baskets.len(),
+                blocked_sample = ?blocked_baskets.iter().take(8).collect::<Vec<_>>(),
+                "flattening baskets blocked by direction filter"
+            );
+            engine.flatten_baskets(&blocked_baskets);
+        }
     }
 
     let allowed_symbols: Vec<String> = closes.keys().cloned().collect();

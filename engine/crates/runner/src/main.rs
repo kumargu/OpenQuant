@@ -405,6 +405,11 @@ struct ReplayArgs {
     #[arg(long)]
     leadership_long_only_leverage: Option<f64>,
 
+    /// Replay-only: restrict basket directions after the engine updates.
+    /// `short-only` skips long basket positions; `long-only` skips short ones.
+    #[arg(long, value_enum, default_value_t = BasketDirectionFilterArg::Both)]
+    basket_direction_filter: BasketDirectionFilterArg,
+
     /// Resume replay from an existing state snapshot at `--state-path`
     /// instead of starting from empty engine + simulated broker state.
     /// Default: false (fresh start). When false, any existing state
@@ -445,11 +450,28 @@ enum LeadershipPickerArg {
     RuleV1,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum BasketDirectionFilterArg {
+    Both,
+    LongOnly,
+    ShortOnly,
+}
+
 impl From<LeadershipPickerArg> for basket_overlay_picker::BasketOverlayPickerKind {
     fn from(value: LeadershipPickerArg) -> Self {
         match value {
             LeadershipPickerArg::Fixed => basket_overlay_picker::BasketOverlayPickerKind::Fixed,
             LeadershipPickerArg::RuleV1 => basket_overlay_picker::BasketOverlayPickerKind::RuleV1,
+        }
+    }
+}
+
+impl From<BasketDirectionFilterArg> for basket_live::BasketDirectionFilter {
+    fn from(value: BasketDirectionFilterArg) -> Self {
+        match value {
+            BasketDirectionFilterArg::Both => basket_live::BasketDirectionFilter::Both,
+            BasketDirectionFilterArg::LongOnly => basket_live::BasketDirectionFilter::LongOnly,
+            BasketDirectionFilterArg::ShortOnly => basket_live::BasketDirectionFilter::ShortOnly,
         }
     }
 }
@@ -1242,6 +1264,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             leadership_overlay,
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
+            direction_filter: basket_live::BasketDirectionFilter::Both,
         },
     )
     .await
@@ -2103,6 +2126,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             leadership_overlay,
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
+            direction_filter: args.basket_direction_filter.into(),
         },
     )
     .await;
