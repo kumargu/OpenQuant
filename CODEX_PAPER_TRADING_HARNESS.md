@@ -32,6 +32,9 @@ Before starting:
    - basket with leadership overlay
 5. Start the runner through `openquant-runner`, not ad hoc scripts.
 
+Default paper run now uses `config/basket_universe_v2.toml` unless `--universe`
+is provided explicitly.
+
 Example `basket_only` paper run:
 
 ```bash

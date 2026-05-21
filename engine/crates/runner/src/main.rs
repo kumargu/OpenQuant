@@ -96,14 +96,14 @@ enum Engine {
     /// Metals — curated structurally-similar pairs, lab pipeline (structural gates relaxed).
     Metals,
     /// Basket spread strategy — OU/Bertram symmetric state machine.
-    /// Defaults to `config/basket_universe_v1.toml`; override with `--universe`.
+    /// Defaults vary by command; override with `--universe`.
     #[default]
     Basket,
     // Future: Bitcoin, etc.
 }
 
 impl Engine {
-    /// Default basket universe TOML. `--universe` overrides.
+    /// Default basket universe TOML for replay/fits. `--universe` overrides.
     /// Only meaningful for `Basket`; pair engines ignore this.
     fn universe_path(&self) -> Option<&'static str> {
         match self {
@@ -114,6 +114,19 @@ impl Engine {
 
     fn is_basket(&self) -> bool {
         matches!(self, Engine::Basket)
+    }
+}
+
+fn default_stream_universe_path(engine: Engine, is_live_command: bool) -> Option<&'static str> {
+    match engine {
+        Engine::Snp500 | Engine::Metals => None,
+        Engine::Basket => {
+            if is_live_command {
+                Some("config/basket_universe_v1.toml")
+            } else {
+                Some("config/basket_universe_v2.toml")
+            }
+        }
     }
 }
 
@@ -144,7 +157,9 @@ struct StreamArgs {
     #[arg(long)]
     pipeline: Option<String>,
 
-    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml` when --engine basket.
+    /// Basket universe TOML file. For basket paper, defaults to
+    /// `config/basket_universe_v2.toml`. For basket live/replay/fits, defaults
+    /// to `config/basket_universe_v1.toml`.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -282,7 +297,8 @@ struct ReplayArgs {
     #[arg(long)]
     bar_cache: Option<PathBuf>,
 
-    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml` when --engine basket.
+    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml`
+    /// when --engine basket.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -1034,7 +1050,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     let universe_path = args
         .universe
         .clone()
-        .or_else(|| args.engine.universe_path().map(PathBuf::from))
+        .or_else(|| default_stream_universe_path(args.engine, is_live_command).map(PathBuf::from))
         .unwrap_or_else(|| {
             error!("--universe is required when --engine basket");
             std::process::exit(1);
