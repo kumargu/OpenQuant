@@ -183,7 +183,6 @@ struct StreamArgs {
     #[arg(long)]
     fit_artifact: Option<PathBuf>,
 
-
     /// Persisted basket engine state. Defaults to `<fit-artifact>.state.json`.
     #[arg(long)]
     state_path: Option<PathBuf>,
@@ -350,7 +349,6 @@ struct ReplayArgs {
     #[arg(long)]
     report_tsv: Option<PathBuf>,
 
-
     /// Ignore leadership overlay defaults from the universe TOML for this run.
     #[arg(long, default_value_t = false)]
     disable_leadership_overlay: bool,
@@ -498,7 +496,6 @@ struct LeadershipOverlayBuildArgs<'a> {
     picker: LeadershipPickerArg,
     long_only_leverage: f64,
 }
-
 
 fn resolve_stream_execution(
     requested: Option<&str>,
@@ -777,7 +774,6 @@ fn build_leadership_overlay_config(
         long_only_leverage: args.long_only_leverage,
     })
 }
-
 
 fn leadership_overlay_fingerprint(cfg: &basket_live::LeadershipOverlayConfig) -> String {
     let mode = match cfg.mode {
@@ -2248,5 +2244,4 @@ mod tests {
             PathBuf::from("data/state/basket_universe_v1.fits.state.leadership-rule-v1.json")
         );
     }
-
 }

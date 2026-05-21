@@ -202,7 +202,8 @@ impl RuleV1OverlayPicker {
     }
 
     fn opportunistic_sleeve_allowed(&self, features: &BasketOverlayPickerFeatures) -> bool {
-        features.basket_only_scale_if_sleeve >= self.config.opportunistic_sleeve_min_basket_only_scale
+        features.basket_only_scale_if_sleeve
+            >= self.config.opportunistic_sleeve_min_basket_only_scale
             && features.strategy_return_20d <= self.config.opportunistic_sleeve_return_ceiling
             && features.leadership_short_conflict_ratio < self.config.suppress_conflict_on_threshold
     }
@@ -289,7 +290,9 @@ impl BasketOverlayPicker for RuleV1OverlayPicker {
                             .with_sleeve_scale(self.sleeve_scale(features));
                     }
                     if !self.strategy_weak(features) {
-                        return BasketOverlayPickerDecision::basket_only("leadership_basket_healthy");
+                        return BasketOverlayPickerDecision::basket_only(
+                            "leadership_basket_healthy",
+                        );
                     }
                     return BasketOverlayPickerDecision::basket_only("sleeve_crowds_basket_only");
                 }
