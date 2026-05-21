@@ -14,6 +14,18 @@ if [[ -z "$db" || ! -f "$db" ]]; then
   exit 1
 fi
 
+picker_scale_expr() {
+  local cols
+  cols="$(sqlite3 "$db" "PRAGMA table_info(basket_picker_decisions);" | cut -d'|' -f2)"
+  if grep -qx 'basket_only_scale_if_sleeve' <<<"$cols"; then
+    printf '%s' 'ROUND(basket_only_scale_if_sleeve, 4) AS basket_only_scale'
+  elif grep -qx 'baseline_scale_if_sleeve' <<<"$cols"; then
+    printf '%s' 'ROUND(baseline_scale_if_sleeve, 4) AS basket_only_scale'
+  else
+    printf '%s' 'NULL AS basket_only_scale'
+  fi
+}
+
 case "$view" in
   summary)
     sqlite3 -header -column "$db" "
@@ -59,13 +71,14 @@ case "$view" in
     "
     ;;
   picker)
+    scale_expr="$(picker_scale_expr)"
     sqlite3 -header -column "$db" "
       SELECT trading_day, picker_id, mode, reason,
              active_sectors_json, active_symbols_json,
              ROUND(leadership_short_conflict_ratio, 4) AS short_conflict,
              ROUND(strategy_return_20d, 4) AS ret20d,
              ROUND(strategy_drawdown_20d, 4) AS dd20d,
-             ROUND(baseline_scale_if_sleeve, 4) AS baseline_scale,
+             $scale_expr,
              ROUND(sleeve_leverage_scale, 4) AS sleeve_scale,
              created_at_utc
         FROM basket_picker_decisions

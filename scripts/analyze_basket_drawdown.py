@@ -54,7 +54,10 @@ def parse_log(log_path: Path) -> dict[str, object]:
                 sectors = SECTOR_RE.search(line)
                 if sectors:
                     sectors_by_date[date] = sectors.group(1).replace('"', "")
-        if "leadership overlay transformed baseline basket portfolio" in line:
+        if (
+            "leadership overlay transformed baseline basket portfolio" in line
+            or "leadership overlay transformed basket-only basket portfolio" in line
+        ):
             m = FAILED_RE.search(line)
             if m and m.group("date") not in replacement_lines_by_date:
                 replacement_lines_by_date[m.group("date")] = line

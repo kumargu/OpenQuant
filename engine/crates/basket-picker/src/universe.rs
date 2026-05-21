@@ -198,7 +198,7 @@ pub enum RunnerLeadershipPickerConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum RunnerLeadershipOverlayModeConfig {
     #[default]
-    #[serde(rename = "basket_only")]
+    #[serde(rename = "basket_only", alias = "baseline")]
     BasketOnly,
     #[serde(rename = "suppress_shorts", alias = "suppress-shorts")]
     SuppressShorts,
@@ -228,9 +228,15 @@ pub struct RunnerRuleV1OverlayConfig {
     pub recovered_drawdown_threshold: f64,
     #[serde(default = "default_rule_v1_sleeve_return_ceiling")]
     pub sleeve_return_ceiling: f64,
-    #[serde(default = "default_rule_v1_min_basket_only_scale_for_sleeve")]
+    #[serde(
+        default = "default_rule_v1_min_basket_only_scale_for_sleeve",
+        alias = "min_baseline_scale_for_sleeve"
+    )]
     pub min_basket_only_scale_for_sleeve: f64,
-    #[serde(default = "default_rule_v1_opportunistic_sleeve_min_basket_only_scale")]
+    #[serde(
+        default = "default_rule_v1_opportunistic_sleeve_min_basket_only_scale",
+        alias = "opportunistic_sleeve_min_baseline_scale"
+    )]
     pub opportunistic_sleeve_min_basket_only_scale: f64,
     #[serde(default = "default_rule_v1_opportunistic_sleeve_return_ceiling")]
     pub opportunistic_sleeve_return_ceiling: f64,
@@ -611,5 +617,61 @@ traded_targets = ["AMD"]
 "#;
         let err = load_universe_from_str(toml).unwrap_err();
         assert!(err.contains("has only 1 peer(s), need >= 2"));
+    }
+
+    #[test]
+    fn test_legacy_overlay_keys_still_load() {
+        let toml = r#"
+[version]
+schema = "basket_universe"
+version = "v1"
+frozen_at = "2026-04-20"
+
+[strategy]
+method = "basket_spread_ou_bertram"
+spread_formula = "log(target) - mean(log(peers))"
+threshold_method = "bertram_symmetric"
+threshold_clip_min = 0.15
+threshold_clip_max = 2.5
+residual_window_days = 60
+forward_window_days = 60
+refit_cadence = "quarterly"
+cost_bps_assumed = 5.0
+leverage_assumed = 4.0
+sizing = "equal_weight_across_baskets"
+
+[sectors.chips]
+members = ["NVDA", "AMD", "AVGO"]
+traded_targets = ["AMD"]
+
+[runner]
+decision_offset_minutes_before_close = 0
+
+[runner.portfolio]
+capital = 10000
+n_active_baskets = 5
+
+[runner.leadership_overlay]
+mode = "baseline"
+sectors = ["chips"]
+on_ret5d_threshold = 0.02
+on_breadth5d_threshold = 0.56
+off_ret5d_threshold = 0.0
+off_breadth5d_threshold = 0.5
+persistence_days = 2
+min_hold_days = 3
+picker = "rule_v1"
+
+[runner.leadership_overlay.rule_v1]
+min_baseline_scale_for_sleeve = 0.65
+opportunistic_sleeve_min_baseline_scale = 0.80
+"#;
+        let universe = load_universe_from_str(toml).unwrap();
+        let overlay = universe.runner.leadership_overlay.unwrap();
+        assert_eq!(overlay.mode, RunnerLeadershipOverlayModeConfig::BasketOnly);
+        assert!((overlay.rule_v1.min_basket_only_scale_for_sleeve - 0.65).abs() < 1e-9);
+        assert!(
+            (overlay.rule_v1.opportunistic_sleeve_min_basket_only_scale - 0.80).abs() < 1e-9
+        );
     }
 }
