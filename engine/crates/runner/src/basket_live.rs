@@ -1031,6 +1031,120 @@ fn order_reason_fields(reason: &basket_engine::OrderReason) -> (&'static str, Op
     }
 }
 
+struct SubmittedOrderBatch {
+    accepted_orders: usize,
+    failed_orders: usize,
+    accepted_unfilled_orders: usize,
+    next_seq: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn submit_order_batch(
+    broker: &impl Broker,
+    mode: ExecutionMode,
+    execution: BasketExecution,
+    orders: &[OrderIntent],
+    run_id: &str,
+    trading_day: NaiveDate,
+    closes: &HashMap<String, f64>,
+    journal: Option<&BasketJournal>,
+    start_seq: usize,
+) -> Result<SubmittedOrderBatch, String> {
+    let mut accepted_orders = 0usize;
+    let mut failed_orders = 0usize;
+    let mut accepted_unfilled_orders = 0usize;
+    let mut seq = start_seq;
+
+    for order in orders {
+        log_order(order, execution.label());
+        let side_str = match order.side {
+            Side::Buy => "buy",
+            Side::Sell => "sell",
+        };
+        let (reason, basket_id) = order_reason_fields(&order.reason);
+        match broker
+            .place_order(&order.symbol, order.qty as f64, side_str, mode)
+            .await
+        {
+            Ok(o) => {
+                info!(
+                    symbol = order.symbol.as_str(),
+                    qty = order.qty,
+                    side = side_str,
+                    reason,
+                    basket_id,
+                    order_id = o.id.as_str(),
+                    status = o.status.as_str(),
+                    "ORDER PLACED"
+                );
+                accepted_orders += 1;
+                if !order_status_indicates_fill(o.status.as_str()) {
+                    accepted_unfilled_orders += 1;
+                }
+                if let Some(journal) = journal {
+                    journal.record_order_event(&BasketOrderEvent {
+                        run_id,
+                        trading_day,
+                        seq,
+                        symbol: order.symbol.as_str(),
+                        side: side_str,
+                        requested_qty: order.qty as f64,
+                        intended_notional: closes
+                            .get(&order.symbol)
+                            .map(|price| *price * order.qty as f64),
+                        reason,
+                        basket_id,
+                        broker_order_id: Some(o.id.as_str()),
+                        broker_status: Some(o.status.as_str()),
+                        submission_status: "accepted",
+                        error_text: None,
+                    })?;
+                }
+            }
+            Err(e) => {
+                failed_orders += 1;
+                bug!(
+                    "broker_order_failed",
+                    symbol = order.symbol.as_str(),
+                    qty = order.qty,
+                    side = side_str,
+                    reason,
+                    basket_id,
+                    error = e.as_str(),
+                    "ORDER FAILED"
+                );
+                if let Some(journal) = journal {
+                    journal.record_order_event(&BasketOrderEvent {
+                        run_id,
+                        trading_day,
+                        seq,
+                        symbol: order.symbol.as_str(),
+                        side: side_str,
+                        requested_qty: order.qty as f64,
+                        intended_notional: closes
+                            .get(&order.symbol)
+                            .map(|price| *price * order.qty as f64),
+                        reason,
+                        basket_id,
+                        broker_order_id: None,
+                        broker_status: None,
+                        submission_status: "failed",
+                        error_text: Some(e.as_str()),
+                    })?;
+                }
+            }
+        }
+        seq += 1;
+    }
+
+    Ok(SubmittedOrderBatch {
+        accepted_orders,
+        failed_orders,
+        accepted_unfilled_orders,
+        next_seq: seq,
+    })
+}
+
 fn push_order_if_nonzero(orders: &mut Vec<OrderIntent>, symbol: &str, delta: f64) {
     let qty = delta.abs().round() as u32;
     if qty == 0 {
@@ -1045,12 +1159,95 @@ fn push_order_if_nonzero(orders: &mut Vec<OrderIntent>, symbol: &str, delta: f64
     });
 }
 
+#[derive(Debug, Clone, Default)]
+struct StagedOrders {
+    reducing: Vec<OrderIntent>,
+    expanding: Vec<OrderIntent>,
+}
+
+impl StagedOrders {
+    fn is_empty(&self) -> bool {
+        self.reducing.is_empty() && self.expanding.is_empty()
+    }
+
+    fn all_orders(&self) -> Vec<OrderIntent> {
+        let mut orders = self.reducing.clone();
+        orders.extend(self.expanding.clone());
+        orders
+    }
+}
+
+fn apply_orders_to_shares(
+    current: &HashMap<String, f64>,
+    orders: &[OrderIntent],
+) -> HashMap<String, f64> {
+    let mut simulated = current.clone();
+    for order in orders {
+        let signed_delta = match order.side {
+            Side::Buy => order.qty as f64,
+            Side::Sell => -(order.qty as f64),
+        };
+        let entry = simulated.entry(order.symbol.clone()).or_insert(0.0);
+        *entry += signed_delta;
+        if entry.abs() < 0.5 {
+            simulated.remove(&order.symbol);
+        }
+    }
+    simulated
+}
+
+fn subset_target_after_orders(
+    current_after_phase: &HashMap<String, f64>,
+    final_target: &HashMap<String, f64>,
+    orders: &[OrderIntent],
+) -> HashMap<String, f64> {
+    let mut target = current_after_phase.clone();
+    for order in orders {
+        let final_shares = final_target.get(&order.symbol).copied().unwrap_or(0.0);
+        if final_shares.abs() < 0.5 {
+            target.remove(&order.symbol);
+        } else {
+            target.insert(order.symbol.clone(), final_shares);
+        }
+    }
+    target
+}
+
+fn is_sign_flip(
+    current: &HashMap<String, f64>,
+    target: &HashMap<String, f64>,
+    symbol: &str,
+) -> bool {
+    let current_shares = current.get(symbol).copied().unwrap_or(0.0);
+    let target_shares = target.get(symbol).copied().unwrap_or(0.0);
+    current_shares.abs() >= 0.5
+        && target_shares.abs() >= 0.5
+        && current_shares.signum() != target_shares.signum()
+}
+
+fn can_submit_phase_two_order(
+    current_before: &HashMap<String, f64>,
+    final_target: &HashMap<String, f64>,
+    shares_after_reducing: &HashMap<String, f64>,
+    reconciliation_confirmed: bool,
+    symbol: &str,
+) -> bool {
+    if !is_sign_flip(current_before, final_target, symbol) {
+        return true;
+    }
+    if !reconciliation_confirmed {
+        return false;
+    }
+    let reconciled_shares = shares_after_reducing.get(symbol).copied().unwrap_or(0.0);
+    let final_target_shares = final_target.get(symbol).copied().unwrap_or(0.0);
+    reconciled_shares.abs() < 0.5 || reconciled_shares.signum() == final_target_shares.signum()
+}
+
 fn staged_diff_to_orders(
     current: &HashMap<String, f64>,
     target: &HashMap<String, f64>,
-) -> Vec<OrderIntent> {
-    let mut reducing = Vec::new();
-    let mut expanding = Vec::new();
+) -> StagedOrders {
+    let mut staged = StagedOrders::default();
 
     let mut all_symbols: Vec<&String> = current.keys().chain(target.keys()).collect();
     all_symbols.sort();
@@ -1079,20 +1276,19 @@ fn staged_diff_to_orders(
                 target_shares.abs() < current_shares.abs()
             };
             if reduce_first {
-                push_order_if_nonzero(&mut reducing, symbol, delta);
+                push_order_if_nonzero(&mut staged.reducing, symbol, delta);
             } else {
-                push_order_if_nonzero(&mut expanding, symbol, delta);
+                push_order_if_nonzero(&mut staged.expanding, symbol, delta);
             }
             continue;
         }
 
         // Sign flip: close the old side completely, then open the new side.
-        push_order_if_nonzero(&mut reducing, symbol, -current_shares);
-        push_order_if_nonzero(&mut expanding, symbol, target_shares);
+        push_order_if_nonzero(&mut staged.reducing, symbol, -current_shares);
+        push_order_if_nonzero(&mut staged.expanding, symbol, target_shares);
     }
 
-    reducing.extend(expanding);
-    reducing
+    staged
 }
 
 async fn wait_for_stream_health(
@@ -2347,8 +2543,9 @@ async fn process_session_close(
         );
     }
 
-    let orders = staged_diff_to_orders(current_shares, &target_shares);
-    if orders.is_empty() {
+    let staged_orders = staged_diff_to_orders(current_shares, &target_shares);
+    let orders = staged_orders.all_orders();
+    if staged_orders.is_empty() {
         info!(date = %date, "no orders to emit — targets already match current");
         if let Some(journal) = journal {
             journal.record_session_close(&BasketSessionCloseRecord {
@@ -2491,13 +2688,15 @@ async fn process_session_close(
             }
         }
         Some(mode) => {
+            let reducing_target_shares =
+                apply_orders_to_shares(current_shares, &staged_orders.reducing);
             if let Err(e) = check_order_set_affordability(
                 broker,
                 mode,
                 date,
                 current_shares,
-                &target_shares,
-                &orders,
+                &reducing_target_shares,
+                &staged_orders.reducing,
                 closes,
             )
             .await
@@ -2546,83 +2745,110 @@ async fn process_session_close(
             let mut accepted_orders = 0usize;
             let mut failed_orders = 0usize;
             let mut accepted_unfilled_orders = 0usize;
-            for (seq, order) in orders.iter().enumerate() {
-                log_order(order, execution.label());
-                let side_str = match order.side {
-                    Side::Buy => "buy",
-                    Side::Sell => "sell",
-                };
-                let (reason, basket_id) = order_reason_fields(&order.reason);
-                match broker
-                    .place_order(&order.symbol, order.qty as f64, side_str, mode)
-                    .await
-                {
-                    Ok(o) => {
-                        info!(
-                            symbol = order.symbol.as_str(),
-                            qty = order.qty,
-                            side = side_str,
-                            reason,
-                            basket_id,
-                            order_id = o.id.as_str(),
-                            status = o.status.as_str(),
-                            "ORDER PLACED"
-                        );
-                        accepted_orders += 1;
-                        if !order_status_indicates_fill(o.status.as_str()) {
-                            accepted_unfilled_orders += 1;
-                        }
-                        if let Some(journal) = journal {
-                            journal.record_order_event(&BasketOrderEvent {
-                                run_id,
-                                trading_day: date,
-                                seq,
-                                symbol: order.symbol.as_str(),
-                                side: side_str,
-                                requested_qty: order.qty as f64,
-                                intended_notional: closes
-                                    .get(&order.symbol)
-                                    .map(|price| *price * order.qty as f64),
-                                reason,
-                                basket_id,
-                                broker_order_id: Some(o.id.as_str()),
-                                broker_status: Some(o.status.as_str()),
-                                submission_status: "accepted",
-                                error_text: None,
-                            })?;
-                        }
+            let mut seq = 0usize;
+            let reducing_batch = submit_order_batch(
+                broker,
+                mode,
+                execution,
+                &staged_orders.reducing,
+                run_id,
+                date,
+                closes,
+                journal,
+                seq,
+            )
+            .await?;
+            accepted_orders += reducing_batch.accepted_orders;
+            failed_orders += reducing_batch.failed_orders;
+            accepted_unfilled_orders += reducing_batch.accepted_unfilled_orders;
+            seq = reducing_batch.next_seq;
+
+            let mut shares_after_reducing = reducing_target_shares.clone();
+            let mut phase_one_reconciliation_confirmed = false;
+            if !staged_orders.expanding.is_empty() {
+                let reconciliation_delay_secs = broker.reconciliation_delay_secs();
+                if reconciliation_delay_secs > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs))
+                        .await;
+                }
+                match seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await {
+                    Ok(actual_shares) => {
+                        shares_after_reducing = actual_shares;
+                        phase_one_reconciliation_confirmed = true;
                     }
                     Err(e) => {
-                        failed_orders += 1;
                         bug!(
-                            "broker_order_failed",
-                            symbol = order.symbol.as_str(),
-                            qty = order.qty,
-                            side = side_str,
-                            reason,
-                            basket_id,
+                            "phase_one_reconciliation_failed",
+                            date = %date,
                             error = e.as_str(),
-                            "ORDER FAILED"
+                            "failed to reconcile broker positions after reducing orders"
                         );
+                    }
+                }
+                let expanding_target_shares = subset_target_after_orders(
+                    &shares_after_reducing,
+                    &target_shares,
+                    &staged_orders.expanding,
+                );
+                let mut phase_two_orders =
+                    staged_diff_to_orders(&shares_after_reducing, &expanding_target_shares)
+                        .all_orders();
+                phase_two_orders.retain(|order| {
+                    can_submit_phase_two_order(
+                        current_shares,
+                        &target_shares,
+                        &shares_after_reducing,
+                        phase_one_reconciliation_confirmed,
+                        &order.symbol,
+                    )
+                });
+                if !phase_two_orders.is_empty() {
+                    if let Err(e) = check_order_set_affordability(
+                        broker,
+                        mode,
+                        date,
+                        &shares_after_reducing,
+                        &expanding_target_shares,
+                        &phase_two_orders,
+                        closes,
+                    )
+                    .await
+                    {
                         if let Some(journal) = journal {
                             journal.record_order_event(&BasketOrderEvent {
                                 run_id,
                                 trading_day: date,
                                 seq,
-                                symbol: order.symbol.as_str(),
-                                side: side_str,
-                                requested_qty: order.qty as f64,
-                                intended_notional: closes
-                                    .get(&order.symbol)
-                                    .map(|price| *price * order.qty as f64),
-                                reason,
-                                basket_id,
+                                symbol: "__phase2__",
+                                side: "n/a",
+                                requested_qty: 0.0,
+                                intended_notional: None,
+                                reason: "aggregated",
+                                basket_id: None,
                                 broker_order_id: None,
                                 broker_status: None,
-                                submission_status: "failed",
+                                submission_status: "phase2_affordability_error",
                                 error_text: Some(e.as_str()),
                             })?;
                         }
+                        failed_orders += phase_two_orders.len();
+                    } else {
+                        let expanding_batch = submit_order_batch(
+                            broker,
+                            mode,
+                            execution,
+                            &phase_two_orders,
+                            run_id,
+                            date,
+                            closes,
+                            journal,
+                            seq,
+                        )
+                        .await?;
+                        accepted_orders += expanding_batch.accepted_orders;
+                        failed_orders += expanding_batch.failed_orders;
+                        accepted_unfilled_orders += expanding_batch.accepted_unfilled_orders;
+                        let _ = expanding_batch.next_seq;
                     }
                 }
             }
@@ -3820,7 +4046,7 @@ mod tests {
         let mut closes: HashMap<String, f64> = HashMap::new();
         closes.insert("AMD".to_string(), 100.0);
         closes.insert("NVDA".to_string(), 200.0);
-        let orders = staged_diff_to_orders(&current, &target);
+        let orders = staged_diff_to_orders(&current, &target).all_orders();
         let peak_gross = peak_gross_during_order_path(&current, &orders, &closes);
 
         assert_eq!(gross_notional(&current, &closes), 10_000.0);
@@ -3835,7 +4061,7 @@ mod tests {
         target.insert("AMD".to_string(), -100.0);
         let mut closes: HashMap<String, f64> = HashMap::new();
         closes.insert("AMD".to_string(), 100.0);
-        let orders = staged_diff_to_orders(&current, &target);
+        let orders = staged_diff_to_orders(&current, &target).all_orders();
         let peak_gross = peak_gross_during_order_path(&current, &orders, &closes);
 
         assert_eq!(orders.len(), 2);
@@ -3853,7 +4079,7 @@ mod tests {
         let mut closes: HashMap<String, f64> = HashMap::new();
         closes.insert("AMD".to_string(), 100.0);
         closes.insert("NVDA".to_string(), 300.0);
-        let orders = staged_diff_to_orders(&current, &target);
+        let orders = staged_diff_to_orders(&current, &target).all_orders();
         let peak_gross = peak_gross_during_order_path(&current, &orders, &closes);
 
         assert_eq!(gross_notional(&current, &closes), 10_000.0);
@@ -3865,14 +4091,17 @@ mod tests {
         let current = HashMap::from([("AMD".to_string(), 100.0)]);
         let target = HashMap::from([("AMD".to_string(), -80.0)]);
 
-        let orders = staged_diff_to_orders(&current, &target);
+        let staged = staged_diff_to_orders(&current, &target);
+        let orders = staged.all_orders();
         assert_eq!(orders.len(), 2);
-        assert_eq!(orders[0].symbol, "AMD");
-        assert_eq!(orders[0].side, Side::Sell);
-        assert_eq!(orders[0].qty, 100);
-        assert_eq!(orders[1].symbol, "AMD");
-        assert_eq!(orders[1].side, Side::Sell);
-        assert_eq!(orders[1].qty, 80);
+        assert_eq!(staged.reducing.len(), 1);
+        assert_eq!(staged.expanding.len(), 1);
+        assert_eq!(staged.reducing[0].symbol, "AMD");
+        assert_eq!(staged.reducing[0].side, Side::Sell);
+        assert_eq!(staged.reducing[0].qty, 100);
+        assert_eq!(staged.expanding[0].symbol, "AMD");
+        assert_eq!(staged.expanding[0].side, Side::Sell);
+        assert_eq!(staged.expanding[0].qty, 80);
     }
 
     #[test]
@@ -3880,13 +4109,69 @@ mod tests {
         let current = HashMap::from([("AMD".to_string(), 100.0)]);
         let target = HashMap::from([("AMD".to_string(), 40.0), ("NVDA".to_string(), 25.0)]);
 
-        let orders = staged_diff_to_orders(&current, &target);
+        let staged = staged_diff_to_orders(&current, &target);
+        let orders = staged.all_orders();
         assert_eq!(orders.len(), 2);
-        assert_eq!(orders[0].symbol, "AMD");
-        assert_eq!(orders[0].side, Side::Sell);
-        assert_eq!(orders[0].qty, 60);
-        assert_eq!(orders[1].symbol, "NVDA");
-        assert_eq!(orders[1].side, Side::Buy);
-        assert_eq!(orders[1].qty, 25);
+        assert_eq!(staged.reducing.len(), 1);
+        assert_eq!(staged.expanding.len(), 1);
+        assert_eq!(staged.reducing[0].symbol, "AMD");
+        assert_eq!(staged.reducing[0].side, Side::Sell);
+        assert_eq!(staged.reducing[0].qty, 60);
+        assert_eq!(staged.expanding[0].symbol, "NVDA");
+        assert_eq!(staged.expanding[0].side, Side::Buy);
+        assert_eq!(staged.expanding[0].qty, 25);
+    }
+
+    #[test]
+    fn test_apply_orders_to_shares_handles_flatten_then_flip_open() {
+        let current = HashMap::from([("AIG".to_string(), 10.0)]);
+        let reducing = vec![OrderIntent {
+            symbol: "AIG".to_string(),
+            qty: 10,
+            side: Side::Sell,
+            reason: basket_engine::OrderReason::Aggregated,
+        }];
+        let after = apply_orders_to_shares(&current, &reducing);
+        assert!(!after.contains_key("AIG"));
+    }
+
+    #[test]
+    fn test_subset_target_after_orders_limits_phase_two_to_expanders() {
+        let current_after_phase =
+            HashMap::from([("AIG".to_string(), 0.0), ("NVDA".to_string(), -5.0)]);
+        let final_target = HashMap::from([("AIG".to_string(), -10.0), ("NVDA".to_string(), -2.0)]);
+        let expanding = vec![OrderIntent {
+            symbol: "AIG".to_string(),
+            qty: 10,
+            side: Side::Sell,
+            reason: basket_engine::OrderReason::Aggregated,
+        }];
+        let phase_two_target =
+            subset_target_after_orders(&current_after_phase, &final_target, &expanding);
+        assert_eq!(phase_two_target.get("AIG"), Some(&-10.0));
+        assert_eq!(phase_two_target.get("NVDA"), Some(&-5.0));
+    }
+
+    #[test]
+    fn test_can_submit_phase_two_order_requires_confirmed_reconciliation_for_flips() {
+        let current_before = HashMap::from([("AIG".to_string(), 10.0)]);
+        let final_target = HashMap::from([("AIG".to_string(), -10.0)]);
+        let optimistic_after = HashMap::new();
+
+        assert!(!can_submit_phase_two_order(
+            &current_before,
+            &final_target,
+            &optimistic_after,
+            false,
+            "AIG",
+        ));
+
+        assert!(can_submit_phase_two_order(
+            &current_before,
+            &final_target,
+            &optimistic_after,
+            true,
+            "AIG",
+        ));
     }
 }
