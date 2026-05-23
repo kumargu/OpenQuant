@@ -6,6 +6,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::{BasketEngine, BasketParams};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdmissionScoreKind {
+    SignalScore,
+    RawZScore,
+}
+
+impl Default for AdmissionScoreKind {
+    fn default() -> Self {
+        Self::SignalScore
+    }
+}
+
 /// Portfolio configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortfolioConfig {
@@ -15,6 +27,9 @@ pub struct PortfolioConfig {
     pub leverage: f64,
     /// Maximum number of active baskets.
     pub n_active_baskets: usize,
+    /// Metric used to rank active baskets under the admission cap.
+    #[serde(default)]
+    pub admission_score: AdmissionScoreKind,
 }
 
 impl Default for PortfolioConfig {
@@ -23,6 +38,7 @@ impl Default for PortfolioConfig {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 10,
+            admission_score: AdmissionScoreKind::SignalScore,
         }
     }
 }
@@ -129,7 +145,14 @@ pub fn plan_portfolio(engine: &BasketEngine, config: &PortfolioConfig) -> Portfo
         if state.position == 0 {
             continue;
         }
-        active.push((basket_id.clone(), state.last_z.unwrap_or(0.0).abs()));
+        let rank_score = match config.admission_score {
+            AdmissionScoreKind::SignalScore => {
+                state.last_signal_score.or(state.last_z).unwrap_or(0.0)
+            }
+            AdmissionScoreKind::RawZScore => state.last_z.unwrap_or(0.0),
+        }
+        .abs();
+        active.push((basket_id.clone(), rank_score));
     }
 
     active.sort_by(|(a_id, a_z), (b_id, b_z)| {
@@ -378,6 +401,7 @@ mod tests {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 10,
+            admission_score: AdmissionScoreKind::SignalScore,
         };
         config.validate().unwrap();
         assert_eq!(config.notional_per_basket(), 40_000.0);
@@ -389,6 +413,7 @@ mod tests {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 0,
+            admission_score: AdmissionScoreKind::SignalScore,
         };
         let err = config.validate().unwrap_err();
         assert!(err.contains("n_active_baskets"));
@@ -460,6 +485,7 @@ mod tests {
             capital: 100_000.0,
             leverage: 4.0,
             n_active_baskets: 1,
+            admission_score: AdmissionScoreKind::SignalScore,
         };
         let plan = plan_portfolio(&engine, &config);
         assert_eq!(plan.active_baskets, 2);
@@ -467,5 +493,52 @@ mod tests {
         assert_eq!(plan.excluded_baskets.len(), 1);
         let gross: f64 = plan.symbol_notionals.values().map(|n| n.abs()).sum();
         assert!((gross - config.notional_per_basket()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_plan_portfolio_can_rank_by_raw_z_instead_of_signal_score() {
+        let engine = make_test_engine();
+        let mut ids: Vec<String> = engine.iter_params().map(|(id, _)| id.clone()).collect();
+        ids.sort();
+        assert!(ids.len() >= 2);
+
+        let mut states = std::collections::HashMap::new();
+
+        let mut first = crate::BasketState::new();
+        first.position = 1;
+        first.last_signal_score = Some(5.0);
+        first.last_z = Some(1.0);
+        states.insert(ids[0].clone(), first);
+
+        let mut second = crate::BasketState::new();
+        second.position = 1;
+        second.last_signal_score = Some(1.0);
+        second.last_z = Some(5.0);
+        states.insert(ids[1].clone(), second);
+
+        let mut engine = engine;
+        engine.apply_states(states).unwrap();
+
+        let signal_plan = plan_portfolio(
+            &engine,
+            &PortfolioConfig {
+                capital: 100_000.0,
+                leverage: 4.0,
+                n_active_baskets: 1,
+                admission_score: AdmissionScoreKind::SignalScore,
+            },
+        );
+        assert_eq!(signal_plan.selected_baskets, vec![ids[0].clone()]);
+
+        let raw_z_plan = plan_portfolio(
+            &engine,
+            &PortfolioConfig {
+                capital: 100_000.0,
+                leverage: 4.0,
+                n_active_baskets: 1,
+                admission_score: AdmissionScoreKind::RawZScore,
+            },
+        );
+        assert_eq!(raw_z_plan.selected_baskets, vec![ids[1].clone()]);
     }
 }

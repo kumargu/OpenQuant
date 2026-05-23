@@ -35,6 +35,7 @@ mod simulated_broker;
 mod stream;
 
 use alpaca::ExecutionMode;
+use basket_engine::{AdmissionScoreKind, GatePolicyKind, RollingEntryMode, RollingSScoreV1Config};
 use basket_picker::{
     RunnerLeadershipOverlayModeConfig as UniverseLeadershipOverlayModeConfig,
     RunnerLeadershipPickerConfig as UniverseLeadershipPickerConfig,
@@ -197,6 +198,34 @@ struct StreamArgs {
     #[arg(long)]
     n_active_baskets: Option<usize>,
 
+    /// Basket-only signal gate policy. Defaults to the legacy Bertram trigger.
+    #[arg(long, value_enum)]
+    basket_signal_policy: Option<BasketSignalPolicyArg>,
+
+    /// Rolling s-score v1: trailing spread lookback window in trading days.
+    #[arg(long)]
+    basket_signal_lookback: Option<usize>,
+
+    /// Rolling s-score v1: minimum history before signals are allowed.
+    #[arg(long)]
+    basket_signal_min_history: Option<usize>,
+
+    /// Rolling s-score v1: close band around zero for flattening open positions.
+    #[arg(long)]
+    basket_signal_exit_threshold: Option<f64>,
+
+    /// Rolling s-score v1: allow same-bar direct flips across the opposite entry threshold.
+    #[arg(long)]
+    basket_signal_direct_flip: Option<bool>,
+
+    /// Rolling s-score v1: metric used to trigger entries and direct flips.
+    #[arg(long, value_enum)]
+    basket_signal_entry_mode: Option<BasketSignalEntryModeArg>,
+
+    /// Metric used to rank active baskets under the admission cap.
+    #[arg(long, value_enum)]
+    basket_admission_score: Option<BasketAdmissionScoreArg>,
+
     /// Override the durable basket paper/live journal path.
     /// Defaults to `<data-dir>/journal/basket_live.sqlite3`.
     #[arg(long)]
@@ -319,6 +348,34 @@ struct ReplayArgs {
     /// Max active baskets (basket only, default 5).
     #[arg(long)]
     n_active_baskets: Option<usize>,
+
+    /// Basket-only signal gate policy. Defaults to the legacy Bertram trigger.
+    #[arg(long, value_enum)]
+    basket_signal_policy: Option<BasketSignalPolicyArg>,
+
+    /// Rolling s-score v1: trailing spread lookback window in trading days.
+    #[arg(long)]
+    basket_signal_lookback: Option<usize>,
+
+    /// Rolling s-score v1: minimum history before signals are allowed.
+    #[arg(long)]
+    basket_signal_min_history: Option<usize>,
+
+    /// Rolling s-score v1: close band around zero for flattening open positions.
+    #[arg(long)]
+    basket_signal_exit_threshold: Option<f64>,
+
+    /// Rolling s-score v1: allow same-bar direct flips across the opposite entry threshold.
+    #[arg(long)]
+    basket_signal_direct_flip: Option<bool>,
+
+    /// Rolling s-score v1: metric used to trigger entries and direct flips.
+    #[arg(long, value_enum)]
+    basket_signal_entry_mode: Option<BasketSignalEntryModeArg>,
+
+    /// Metric used to rank active baskets under the admission cap.
+    #[arg(long, value_enum)]
+    basket_admission_score: Option<BasketAdmissionScoreArg>,
 
     /// One-sided fill slippage in basis points (basket only, default 0).
     #[arg(long, default_value_t = 0.0)]
@@ -443,6 +500,42 @@ enum LeadershipPickerArg {
     RuleV1,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum BasketSignalPolicyArg {
+    Bertram,
+    RollingSScoreV1,
+}
+
+#[derive(Copy, Clone, Debug, clap::ValueEnum)]
+enum BasketAdmissionScoreArg {
+    SignalScore,
+    RawZScore,
+}
+
+#[derive(Copy, Clone, Debug, clap::ValueEnum)]
+enum BasketSignalEntryModeArg {
+    RollingScore,
+    RawZScore,
+}
+
+impl From<BasketSignalEntryModeArg> for RollingEntryMode {
+    fn from(value: BasketSignalEntryModeArg) -> Self {
+        match value {
+            BasketSignalEntryModeArg::RollingScore => RollingEntryMode::RollingScore,
+            BasketSignalEntryModeArg::RawZScore => RollingEntryMode::RawZScore,
+        }
+    }
+}
+
+impl From<BasketAdmissionScoreArg> for AdmissionScoreKind {
+    fn from(value: BasketAdmissionScoreArg) -> Self {
+        match value {
+            BasketAdmissionScoreArg::SignalScore => AdmissionScoreKind::SignalScore,
+            BasketAdmissionScoreArg::RawZScore => AdmissionScoreKind::RawZScore,
+        }
+    }
+}
+
 impl From<LeadershipPickerArg> for basket_overlay_picker::BasketOverlayPickerKind {
     fn from(value: LeadershipPickerArg) -> Self {
         match value {
@@ -461,9 +554,35 @@ impl From<UniverseLeadershipPickerConfig> for LeadershipPickerArg {
     }
 }
 
+fn resolve_basket_signal_policy(
+    policy: Option<BasketSignalPolicyArg>,
+    lookback: Option<usize>,
+    min_history: Option<usize>,
+    exit_threshold: Option<f64>,
+    direct_flip: Option<bool>,
+    entry_mode: Option<BasketSignalEntryModeArg>,
+) -> Result<GatePolicyKind, String> {
+    match policy.unwrap_or(BasketSignalPolicyArg::Bertram) {
+        BasketSignalPolicyArg::Bertram => Ok(GatePolicyKind::BertramFrozen),
+        BasketSignalPolicyArg::RollingSScoreV1 => {
+            let cfg = RollingSScoreV1Config {
+                lookback: lookback.unwrap_or(20),
+                min_history: min_history.unwrap_or(20),
+                exit_threshold: exit_threshold.unwrap_or(0.5),
+                direct_flip: direct_flip.unwrap_or(true),
+                entry_mode: entry_mode.unwrap_or(BasketSignalEntryModeArg::RollingScore).into(),
+            };
+            let gate_policy = GatePolicyKind::RollingSScoreV1(cfg);
+            gate_policy.validate()?;
+            Ok(gate_policy)
+        }
+    }
+}
+
 struct BasketRuntimeOverrides<'a> {
     capital: Option<f64>,
     n_active_baskets: Option<usize>,
+    basket_admission_score: Option<BasketAdmissionScoreArg>,
     disable_leadership_overlay: bool,
     leadership_overlay_sectors: &'a [String],
     leadership_ret5d_threshold: Option<f64>,
@@ -555,6 +674,10 @@ fn resolve_basket_runtime(
         n_active_baskets: overrides
             .n_active_baskets
             .unwrap_or(universe.runner.portfolio.n_active_baskets),
+        admission_score: overrides
+            .basket_admission_score
+            .map(Into::into)
+            .unwrap_or_default(),
     };
 
     let has_overlay_override = !overrides.leadership_overlay_sectors.is_empty()
@@ -1078,6 +1201,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         BasketRuntimeOverrides {
             capital: args.capital,
             n_active_baskets: args.n_active_baskets,
+            basket_admission_score: args.basket_admission_score,
             disable_leadership_overlay: args.disable_leadership_overlay,
             leadership_overlay_sectors: &args.leadership_overlay_sectors,
             leadership_ret5d_threshold: args.leadership_ret5d_threshold,
@@ -1220,6 +1344,20 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             None => base,
         }
     });
+    let gate_policy = match resolve_basket_signal_policy(
+        args.basket_signal_policy,
+        args.basket_signal_lookback,
+        args.basket_signal_min_history,
+        args.basket_signal_exit_threshold,
+        args.basket_signal_direct_flip,
+        args.basket_signal_entry_mode,
+    ) {
+        Ok(policy) => policy,
+        Err(e) => {
+            error!(error = %e, "invalid basket signal policy");
+            std::process::exit(1);
+        }
+    };
 
     if let Err(e) = basket_live::run_basket_live(
         &alpaca,
@@ -1238,6 +1376,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             leadership_overlay,
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
+            gate_policy,
         },
     )
     .await
@@ -1990,6 +2129,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         BasketRuntimeOverrides {
             capital: args.capital,
             n_active_baskets: args.n_active_baskets,
+            basket_admission_score: args.basket_admission_score,
             disable_leadership_overlay: args.disable_leadership_overlay,
             leadership_overlay_sectors: &args.leadership_overlay_sectors,
             leadership_ret5d_threshold: args.leadership_ret5d_threshold,
@@ -2081,6 +2221,20 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     // reconciliation) runs identically to live. The execution flag
     // never reaches Alpaca because the broker IS our SimulatedBroker.
     let execution = basket_live::BasketExecution::Paper;
+    let gate_policy = match resolve_basket_signal_policy(
+        args.basket_signal_policy,
+        args.basket_signal_lookback,
+        args.basket_signal_min_history,
+        args.basket_signal_exit_threshold,
+        args.basket_signal_direct_flip,
+        args.basket_signal_entry_mode,
+    ) {
+        Ok(policy) => policy,
+        Err(e) => {
+            error!(error = %e, "invalid basket signal policy");
+            std::process::exit(1);
+        }
+    };
 
     let result = basket_live::run_basket_live(
         &broker,
@@ -2099,6 +2253,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             leadership_overlay,
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
+            gate_policy,
         },
     )
     .await;

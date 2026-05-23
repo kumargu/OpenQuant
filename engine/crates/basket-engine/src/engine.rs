@@ -9,7 +9,8 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, trace, warn};
 
-use crate::intent::{PositionIntent, TransitionReason};
+use crate::gates::{evaluate_gate, GatePolicyKind};
+use crate::intent::PositionIntent;
 use crate::state::BasketState;
 use crate::DailyBar;
 
@@ -55,6 +56,9 @@ pub struct EngineSnapshot {
     pub params: Vec<BasketParams>,
     /// Per-basket runtime state.
     pub states: HashMap<String, BasketState>,
+    /// Signal / transition policy used to produce the persisted state.
+    #[serde(default)]
+    pub gate_policy: GatePolicyKind,
     /// Last trading day that the runner fully processed. Optional so older
     /// snapshots remain readable.
     #[serde(default)]
@@ -68,11 +72,17 @@ pub struct BasketEngine {
     params: HashMap<String, BasketParams>,
     /// Per-basket runtime state.
     states: HashMap<String, BasketState>,
+    /// Signal / transition policy.
+    gate_policy: GatePolicyKind,
 }
 
 impl BasketEngine {
     /// Create a new engine from validated basket fits.
     pub fn new(fits: &[BasketFit]) -> Self {
+        Self::with_gate_policy(fits, GatePolicyKind::BertramFrozen)
+    }
+
+    pub fn with_gate_policy(fits: &[BasketFit], gate_policy: GatePolicyKind) -> Self {
         let mut params = HashMap::new();
         let mut states = HashMap::new();
 
@@ -84,7 +94,11 @@ impl BasketEngine {
             }
         }
 
-        Self { params, states }
+        Self {
+            params,
+            states,
+            gate_policy,
+        }
     }
 
     /// Get the number of active baskets.
@@ -96,6 +110,19 @@ impl BasketEngine {
     ///
     /// All bars must have the same date. Returns empty if bars have mixed dates.
     pub fn on_bars(&mut self, bars: &[DailyBar]) -> Vec<PositionIntent> {
+        self.on_bars_with_transition_mode(bars, true)
+    }
+
+    /// Warm signal state from historical bars without generating entries/exits.
+    pub fn warm_on_bars(&mut self, bars: &[DailyBar]) {
+        let _ = self.on_bars_with_transition_mode(bars, false);
+    }
+
+    fn on_bars_with_transition_mode(
+        &mut self,
+        bars: &[DailyBar],
+        apply_transitions: bool,
+    ) -> Vec<PositionIntent> {
         if bars.is_empty() {
             return vec![];
         }
@@ -194,7 +221,6 @@ impl BasketEngine {
 
             // Compute spread = log(target) - mean(log(peers))
             let spread = target_price.ln() - peer_log_sum / peer_count as f64;
-            state.record_spread(spread);
 
             // Compute z-score using frozen OU parameters
             let z = (spread - params.ou.mu) / params.ou.sigma_eq;
@@ -215,13 +241,17 @@ impl BasketEngine {
             }
 
             evaluated += 1;
-            let k = params.threshold_k;
             let old_pos = state.position;
+            let evaluation = evaluate_gate(&self.gate_policy, state, params, spread, z);
+            state.last_signal_score = evaluation.signal_score;
+            state.record_spread(spread);
+            let signal_score = evaluation.signal_score.unwrap_or(z);
+            let entry_threshold = evaluation.entry_threshold;
 
             // Near-threshold counter — any basket with |z| > 0.75k is "close
             // to firing." Tracking this gives us a pulse on whether the
             // strategy is actually seeing opportunity vs. sitting flat.
-            if z.abs() > 0.75 * k {
+            if signal_score.abs() > 0.75 * entry_threshold {
                 near_threshold += 1;
             }
 
@@ -233,7 +263,9 @@ impl BasketEngine {
                 peer_count,
                 spread = %format!("{:.6}", spread),
                 z = %format!("{:.4}", z),
-                threshold_k = k,
+                signal_score = %format!("{:.4}", signal_score),
+                threshold_k = entry_threshold,
+                exit_threshold = ?evaluation.exit_threshold.map(|v| format!("{v:.4}")),
                 position = old_pos,
                 date = %date,
                 "basket evaluation"
@@ -243,70 +275,54 @@ impl BasketEngine {
             debug!(
                 basket_id = %basket_id,
                 z = %format!("{:.4}", z),
-                k = %format!("{:.4}", k),
+                signal_score = %format!("{:.4}", signal_score),
+                k = %format!("{:.4}", entry_threshold),
                 pos = old_pos,
                 "basket z-check"
             );
-
-            // Bertram symmetric state machine
-            let (new_pos, reason) = match old_pos {
-                0 => {
-                    // Flat: enter on threshold breach
-                    if z < -k {
-                        (1, Some(TransitionReason::InitialEntryLong))
-                    } else if z > k {
-                        (-1, Some(TransitionReason::InitialEntryShort))
-                    } else {
-                        (0, None)
-                    }
-                }
-                1 => {
-                    // Long: flip to short when z > k
-                    if z > k {
-                        (-1, Some(TransitionReason::FlipLongToShort))
-                    } else {
-                        (1, None)
-                    }
-                }
-                -1 => {
-                    // Short: flip to long when z < -k
-                    if z < -k {
-                        (1, Some(TransitionReason::FlipShortToLong))
-                    } else {
-                        (-1, None)
-                    }
-                }
-                _ => (old_pos, None),
-            };
+            let new_pos = evaluation.next_position;
+            let reason = evaluation.reason;
 
             // Apply state transition if any
-            if let Some(reason) = reason {
-                if old_pos == 0 {
-                    state.enter(new_pos, date, spread);
-                } else {
-                    state.flip(date, spread);
+            if apply_transitions {
+                if let Some(reason) = reason {
+                    if new_pos == 0 {
+                        state.flatten();
+                    } else if old_pos == 0 {
+                        state.enter(new_pos, date, spread);
+                    } else {
+                        state.flip(date, spread);
+                    }
+
+                    transitioned += 1;
+
+                    info!(
+                        basket_id = %basket_id,
+                        z_score = %format!("{:.4}", z),
+                        signal_score = %format!("{:.4}", signal_score),
+                        old_pos = old_pos,
+                        new_pos = new_pos,
+                        spread = %format!("{:.6}", spread),
+                        reason = %reason.as_str(),
+                        "position_transition"
+                    );
+
+                    intents.push(PositionIntent::new(
+                        basket_id.clone(),
+                        new_pos,
+                        reason,
+                        signal_score,
+                        spread,
+                        date,
+                    ));
                 }
-
-                transitioned += 1;
-
-                info!(
+            } else if reason.is_some() {
+                debug!(
                     basket_id = %basket_id,
-                    z_score = %format!("{:.4}", z),
-                    old_pos = old_pos,
-                    new_pos = new_pos,
-                    spread = %format!("{:.6}", spread),
-                    reason = %reason.as_str(),
-                    "position_transition"
+                    signal_score = %format!("{:.4}", signal_score),
+                    date = %date,
+                    "warmup suppressed a transition candidate"
                 );
-
-                intents.push(PositionIntent::new(
-                    basket_id.clone(),
-                    new_pos,
-                    reason,
-                    z,
-                    spread,
-                    date,
-                ));
             }
         }
 
@@ -324,6 +340,7 @@ impl BasketEngine {
             near_threshold,
             transitioned,
             intents_emitted = intents.len(),
+            apply_transitions,
             "on_bars summary"
         );
 
@@ -344,6 +361,7 @@ impl BasketEngine {
         let snapshot = EngineSnapshot {
             params: self.params.values().cloned().collect(),
             states: self.states.clone(),
+            gate_policy: self.gate_policy.clone(),
             last_processed_trading_day,
         };
         let json = serde_json::to_string_pretty(&snapshot)
@@ -375,6 +393,7 @@ impl BasketEngine {
         Ok(Self {
             params,
             states: snapshot.states,
+            gate_policy: snapshot.gate_policy,
         })
     }
 
@@ -383,6 +402,7 @@ impl BasketEngine {
         let snapshot = EngineSnapshot {
             params: self.params.values().cloned().collect(),
             states,
+            gate_policy: self.gate_policy.clone(),
             last_processed_trading_day: None,
         };
         Self::validate_snapshot(&snapshot)?;
@@ -405,6 +425,10 @@ impl BasketEngine {
         self.params.iter()
     }
 
+    pub fn gate_policy(&self) -> &GatePolicyKind {
+        &self.gate_policy
+    }
+
     /// Flatten a set of baskets so portfolio admission and engine state stay aligned.
     pub fn flatten_baskets(&mut self, basket_ids: &[String]) {
         for basket_id in basket_ids {
@@ -415,6 +439,7 @@ impl BasketEngine {
     }
 
     fn validate_snapshot(snapshot: &EngineSnapshot) -> Result<(), String> {
+        snapshot.gate_policy.validate()?;
         let mut params = HashMap::new();
         for p in &snapshot.params {
             params.insert(p.basket_id.clone(), p);
@@ -438,6 +463,7 @@ impl BasketEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TransitionReason;
     use basket_picker::{BasketCandidate, BertramResult};
     use chrono::NaiveDate;
 
