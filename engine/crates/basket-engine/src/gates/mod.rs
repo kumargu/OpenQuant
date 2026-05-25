@@ -48,6 +48,13 @@ impl GatePolicyKind {
                         "rolling_s_score_v1 min_history must be in [1, lookback]".to_string()
                     );
                 }
+                if config.entry_confirmation_bars == 0
+                    || config.entry_confirmation_bars > MAX_SPREAD_HISTORY
+                {
+                    return Err(format!(
+                        "rolling_s_score_v1 entry_confirmation_bars must be in [1, {MAX_SPREAD_HISTORY}]"
+                    ));
+                }
                 if !config.exit_threshold.is_finite() || config.exit_threshold < 0.0 {
                     return Err(
                         "rolling_s_score_v1 exit_threshold must be finite and non-negative"
@@ -67,6 +74,7 @@ pub struct RollingSScoreV1Config {
     pub exit_threshold: f64,
     pub direct_flip: bool,
     pub entry_mode: RollingEntryMode,
+    pub entry_confirmation_bars: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +91,7 @@ impl Default for RollingSScoreV1Config {
             exit_threshold: 0.5,
             direct_flip: true,
             entry_mode: RollingEntryMode::RollingScore,
+            entry_confirmation_bars: 1,
         }
     }
 }
@@ -117,6 +126,72 @@ pub struct RollingSScoreV1Policy {
 impl RollingSScoreV1Policy {
     pub fn new(config: RollingSScoreV1Config) -> Self {
         Self { config }
+    }
+
+    fn compute_recent_entry_scores(
+        &self,
+        state: &BasketState,
+        params: &BasketParams,
+        current_spread: f64,
+    ) -> Vec<f64> {
+        let mut spreads: Vec<f64> = state.spread_history.iter().copied().collect();
+        spreads.push(current_spread);
+        let want = self.config.entry_confirmation_bars.max(1);
+        match self.config.entry_mode {
+            RollingEntryMode::RawZScore => spreads
+                .iter()
+                .rev()
+                .take(want)
+                .map(|spread| (spread - params.ou.mu) / params.ou.sigma_eq)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+            RollingEntryMode::RollingScore => {
+                let mut scores = Vec::new();
+                for idx in 0..spreads.len() {
+                    let start = idx.saturating_sub(self.config.lookback);
+                    let history = &spreads[start..idx];
+                    if history.len() < self.config.min_history {
+                        continue;
+                    }
+                    let mean = history.iter().sum::<f64>() / history.len() as f64;
+                    let variance = history
+                        .iter()
+                        .map(|v| {
+                            let d = *v - mean;
+                            d * d
+                        })
+                        .sum::<f64>()
+                        / history.len() as f64;
+                    let std_dev = variance.sqrt();
+                    if !std_dev.is_finite() || std_dev <= f64::EPSILON {
+                        continue;
+                    }
+                    scores.push((spreads[idx] - mean) / std_dev);
+                }
+                scores
+                    .into_iter()
+                    .rev()
+                    .take(want)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect()
+            }
+        }
+    }
+
+    fn entry_confirmation_passes(&self, scores: &[f64], threshold: f64, direction: i8) -> bool {
+        let need = self.config.entry_confirmation_bars.max(1);
+        if scores.len() < need {
+            return false;
+        }
+        match direction {
+            1 => scores.iter().all(|score| *score <= -threshold),
+            -1 => scores.iter().all(|score| *score >= threshold),
+            _ => false,
+        }
     }
 }
 
@@ -220,15 +295,18 @@ impl GatePolicy for RollingSScoreV1Policy {
             RollingEntryMode::RollingScore => s_score,
             RollingEntryMode::RawZScore => raw_z,
         };
+        let recent_entry_scores = self.compute_recent_entry_scores(state, params, spread);
+        let long_confirmed = self.entry_confirmation_passes(&recent_entry_scores, k, 1);
+        let short_confirmed = self.entry_confirmation_passes(&recent_entry_scores, k, -1);
         let (next_position, reason, signal_score) = match old_pos {
             0 => {
-                if entry_score <= -k {
+                if entry_score <= -k && long_confirmed {
                     (
                         1,
                         Some(TransitionReason::InitialEntryLong),
                         Some(entry_score),
                     )
-                } else if entry_score >= k {
+                } else if entry_score >= k && short_confirmed {
                     (
                         -1,
                         Some(TransitionReason::InitialEntryShort),
@@ -239,7 +317,7 @@ impl GatePolicy for RollingSScoreV1Policy {
                 }
             }
             1 => {
-                if self.config.direct_flip && entry_score >= k {
+                if self.config.direct_flip && entry_score >= k && short_confirmed {
                     (
                         -1,
                         Some(TransitionReason::FlipLongToShort),
@@ -252,7 +330,7 @@ impl GatePolicy for RollingSScoreV1Policy {
                 }
             }
             -1 => {
-                if self.config.direct_flip && entry_score <= -k {
+                if self.config.direct_flip && entry_score <= -k && long_confirmed {
                     (
                         1,
                         Some(TransitionReason::FlipShortToLong),
@@ -348,6 +426,7 @@ mod tests {
             exit_threshold: 0.5,
             direct_flip: true,
             entry_mode: RollingEntryMode::RollingScore,
+            entry_confirmation_bars: 1,
         };
         let mut state = BasketState::default();
         state.spread_history = (0..20).map(|i| i as f64 * 0.1).collect();
@@ -369,11 +448,36 @@ mod tests {
             exit_threshold: 0.5,
             direct_flip: true,
             entry_mode: RollingEntryMode::RawZScore,
+            entry_confirmation_bars: 1,
         };
         let mut state = BasketState::default();
         state.spread_history = (0..20).map(|i| i as f64 * 0.1).collect();
         let enter = RollingSScoreV1Policy::new(cfg).evaluate(&state, &params(), -2.0, -2.5);
         assert_eq!(enter.reason, Some(TransitionReason::InitialEntryLong));
         assert_eq!(enter.signal_score, Some(-2.5));
+    }
+
+    #[test]
+    fn rolling_policy_requires_consecutive_raw_z_confirmation_for_entry() {
+        let cfg = RollingSScoreV1Config {
+            lookback: 20,
+            min_history: 20,
+            exit_threshold: 0.5,
+            direct_flip: true,
+            entry_mode: RollingEntryMode::RawZScore,
+            entry_confirmation_bars: 2,
+        };
+        let mut state = BasketState::default();
+        state.spread_history = VecDeque::from(vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.2, 0.1,
+        ]);
+        let blocked = RollingSScoreV1Policy::new(cfg).evaluate(&state, &params(), -2.0, -2.0);
+        assert_eq!(blocked.reason, None);
+
+        state.spread_history.pop_front();
+        state.spread_history.push_back(-2.0);
+        let allowed = RollingSScoreV1Policy::new(cfg).evaluate(&state, &params(), -2.1, -2.1);
+        assert_eq!(allowed.reason, Some(TransitionReason::InitialEntryLong));
     }
 }

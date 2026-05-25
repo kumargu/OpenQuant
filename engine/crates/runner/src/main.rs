@@ -222,6 +222,10 @@ struct StreamArgs {
     #[arg(long, value_enum)]
     basket_signal_entry_mode: Option<BasketSignalEntryModeArg>,
 
+    /// Rolling s-score v1: consecutive bars required to confirm entries/direct flips.
+    #[arg(long)]
+    basket_signal_entry_confirmation_bars: Option<usize>,
+
     /// Metric used to rank active baskets under the admission cap.
     #[arg(long, value_enum)]
     basket_admission_score: Option<BasketAdmissionScoreArg>,
@@ -372,6 +376,10 @@ struct ReplayArgs {
     /// Rolling s-score v1: metric used to trigger entries and direct flips.
     #[arg(long, value_enum)]
     basket_signal_entry_mode: Option<BasketSignalEntryModeArg>,
+
+    /// Rolling s-score v1: consecutive bars required to confirm entries/direct flips.
+    #[arg(long)]
+    basket_signal_entry_confirmation_bars: Option<usize>,
 
     /// Metric used to rank active baskets under the admission cap.
     #[arg(long, value_enum)]
@@ -561,6 +569,7 @@ fn resolve_basket_signal_policy(
     exit_threshold: Option<f64>,
     direct_flip: Option<bool>,
     entry_mode: Option<BasketSignalEntryModeArg>,
+    entry_confirmation_bars: Option<usize>,
 ) -> Result<GatePolicyKind, String> {
     match policy.unwrap_or(BasketSignalPolicyArg::Bertram) {
         BasketSignalPolicyArg::Bertram => Ok(GatePolicyKind::BertramFrozen),
@@ -573,6 +582,7 @@ fn resolve_basket_signal_policy(
                 entry_mode: entry_mode
                     .unwrap_or(BasketSignalEntryModeArg::RollingScore)
                     .into(),
+                entry_confirmation_bars: entry_confirmation_bars.unwrap_or(1),
             };
             let gate_policy = GatePolicyKind::RollingSScoreV1(cfg);
             gate_policy.validate()?;
@@ -1294,6 +1304,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         args.basket_signal_exit_threshold,
         args.basket_signal_direct_flip,
         args.basket_signal_entry_mode,
+        args.basket_signal_entry_confirmation_bars,
     ) {
         Ok(policy) => policy,
         Err(e) => {
@@ -2105,6 +2116,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         args.basket_signal_exit_threshold,
         args.basket_signal_direct_flip,
         args.basket_signal_entry_mode,
+        args.basket_signal_entry_confirmation_bars,
     ) {
         Ok(policy) => policy,
         Err(e) => {
@@ -2444,6 +2456,7 @@ mod tests {
             exit_threshold: 1.0,
             direct_flip: true,
             entry_mode: RollingEntryMode::RawZScore,
+            entry_confirmation_bars: 1,
         }))
         .unwrap();
         let path = path_with_suffix(

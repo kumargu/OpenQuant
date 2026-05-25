@@ -3995,6 +3995,7 @@ mod tests {
                 exit_threshold: 0.5,
                 direct_flip: true,
                 entry_mode: basket_engine::RollingEntryMode::RollingScore,
+                entry_confirmation_bars: 1,
             }),
         )
         .unwrap();
