@@ -30,8 +30,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use basket_engine::{
-    plan_portfolio, BasketEngine, DailyBar, OrderIntent, PortfolioConfig, PortfolioPlan,
-    PositionIntent, Side,
+    plan_portfolio, BasketEngine, DailyBar, GatePolicyKind, OrderIntent, PortfolioConfig,
+    PortfolioPlan, PositionIntent, Side,
 };
 use basket_picker::{load_universe, BasketFit};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -122,6 +122,7 @@ pub struct BasketRunOptions {
     pub leadership_overlay: Option<LeadershipOverlayConfig>,
     pub overlay_picker: BasketOverlayPickerKind,
     pub rule_v1_config: Option<crate::basket_overlay_picker::RuleV1OverlayPickerConfig>,
+    pub gate_policy: GatePolicyKind,
 }
 
 impl Default for BasketRunOptions {
@@ -132,6 +133,7 @@ impl Default for BasketRunOptions {
             leadership_overlay: None,
             overlay_picker: BasketOverlayPickerKind::Fixed,
             rule_v1_config: None,
+            gate_policy: GatePolicyKind::BertramFrozen,
         }
     }
 }
@@ -472,6 +474,47 @@ fn warm_leadership_tracker(
         anchor_day = %anchor_day,
         active_sectors = ?tracker.active_sectors_for_today(),
         "leadership tracker warmed from historical close snapshots"
+    );
+    Ok(())
+}
+
+fn warm_engine_signal_history(
+    engine: &mut BasketEngine,
+    bars_dir: &Path,
+    symbols: &[String],
+    anchor_day: NaiveDate,
+) -> Result<(), String> {
+    let Some(lookback) = engine.gate_policy().history_lookback() else {
+        return Ok(());
+    };
+    let requested_warm_days = (lookback as i64 * 3).max(60);
+    let closes = load_daily_closes_with_timestamps(
+        bars_dir,
+        symbols,
+        requested_warm_days,
+        Some(anchor_day),
+    )?;
+    let mut by_day: std::collections::BTreeMap<NaiveDate, Vec<DailyBar>> =
+        std::collections::BTreeMap::new();
+    for (symbol, series) in closes {
+        for (date, _ts_us, close) in series {
+            by_day.entry(date).or_default().push(DailyBar {
+                symbol: symbol.clone(),
+                date,
+                close,
+            });
+        }
+    }
+    let warm_days = by_day.len();
+    for bars in by_day.into_values() {
+        engine.warm_on_bars(&bars);
+    }
+    info!(
+        anchor_day = %anchor_day,
+        requested_warm_days,
+        warm_days,
+        gate_policy = ?engine.gate_policy(),
+        "warmed basket engine signal history"
     );
     Ok(())
 }
@@ -1434,7 +1477,9 @@ pub async fn run_basket_live(
             state_path,
             &current_shares,
             execution.alpaca_mode().is_some(),
+            options.gate_policy.clone(),
         )?;
+    info!(gate_policy = ?engine.gate_policy(), "basket signal gate policy initialized");
     let leadership_state_path = leadership_classifier_state_path(state_path);
     let can_load_sidecar_state = matches!(startup_state_source, StartupStateSource::Snapshot);
     if !can_load_sidecar_state {
@@ -1478,6 +1523,16 @@ pub async fn run_basket_live(
                 tracker.save_state(&leadership_state_path)?;
             }
             Err(e) => return Err(e),
+        }
+    }
+    if !can_load_sidecar_state {
+        let warm_anchor = if last_processed_trading_day == Some(today) {
+            Some(today)
+        } else {
+            previous_trading_day(today)
+        };
+        if let Some(anchor_day) = warm_anchor {
+            warm_engine_signal_history(&mut engine, bars_dir, &symbols, anchor_day)?;
         }
     }
     if let Some(cfg) = options.leadership_overlay.as_ref() {
@@ -1996,13 +2051,14 @@ fn initialize_engine_state(
     state_path: &Path,
     broker_shares: &HashMap<String, f64>,
     broker_execution_enabled: bool,
+    gate_policy: GatePolicyKind,
 ) -> Result<(BasketEngine, Option<NaiveDate>, StartupStateSource), String> {
     let expected_ids: std::collections::HashSet<String> = fits
         .iter()
         .filter(|f| f.valid)
         .map(|f| f.candidate.id())
         .collect();
-    let mut fresh = BasketEngine::new(fits);
+    let mut fresh = BasketEngine::with_gate_policy(fits, gate_policy.clone());
 
     if !state_path.exists() {
         if broker_execution_enabled && !broker_shares.is_empty() {
@@ -2021,14 +2077,28 @@ fn initialize_engine_state(
 
     match BasketEngine::load_snapshot(state_path) {
         Ok(snapshot) => {
-            let loaded_ids: std::collections::HashSet<String> =
-                snapshot.states.keys().cloned().collect();
-            if loaded_ids != expected_ids {
-                return recover_from_unloadable_state(
+            if snapshot.gate_policy != gate_policy {
+                return recover_from_incompatible_state(
                     fresh,
                     state_path,
                     broker_shares,
                     broker_execution_enabled,
+                    false,
+                    format!(
+                        "state snapshot gate policy mismatch: snapshot={:?}, requested={:?}",
+                        snapshot.gate_policy, gate_policy
+                    ),
+                );
+            }
+            let loaded_ids: std::collections::HashSet<String> =
+                snapshot.states.keys().cloned().collect();
+            if loaded_ids != expected_ids {
+                return recover_from_incompatible_state(
+                    fresh,
+                    state_path,
+                    broker_shares,
+                    broker_execution_enabled,
+                    true,
                     format!(
                         "state snapshot basket set mismatch: snapshot={}, artifact={}",
                         loaded_ids.len(),
@@ -2050,38 +2120,49 @@ fn initialize_engine_state(
                 StartupStateSource::Snapshot,
             ))
         }
-        Err(e) => recover_from_unloadable_state(
+        Err(e) => recover_from_incompatible_state(
             fresh,
             state_path,
             broker_shares,
             broker_execution_enabled,
+            true,
             format!("failed to load state snapshot: {e}"),
         ),
     }
 }
 
-fn recover_from_unloadable_state(
+fn recover_from_incompatible_state(
     mut fresh: BasketEngine,
     state_path: &Path,
     broker_shares: &HashMap<String, f64>,
     broker_execution_enabled: bool,
+    move_state_aside: bool,
     reason: String,
 ) -> Result<(BasketEngine, Option<NaiveDate>, StartupStateSource), String> {
-    let backup_path = move_state_file_aside(state_path)?;
-    bug!(
-        "engine_state_snapshot_unusable",
-        state_path = %state_path.display(),
-        backup_path = %backup_path.display(),
-        reason = %reason,
-        "state snapshot unusable — moved aside for recovery"
-    );
+    if move_state_aside {
+        let backup_path = move_state_file_aside(state_path)?;
+        bug!(
+            "engine_state_snapshot_unusable",
+            state_path = %state_path.display(),
+            backup_path = %backup_path.display(),
+            reason = %reason,
+            "state snapshot unusable — moved aside for recovery"
+        );
+    } else {
+        bug!(
+            "engine_state_snapshot_incompatible_policy",
+            state_path = %state_path.display(),
+            reason = %reason,
+            "state snapshot incompatible with requested gate policy — preserving file and recovering fresh runtime state"
+        );
+    }
 
     if broker_execution_enabled && !broker_shares.is_empty() {
         let reconciled = reconcile_engine_state_from_broker(&mut fresh, broker_shares)?;
         warn!(
             broker_positions = broker_shares.len(),
             reconciled_baskets = reconciled,
-            "recovered engine state from broker positions after unloading state snapshot"
+            "recovered engine state from broker positions after incompatible state snapshot"
         );
         Ok((fresh, None, StartupStateSource::BrokerReconciled))
     } else {
@@ -3069,7 +3150,7 @@ fn log_intent(intent: &PositionIntent) {
     info!(
         basket_id = %intent.basket_id,
         target_position = intent.target_position,
-        z = %format!("{:.4}", intent.z_score),
+        score = %format!("{:.4}", intent.signal_score),
         spread = %format!("{:.6}", intent.spread),
         reason = intent.reason.as_str(),
         date = %intent.date,
@@ -3523,6 +3604,7 @@ mod tests {
             capital: 10_000.0,
             leverage: 4.0,
             n_active_baskets: 5,
+            admission_score: basket_engine::AdmissionScoreKind::SignalScore,
         };
         let overlay = LeadershipOverlayConfig {
             sectors: vec!["chips".to_string()],
@@ -3593,6 +3675,7 @@ mod tests {
             capital: 10_000.0,
             leverage: 4.0,
             n_active_baskets: 5,
+            admission_score: basket_engine::AdmissionScoreKind::SignalScore,
         };
         let overlay = LeadershipOverlayConfig {
             sectors: vec!["chips".to_string()],
@@ -3864,8 +3947,14 @@ mod tests {
         std::fs::write(&state_path, "{ definitely not json").unwrap();
 
         let broker_shares = HashMap::from([("AMD".to_string(), -12.0)]);
-        let (engine, last_processed, source) =
-            initialize_engine_state(&fits, &state_path, &broker_shares, true).unwrap();
+        let (engine, last_processed, source) = initialize_engine_state(
+            &fits,
+            &state_path,
+            &broker_shares,
+            true,
+            GatePolicyKind::BertramFrozen,
+        )
+        .unwrap();
 
         assert_eq!(source, StartupStateSource::BrokerReconciled);
         assert_eq!(last_processed, None);
@@ -3884,6 +3973,43 @@ mod tests {
             .filter(|name| name.contains(".unusable."))
             .collect();
         assert_eq!(backups.len(), 1);
+    }
+
+    #[test]
+    fn test_initialize_engine_state_preserves_mismatched_policy_snapshot_when_broker_flat() {
+        let fits = make_test_fits();
+        let tmp = tempdir().unwrap();
+        let state_path = tmp.path().join("basket.state.json");
+
+        let wrong_engine = BasketEngine::new(&fits);
+        wrong_engine.save_state(&state_path).unwrap();
+
+        let (engine, last_processed, source) = initialize_engine_state(
+            &fits,
+            &state_path,
+            &HashMap::new(),
+            true,
+            GatePolicyKind::RollingSScoreV1(basket_engine::RollingSScoreV1Config {
+                lookback: 20,
+                min_history: 20,
+                exit_threshold: 0.5,
+                direct_flip: true,
+                entry_mode: basket_engine::RollingEntryMode::RollingScore,
+                entry_confirmation_bars: 1,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(source, StartupStateSource::Fresh);
+        assert_eq!(last_processed, None);
+        assert_eq!(
+            engine.get_state(&fits[0].candidate.id()).unwrap().position,
+            0
+        );
+        assert!(
+            state_path.exists(),
+            "policy-mismatched state should be preserved"
+        );
     }
 
     #[test]
@@ -3906,8 +4032,14 @@ mod tests {
         wrong_engine.apply_states(states).unwrap();
         wrong_engine.save_state(&state_path).unwrap();
 
-        let (engine, last_processed, source) =
-            initialize_engine_state(&fits, &state_path, &HashMap::new(), true).unwrap();
+        let (engine, last_processed, source) = initialize_engine_state(
+            &fits,
+            &state_path,
+            &HashMap::new(),
+            true,
+            GatePolicyKind::BertramFrozen,
+        )
+        .unwrap();
 
         assert_eq!(source, StartupStateSource::Fresh);
         assert_eq!(last_processed, None);

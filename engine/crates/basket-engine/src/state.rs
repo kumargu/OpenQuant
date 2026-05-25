@@ -4,6 +4,8 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+pub const MAX_SPREAD_HISTORY: usize = 60;
+
 /// Per-basket runtime state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BasketState {
@@ -18,6 +20,9 @@ pub struct BasketState {
     pub spread_history: VecDeque<f64>,
     /// Most recent z-score.
     pub last_z: Option<f64>,
+    /// Most recent signal score used by the active gate policy.
+    #[serde(default)]
+    pub last_signal_score: Option<f64>,
 }
 
 impl Default for BasketState {
@@ -28,6 +33,7 @@ impl Default for BasketState {
             entry_spread: None,
             spread_history: VecDeque::with_capacity(60),
             last_z: None,
+            last_signal_score: None,
         }
     }
 }
@@ -40,8 +46,7 @@ impl BasketState {
 
     /// Record a new spread observation.
     pub fn record_spread(&mut self, spread: f64) {
-        const MAX_HISTORY: usize = 60;
-        if self.spread_history.len() >= MAX_HISTORY {
+        if self.spread_history.len() >= MAX_SPREAD_HISTORY {
             self.spread_history.pop_front();
         }
         self.spread_history.push_back(spread);
@@ -114,7 +119,7 @@ mod tests {
         for i in 0..100 {
             state.record_spread(i as f64);
         }
-        assert_eq!(state.spread_history.len(), 60);
+        assert_eq!(state.spread_history.len(), MAX_SPREAD_HISTORY);
         assert_eq!(state.spread_history.front(), Some(&40.0));
         assert_eq!(state.spread_history.back(), Some(&99.0));
     }

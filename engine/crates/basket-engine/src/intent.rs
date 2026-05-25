@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Reason for a position transition.
 ///
-/// Deliberately limited to exactly 4 valid transitions per Bertram symmetric.
+/// Deliberately limited to directional entries, exits, and flips.
 /// No stop-loss, time-exit, or de-risk variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransitionReason {
@@ -16,6 +16,10 @@ pub enum TransitionReason {
     FlipLongToShort,
     /// Flip from short to long.
     FlipShortToLong,
+    /// Exit a long back to flat.
+    ExitLong,
+    /// Exit a short back to flat.
+    ExitShort,
 }
 
 impl TransitionReason {
@@ -26,6 +30,8 @@ impl TransitionReason {
             Self::InitialEntryShort => "initial_entry_short",
             Self::FlipLongToShort => "flip_long_to_short",
             Self::FlipShortToLong => "flip_short_to_long",
+            Self::ExitLong => "exit_long",
+            Self::ExitShort => "exit_short",
         }
     }
 }
@@ -35,12 +41,12 @@ impl TransitionReason {
 pub struct PositionIntent {
     /// Basket identifier (sector:target format).
     pub basket_id: String,
-    /// Target position: -1 (short), +1 (long). Never 0 after first entry.
+    /// Target position: -1 (short), 0 (flat), +1 (long).
     pub target_position: i8,
     /// Reason for this transition.
     pub reason: TransitionReason,
-    /// Z-score that triggered this transition.
-    pub z_score: f64,
+    /// Signal score that triggered this transition.
+    pub signal_score: f64,
     /// Spread value at transition.
     pub spread: f64,
     /// Date of the bar that triggered this transition.
@@ -53,7 +59,7 @@ impl PositionIntent {
         basket_id: String,
         target_position: i8,
         reason: TransitionReason,
-        z_score: f64,
+        signal_score: f64,
         spread: f64,
         date: chrono::NaiveDate,
     ) -> Self {
@@ -61,7 +67,7 @@ impl PositionIntent {
             basket_id,
             target_position,
             reason,
-            z_score,
+            signal_score,
             spread,
             date,
         }

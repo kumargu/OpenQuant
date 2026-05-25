@@ -426,6 +426,7 @@ mod tests {
             capital: 10_000.0,
             leverage: 4.0,
             n_active_baskets: 5,
+            admission_score: basket_engine::AdmissionScoreKind::SignalScore,
         }
     }
 
