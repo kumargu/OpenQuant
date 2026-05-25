@@ -6,16 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::{BasketEngine, BasketParams};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AdmissionScoreKind {
+    #[default]
     SignalScore,
     RawZScore,
-}
-
-impl Default for AdmissionScoreKind {
-    fn default() -> Self {
-        Self::SignalScore
-    }
 }
 
 /// Portfolio configuration.

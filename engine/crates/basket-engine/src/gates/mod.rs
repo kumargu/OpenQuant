@@ -4,16 +4,11 @@ use crate::engine::BasketParams;
 use crate::intent::TransitionReason;
 use crate::state::{BasketState, MAX_SPREAD_HISTORY};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum GatePolicyKind {
+    #[default]
     BertramFrozen,
     RollingSScoreV1(RollingSScoreV1Config),
-}
-
-impl Default for GatePolicyKind {
-    fn default() -> Self {
-        Self::BertramFrozen
-    }
 }
 
 impl GatePolicyKind {
