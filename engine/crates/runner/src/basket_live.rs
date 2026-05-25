@@ -488,8 +488,12 @@ fn warm_engine_signal_history(
         return Ok(());
     };
     let requested_warm_days = (lookback as i64 * 3).max(60);
-    let closes =
-        load_daily_closes_with_timestamps(bars_dir, symbols, requested_warm_days, Some(anchor_day))?;
+    let closes = load_daily_closes_with_timestamps(
+        bars_dir,
+        symbols,
+        requested_warm_days,
+        Some(anchor_day),
+    )?;
     let mut by_day: std::collections::BTreeMap<NaiveDate, Vec<DailyBar>> =
         std::collections::BTreeMap::new();
     for (symbol, series) in closes {
@@ -2074,11 +2078,12 @@ fn initialize_engine_state(
     match BasketEngine::load_snapshot(state_path) {
         Ok(snapshot) => {
             if snapshot.gate_policy != gate_policy {
-                return recover_from_unloadable_state(
+                return recover_from_incompatible_state(
                     fresh,
                     state_path,
                     broker_shares,
                     broker_execution_enabled,
+                    false,
                     format!(
                         "state snapshot gate policy mismatch: snapshot={:?}, requested={:?}",
                         snapshot.gate_policy, gate_policy
@@ -2088,11 +2093,12 @@ fn initialize_engine_state(
             let loaded_ids: std::collections::HashSet<String> =
                 snapshot.states.keys().cloned().collect();
             if loaded_ids != expected_ids {
-                return recover_from_unloadable_state(
+                return recover_from_incompatible_state(
                     fresh,
                     state_path,
                     broker_shares,
                     broker_execution_enabled,
+                    true,
                     format!(
                         "state snapshot basket set mismatch: snapshot={}, artifact={}",
                         loaded_ids.len(),
@@ -2114,38 +2120,49 @@ fn initialize_engine_state(
                 StartupStateSource::Snapshot,
             ))
         }
-        Err(e) => recover_from_unloadable_state(
+        Err(e) => recover_from_incompatible_state(
             fresh,
             state_path,
             broker_shares,
             broker_execution_enabled,
+            true,
             format!("failed to load state snapshot: {e}"),
         ),
     }
 }
 
-fn recover_from_unloadable_state(
+fn recover_from_incompatible_state(
     mut fresh: BasketEngine,
     state_path: &Path,
     broker_shares: &HashMap<String, f64>,
     broker_execution_enabled: bool,
+    move_state_aside: bool,
     reason: String,
 ) -> Result<(BasketEngine, Option<NaiveDate>, StartupStateSource), String> {
-    let backup_path = move_state_file_aside(state_path)?;
-    bug!(
-        "engine_state_snapshot_unusable",
-        state_path = %state_path.display(),
-        backup_path = %backup_path.display(),
-        reason = %reason,
-        "state snapshot unusable — moved aside for recovery"
-    );
+    if move_state_aside {
+        let backup_path = move_state_file_aside(state_path)?;
+        bug!(
+            "engine_state_snapshot_unusable",
+            state_path = %state_path.display(),
+            backup_path = %backup_path.display(),
+            reason = %reason,
+            "state snapshot unusable — moved aside for recovery"
+        );
+    } else {
+        bug!(
+            "engine_state_snapshot_incompatible_policy",
+            state_path = %state_path.display(),
+            reason = %reason,
+            "state snapshot incompatible with requested gate policy — preserving file and recovering fresh runtime state"
+        );
+    }
 
     if broker_execution_enabled && !broker_shares.is_empty() {
         let reconciled = reconcile_engine_state_from_broker(&mut fresh, broker_shares)?;
         warn!(
             broker_positions = broker_shares.len(),
             reconciled_baskets = reconciled,
-            "recovered engine state from broker positions after unloading state snapshot"
+            "recovered engine state from broker positions after incompatible state snapshot"
         );
         Ok((fresh, None, StartupStateSource::BrokerReconciled))
     } else {
@@ -3956,6 +3973,42 @@ mod tests {
             .filter(|name| name.contains(".unusable."))
             .collect();
         assert_eq!(backups.len(), 1);
+    }
+
+    #[test]
+    fn test_initialize_engine_state_preserves_mismatched_policy_snapshot_when_broker_flat() {
+        let fits = make_test_fits();
+        let tmp = tempdir().unwrap();
+        let state_path = tmp.path().join("basket.state.json");
+
+        let wrong_engine = BasketEngine::new(&fits);
+        wrong_engine.save_state(&state_path).unwrap();
+
+        let (engine, last_processed, source) = initialize_engine_state(
+            &fits,
+            &state_path,
+            &HashMap::new(),
+            true,
+            GatePolicyKind::RollingSScoreV1(basket_engine::RollingSScoreV1Config {
+                lookback: 20,
+                min_history: 20,
+                exit_threshold: 0.5,
+                direct_flip: true,
+                entry_mode: basket_engine::RollingEntryMode::RollingScore,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(source, StartupStateSource::Fresh);
+        assert_eq!(last_processed, None);
+        assert_eq!(
+            engine.get_state(&fits[0].candidate.id()).unwrap().position,
+            0
+        );
+        assert!(
+            state_path.exists(),
+            "policy-mismatched state should be preserved"
+        );
     }
 
     #[test]

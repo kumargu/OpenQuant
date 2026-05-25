@@ -27,7 +27,10 @@ impl GatePolicyKind {
     pub fn signal_label(&self) -> &'static str {
         match self {
             Self::BertramFrozen => "z_score",
-            Self::RollingSScoreV1(_) => "s_score",
+            Self::RollingSScoreV1(config) => match config.entry_mode {
+                RollingEntryMode::RollingScore => "s_score",
+                RollingEntryMode::RawZScore => "z_score",
+            },
         }
     }
 
@@ -42,7 +45,7 @@ impl GatePolicyKind {
                 }
                 if config.min_history == 0 || config.min_history > config.lookback {
                     return Err(
-                        "rolling_s_score_v1 min_history must be in [1, lookback]".to_string(),
+                        "rolling_s_score_v1 min_history must be in [1, lookback]".to_string()
                     );
                 }
                 if !config.exit_threshold.is_finite() || config.exit_threshold < 0.0 {
@@ -217,39 +220,55 @@ impl GatePolicy for RollingSScoreV1Policy {
             RollingEntryMode::RollingScore => s_score,
             RollingEntryMode::RawZScore => raw_z,
         };
-        let (next_position, reason) = match old_pos {
+        let (next_position, reason, signal_score) = match old_pos {
             0 => {
                 if entry_score <= -k {
-                    (1, Some(TransitionReason::InitialEntryLong))
+                    (
+                        1,
+                        Some(TransitionReason::InitialEntryLong),
+                        Some(entry_score),
+                    )
                 } else if entry_score >= k {
-                    (-1, Some(TransitionReason::InitialEntryShort))
+                    (
+                        -1,
+                        Some(TransitionReason::InitialEntryShort),
+                        Some(entry_score),
+                    )
                 } else {
-                    (0, None)
+                    (0, None, Some(entry_score))
                 }
             }
             1 => {
                 if self.config.direct_flip && entry_score >= k {
-                    (-1, Some(TransitionReason::FlipLongToShort))
+                    (
+                        -1,
+                        Some(TransitionReason::FlipLongToShort),
+                        Some(entry_score),
+                    )
                 } else if s_score >= -exit {
-                    (0, Some(TransitionReason::ExitLong))
+                    (0, Some(TransitionReason::ExitLong), Some(s_score))
                 } else {
-                    (1, None)
+                    (1, None, Some(s_score))
                 }
             }
             -1 => {
                 if self.config.direct_flip && entry_score <= -k {
-                    (1, Some(TransitionReason::FlipShortToLong))
+                    (
+                        1,
+                        Some(TransitionReason::FlipShortToLong),
+                        Some(entry_score),
+                    )
                 } else if s_score <= exit {
-                    (0, Some(TransitionReason::ExitShort))
+                    (0, Some(TransitionReason::ExitShort), Some(s_score))
                 } else {
-                    (-1, None)
+                    (-1, None, Some(s_score))
                 }
             }
-            _ => (old_pos, None),
+            _ => (old_pos, None, None),
         };
 
         GateEvaluation {
-            signal_score: Some(s_score),
+            signal_score,
             entry_threshold: k,
             exit_threshold: Some(exit),
             next_position,
@@ -311,8 +330,12 @@ mod tests {
     fn rolling_policy_waits_for_min_history() {
         let mut state = BasketState::default();
         state.spread_history = VecDeque::from(vec![0.0; 5]);
-        let out = RollingSScoreV1Policy::new(RollingSScoreV1Config::default())
-            .evaluate(&state, &params(), -3.0, -3.0);
+        let out = RollingSScoreV1Policy::new(RollingSScoreV1Config::default()).evaluate(
+            &state,
+            &params(),
+            -3.0,
+            -3.0,
+        );
         assert_eq!(out.reason, None);
         assert_eq!(out.signal_score, None);
     }
@@ -336,5 +359,21 @@ mod tests {
         let exit = RollingSScoreV1Policy::new(cfg).evaluate(&state, &params(), 0.8, 0.8);
         assert_eq!(exit.reason, Some(TransitionReason::ExitLong));
         assert_eq!(exit.next_position, 0);
+    }
+
+    #[test]
+    fn rolling_policy_raw_z_entry_mode_reports_raw_z_on_entry() {
+        let cfg = RollingSScoreV1Config {
+            lookback: 20,
+            min_history: 20,
+            exit_threshold: 0.5,
+            direct_flip: true,
+            entry_mode: RollingEntryMode::RawZScore,
+        };
+        let mut state = BasketState::default();
+        state.spread_history = (0..20).map(|i| i as f64 * 0.1).collect();
+        let enter = RollingSScoreV1Policy::new(cfg).evaluate(&state, &params(), -2.0, -2.5);
+        assert_eq!(enter.reason, Some(TransitionReason::InitialEntryLong));
+        assert_eq!(enter.signal_score, Some(-2.5));
     }
 }

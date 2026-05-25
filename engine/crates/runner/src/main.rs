@@ -570,7 +570,9 @@ fn resolve_basket_signal_policy(
                 min_history: min_history.unwrap_or(20),
                 exit_threshold: exit_threshold.unwrap_or(0.5),
                 direct_flip: direct_flip.unwrap_or(true),
-                entry_mode: entry_mode.unwrap_or(BasketSignalEntryModeArg::RollingScore).into(),
+                entry_mode: entry_mode
+                    .unwrap_or(BasketSignalEntryModeArg::RollingScore)
+                    .into(),
             };
             let gate_policy = GatePolicyKind::RollingSScoreV1(cfg);
             gate_policy.validate()?;
@@ -915,6 +917,26 @@ fn leadership_overlay_fingerprint(cfg: &basket_live::LeadershipOverlayConfig) ->
         "leadership-{mode}-{sectors}-onr{ret}-onb{breadth}-offr{off_ret}-offb{off_breadth}-p{}-h{}-l{lev}",
         cfg.persistence_days, cfg.min_hold_days
     )
+}
+
+fn gate_policy_fingerprint(policy: &GatePolicyKind) -> Option<String> {
+    match policy {
+        GatePolicyKind::BertramFrozen => None,
+        GatePolicyKind::RollingSScoreV1(cfg) => Some(
+            format!(
+                "gate-rssv1-l{}-m{}-e{:.2}-f{}-em{}",
+                cfg.lookback,
+                cfg.min_history,
+                cfg.exit_threshold,
+                if cfg.direct_flip { 1 } else { 0 },
+                match cfg.entry_mode {
+                    RollingEntryMode::RollingScore => "s",
+                    RollingEntryMode::RawZScore => "z",
+                }
+            )
+            .replace('.', "p"),
+        ),
+    }
 }
 
 fn path_with_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
@@ -1265,20 +1287,43 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     } else {
         warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
     }
+    let gate_policy = match resolve_basket_signal_policy(
+        args.basket_signal_policy,
+        args.basket_signal_lookback,
+        args.basket_signal_min_history,
+        args.basket_signal_exit_threshold,
+        args.basket_signal_direct_flip,
+        args.basket_signal_entry_mode,
+    ) {
+        Ok(policy) => policy,
+        Err(e) => {
+            error!(error = %e, "invalid basket signal policy");
+            std::process::exit(1);
+        }
+    };
     let overlay_fingerprint = leadership_overlay
         .as_ref()
         .map(leadership_overlay_fingerprint);
+    let gate_fingerprint = gate_policy_fingerprint(&gate_policy);
     let default_state_base = default_stream_state_path(&args.data_dir, &fit_artifact_path);
     let legacy_state_base = basket_fits::default_live_state_path(&fit_artifact_path);
+    let state_base = match gate_fingerprint.as_deref() {
+        Some(fp) => path_with_suffix(&default_state_base, fp),
+        None => default_state_base,
+    };
     let state_path = match (&args.state_path, overlay_fingerprint.as_deref()) {
         (Some(path), _) => path.clone(),
-        (None, Some(fp)) => path_with_suffix(&default_state_base, fp),
-        (None, None) => default_state_base,
+        (None, Some(fp)) => path_with_suffix(&state_base, fp),
+        (None, None) => state_base,
     };
     if args.state_path.is_none() {
-        let legacy_path = match overlay_fingerprint.as_deref() {
+        let legacy_gate_base = match gate_fingerprint.as_deref() {
             Some(fp) => path_with_suffix(&legacy_state_base, fp),
             None => legacy_state_base,
+        };
+        let legacy_path = match overlay_fingerprint.as_deref() {
+            Some(fp) => path_with_suffix(&legacy_gate_base, fp),
+            None => legacy_gate_base,
         };
         maybe_migrate_legacy_stream_state(&legacy_path, &state_path);
     }
@@ -1344,21 +1389,6 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             None => base,
         }
     });
-    let gate_policy = match resolve_basket_signal_policy(
-        args.basket_signal_policy,
-        args.basket_signal_lookback,
-        args.basket_signal_min_history,
-        args.basket_signal_exit_threshold,
-        args.basket_signal_direct_flip,
-        args.basket_signal_entry_mode,
-    ) {
-        Ok(policy) => policy,
-        Err(e) => {
-            error!(error = %e, "invalid basket signal policy");
-            std::process::exit(1);
-        }
-    };
-
     if let Err(e) = basket_live::run_basket_live(
         &alpaca,
         &bar_source,
@@ -2068,15 +2098,35 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         std::process::exit(1);
     }
 
+    let gate_policy = match resolve_basket_signal_policy(
+        args.basket_signal_policy,
+        args.basket_signal_lookback,
+        args.basket_signal_min_history,
+        args.basket_signal_exit_threshold,
+        args.basket_signal_direct_flip,
+        args.basket_signal_entry_mode,
+    ) {
+        Ok(policy) => policy,
+        Err(e) => {
+            error!(error = %e, "invalid basket signal policy");
+            std::process::exit(1);
+        }
+    };
+
     // Replay state isolation: never touch the live default state path.
     let state_path = args.state_path.clone().unwrap_or_else(|| {
         let stem = universe_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("basket_universe");
-        args.data_dir
+        let base = args
+            .data_dir
             .join("replay")
-            .join(format!("{stem}.state.json"))
+            .join(format!("{stem}.state.json"));
+        match gate_policy_fingerprint(&gate_policy).as_deref() {
+            Some(fp) => path_with_suffix(&base, fp),
+            None => base,
+        }
     });
     if let Some(parent) = state_path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
@@ -2221,20 +2271,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     // reconciliation) runs identically to live. The execution flag
     // never reaches Alpaca because the broker IS our SimulatedBroker.
     let execution = basket_live::BasketExecution::Paper;
-    let gate_policy = match resolve_basket_signal_policy(
-        args.basket_signal_policy,
-        args.basket_signal_lookback,
-        args.basket_signal_min_history,
-        args.basket_signal_exit_threshold,
-        args.basket_signal_direct_flip,
-        args.basket_signal_entry_mode,
-    ) {
-        Ok(policy) => policy,
-        Err(e) => {
-            error!(error = %e, "invalid basket signal policy");
-            std::process::exit(1);
-        }
-    };
 
     let result = basket_live::run_basket_live(
         &broker,
@@ -2397,6 +2433,28 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from("data/state/basket_universe_v1.fits.state.leadership-rule-v1.json")
+        );
+    }
+
+    #[test]
+    fn non_default_gate_policy_gets_distinct_state_suffix() {
+        let fp = gate_policy_fingerprint(&GatePolicyKind::RollingSScoreV1(RollingSScoreV1Config {
+            lookback: 60,
+            min_history: 40,
+            exit_threshold: 1.0,
+            direct_flip: true,
+            entry_mode: RollingEntryMode::RawZScore,
+        }))
+        .unwrap();
+        let path = path_with_suffix(
+            Path::new("data/state/basket_universe_buildout.fits.state.json"),
+            &fp,
+        );
+        assert_eq!(
+            path,
+            PathBuf::from(
+                "data/state/basket_universe_buildout.fits.state.gate-rssv1-l60-m40-e1p00-f1-emz.json"
+            )
         );
     }
 }
