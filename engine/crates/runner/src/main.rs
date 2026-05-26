@@ -414,6 +414,11 @@ struct ReplayArgs {
     #[arg(long)]
     report_tsv: Option<PathBuf>,
 
+    /// Optional SQLite journal for basket replay decisions, positions, and orders.
+    /// When omitted, replay remains report/log only.
+    #[arg(long)]
+    basket_journal_path: Option<PathBuf>,
+
     /// Ignore leadership overlay defaults from the universe TOML for this run.
     #[arg(long, default_value_t = false)]
     disable_leadership_overlay: bool,
@@ -2297,7 +2302,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         &fit_artifact.fits,
         basket_live::BasketRunOptions {
             fit_artifact_path: None,
-            journal_path: None,
+            journal_path: args.basket_journal_path.clone(),
             leadership_overlay,
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
