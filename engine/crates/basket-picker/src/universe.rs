@@ -57,6 +57,18 @@ fn default_runner_n_active_baskets() -> usize {
     5
 }
 
+fn default_runner_min_share_preservation_threshold() -> f64 {
+    0.85
+}
+
+fn default_runner_supported_reallocation_band_max_notional() -> f64 {
+    1_000.0
+}
+
+fn default_runner_supported_reallocation_band_max_shares() -> f64 {
+    1.0
+}
+
 fn default_runner_picker() -> RunnerLeadershipPickerConfig {
     RunnerLeadershipPickerConfig::Fixed
 }
@@ -175,6 +187,16 @@ pub struct RunnerPortfolioConfig {
     pub capital: f64,
     #[serde(default = "default_runner_n_active_baskets")]
     pub n_active_baskets: usize,
+    #[serde(default)]
+    pub preserve_near_unit_shares: bool,
+    #[serde(default = "default_runner_min_share_preservation_threshold")]
+    pub min_share_preservation_threshold: f64,
+    #[serde(default)]
+    pub supported_reallocation_band_enabled: bool,
+    #[serde(default = "default_runner_supported_reallocation_band_max_notional")]
+    pub supported_reallocation_band_max_notional: f64,
+    #[serde(default = "default_runner_supported_reallocation_band_max_shares")]
+    pub supported_reallocation_band_max_shares: f64,
 }
 
 impl Default for RunnerPortfolioConfig {
@@ -182,6 +204,13 @@ impl Default for RunnerPortfolioConfig {
         Self {
             capital: default_runner_capital(),
             n_active_baskets: default_runner_n_active_baskets(),
+            preserve_near_unit_shares: false,
+            min_share_preservation_threshold: default_runner_min_share_preservation_threshold(),
+            supported_reallocation_band_enabled: false,
+            supported_reallocation_band_max_notional:
+                default_runner_supported_reallocation_band_max_notional(),
+            supported_reallocation_band_max_shares:
+                default_runner_supported_reallocation_band_max_shares(),
         }
     }
 }
@@ -482,6 +511,11 @@ hl_trade_gate = false
 [runner.portfolio]
 capital = 10000
 n_active_baskets = 5
+preserve_near_unit_shares = true
+min_share_preservation_threshold = 0.9
+supported_reallocation_band_enabled = true
+supported_reallocation_band_max_notional = 750
+supported_reallocation_band_max_shares = 2
 
 [runner.leadership_overlay]
 sectors = ["chips"]
@@ -499,6 +533,32 @@ long_only_leverage = 1.0
         assert_eq!(universe.num_baskets(), 2);
         assert_eq!(universe.runner.portfolio.capital, 10_000.0);
         assert_eq!(universe.runner.portfolio.n_active_baskets, 5);
+        assert!(universe.runner.portfolio.preserve_near_unit_shares);
+        assert!((universe.runner.portfolio.min_share_preservation_threshold - 0.9).abs() < 1e-9);
+        assert!(
+            universe
+                .runner
+                .portfolio
+                .supported_reallocation_band_enabled
+        );
+        assert!(
+            (universe
+                .runner
+                .portfolio
+                .supported_reallocation_band_max_notional
+                - 750.0)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (universe
+                .runner
+                .portfolio
+                .supported_reallocation_band_max_shares
+                - 2.0)
+                .abs()
+                < 1e-9
+        );
         assert_eq!(
             universe.runner.leadership_overlay.as_ref().unwrap().picker,
             RunnerLeadershipPickerConfig::RuleV1
