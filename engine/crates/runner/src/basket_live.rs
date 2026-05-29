@@ -1191,6 +1191,12 @@ struct PostSubmitReconciliation {
     settlement_pending: bool,
 }
 
+fn reconciliation_exceeds_drift_thresholds(reconciliation: &PostSubmitReconciliation) -> bool {
+    reconciliation.divergence_pct > 10.0
+        || reconciliation.drift.median_gross_bps > 50.0
+        || reconciliation.drift.p95_gross_bps > 200.0
+}
+
 fn summarize_position_drift(
     target_shares: &HashMap<String, f64>,
     actual_shares: &HashMap<String, f64>,
@@ -3566,9 +3572,7 @@ async fn process_session_close(
                                 broker_positions = reconciliation.actual_shares.len(),
                                 "post-submission reconciliation is still waiting for broker fills to settle"
                             );
-                        } else if reconciliation.drift.median_gross_bps > 50.0
-                            || reconciliation.drift.p95_gross_bps > 200.0
-                        {
+                        } else if reconciliation_exceeds_drift_thresholds(&reconciliation) {
                             bug!(
                                 "post_submit_symbol_drift",
                                 date = %date,
@@ -4042,11 +4046,47 @@ mod tests {
 
         assert_eq!(drift.target_gross, 1_650.0);
         assert_eq!(drift.actual_gross, 1_250.0);
-        assert!(drift.sample.iter().any(|item| item.symbol == "AMD"
-            && (item.delta_notional - 200.0).abs() < 1e-9));
+        assert!(drift
+            .sample
+            .iter()
+            .any(|item| item.symbol == "AMD" && (item.delta_notional - 200.0).abs() < 1e-9));
         assert!(drift.median_gross_bps > 0.0);
         assert!(drift.p95_gross_bps >= drift.median_gross_bps);
         assert!(drift.max_gross_bps >= drift.p95_gross_bps);
+    }
+
+    #[test]
+    fn test_reconciliation_thresholds_catch_sparse_large_mismatch() {
+        let mut target_shares = HashMap::new();
+        let mut actual_shares = HashMap::new();
+        let mut closes = HashMap::new();
+        for idx in 0..20 {
+            let symbol = format!("SYM{idx}");
+            target_shares.insert(symbol.clone(), 1.0);
+            actual_shares.insert(symbol.clone(), 1.0);
+            closes.insert(symbol, 100.0);
+        }
+        actual_shares.insert("SYM0".to_string(), 0.0);
+
+        let drift = summarize_position_drift(&target_shares, &actual_shares, &closes);
+        let reconciliation = PostSubmitReconciliation {
+            actual_shares,
+            current_positions_after: 19,
+            actual_gross: drift.actual_gross,
+            divergence_pct: 5.0,
+            drift,
+            settlement_pending: false,
+        };
+        assert!(!reconciliation_exceeds_drift_thresholds(&reconciliation));
+
+        let reconciliation = PostSubmitReconciliation {
+            divergence_pct: 12.0,
+            ..reconciliation
+        };
+        assert!(reconciliation_exceeds_drift_thresholds(&reconciliation));
+        assert_eq!(reconciliation.drift.median_gross_bps, 0.0);
+        assert_eq!(reconciliation.drift.p95_gross_bps, 0.0);
+        assert!(reconciliation.drift.max_gross_bps > 0.0);
     }
 
     #[tokio::test]
