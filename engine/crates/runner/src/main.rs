@@ -389,6 +389,11 @@ struct ReplayArgs {
     #[arg(long, default_value_t = 0.0)]
     slippage_bps: f64,
 
+    /// Replay-only: fill basket orders this many minutes after the next
+    /// session open. `0` = next-session open, `60` = 10:30 ET, `330` = 15:00 ET.
+    #[arg(long, default_value_t = 0)]
+    basket_fill_delay_minutes_after_open: u32,
+
     /// Per-order probability of simulated rejection (0.0..=1.0, default 0).
     /// Exercises the `error!("ORDER FAILED")` path in basket_live.
     #[arg(long, default_value_t = 0.0)]
@@ -2285,6 +2290,8 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         partial_fill_rate: args.partial_fill_rate,
         stale_position_rate: args.stale_position_rate,
         seed: args.failure_seed,
+        fill_contract: simulated_broker::ReplayFillContract::NextSessionOpen,
+        fill_delay_minutes_after_open: args.basket_fill_delay_minutes_after_open,
     };
     let replay = parquet_bar_source::new_replay_components(
         bars_dir.clone(),
