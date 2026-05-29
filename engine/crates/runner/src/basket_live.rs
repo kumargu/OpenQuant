@@ -2204,6 +2204,8 @@ pub async fn run_basket_live(
     info!(gate_policy = ?engine.gate_policy(), "basket signal gate policy initialized");
     let leadership_state_path = leadership_classifier_state_path(state_path);
     let pending_open_reconcile_path = pending_open_reconcile_state_path(state_path);
+    let pending_open_reconcile_enabled =
+        execution.alpaca_mode().is_some() && broker.supports_persisted_pending_open_reconcile();
     let can_load_sidecar_state = matches!(startup_state_source, StartupStateSource::Snapshot);
     if !can_load_sidecar_state {
         move_sidecar_state_aside_if_present(
@@ -2211,11 +2213,13 @@ pub async fn run_basket_live(
             startup_state_source,
             "engine_state_not_loaded_from_snapshot",
         )?;
-        move_sidecar_state_aside_if_present(
-            &pending_open_reconcile_path,
-            startup_state_source,
-            "engine_state_not_loaded_from_snapshot",
-        )?;
+        if pending_open_reconcile_path.exists() {
+            move_sidecar_state_aside_if_present(
+                &pending_open_reconcile_path,
+                startup_state_source,
+                "engine_state_not_loaded_from_snapshot",
+            )?;
+        }
     }
     let mut leadership_tracker = options
         .leadership_overlay
@@ -2325,25 +2329,33 @@ pub async fn run_basket_live(
         picker_id = overlay_picker.id(),
         "basket overlay picker initialized"
     );
-    let mut pending_open_reconcile = match if can_load_sidecar_state {
-        load_pending_open_reconcile_state(&pending_open_reconcile_path)
-    } else {
-        Ok(None)
-    } {
-        Ok(state) => {
-            if let Some(pending) = state.as_ref() {
-                info!(
-                    state_path = %pending_open_reconcile_path.display(),
-                    trading_day = %pending.trading_day,
-                    target_positions = pending.target_shares.len(),
-                    attempted_reconcile_day = ?pending.attempted_reconcile_day,
-                    "loaded pending open reconcile state"
-                );
+    if !pending_open_reconcile_enabled && pending_open_reconcile_path.exists() {
+        move_sidecar_state_aside_if_present(
+            &pending_open_reconcile_path,
+            startup_state_source,
+            "pending_open_reconcile_not_supported_for_broker",
+        )?;
+    }
+    let mut pending_open_reconcile =
+        match if pending_open_reconcile_enabled && can_load_sidecar_state {
+            load_pending_open_reconcile_state(&pending_open_reconcile_path)
+        } else {
+            Ok(None)
+        } {
+            Ok(state) => {
+                if let Some(pending) = state.as_ref() {
+                    info!(
+                        state_path = %pending_open_reconcile_path.display(),
+                        trading_day = %pending.trading_day,
+                        target_positions = pending.target_shares.len(),
+                        attempted_reconcile_day = ?pending.attempted_reconcile_day,
+                        "loaded pending open reconcile state"
+                    );
+                }
+                state
             }
-            state
-        }
-        Err(e) => return Err(e),
-    };
+            Err(e) => return Err(e),
+        };
 
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
     let journal = match options.journal_path.as_deref() {
@@ -2453,6 +2465,7 @@ pub async fn run_basket_live(
             &mut overlay_picker,
             options.leadership_overlay.as_ref(),
             options.supported_reallocation_band_config,
+            pending_open_reconcile_enabled,
             &pending_open_reconcile_path,
             &mut pending_open_reconcile,
         )
@@ -2568,7 +2581,10 @@ pub async fn run_basket_live(
                         "buffered bar"
                     );
                 }
-                if let Some(mode) = execution.alpaca_mode() {
+                if pending_open_reconcile_enabled {
+                    let Some(mode) = execution.alpaca_mode() else {
+                        unreachable!("pending open reconcile requires alpaca execution mode");
+                    };
                     if market_session::minutes_from_open_utc(dt)
                         .is_some_and(|minutes| minutes >= broker.next_session_open_fill_ready_minute())
                     {
@@ -2745,6 +2761,7 @@ pub async fn run_basket_live(
                         &mut overlay_picker,
                         options.leadership_overlay.as_ref(),
                         options.supported_reallocation_band_config,
+                        pending_open_reconcile_enabled,
                         &pending_open_reconcile_path,
                         &mut pending_open_reconcile,
                     )
@@ -3111,6 +3128,7 @@ async fn process_session_close(
     overlay_picker: &mut impl BasketOverlayPicker,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
     supported_reallocation_band_config: SupportedReallocationBandConfig,
+    pending_open_reconcile_enabled: bool,
     pending_open_reconcile_path: &Path,
     pending_open_reconcile_state: &mut Option<PendingOpenReconcileState>,
 ) -> Result<(), String> {
@@ -3991,7 +4009,8 @@ async fn process_session_close(
                         );
                     }
                 }
-                if accepted_unfilled_orders > 0
+                if pending_open_reconcile_enabled
+                    && accepted_unfilled_orders > 0
                     && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen)
                 {
                     let pending_state = PendingOpenReconcileState {
