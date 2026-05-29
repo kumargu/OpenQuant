@@ -109,7 +109,7 @@ impl Engine {
     fn universe_path(&self) -> Option<&'static str> {
         match self {
             Engine::Snp500 | Engine::Metals => None,
-            Engine::Basket => Some("config/basket_universe_v1.toml"),
+            Engine::Basket => Some("config/basket_universe.toml"),
         }
     }
 
@@ -123,7 +123,7 @@ fn default_stream_universe_path(engine: Engine, is_live_command: bool) -> Option
         Engine::Snp500 | Engine::Metals => None,
         Engine::Basket => {
             if is_live_command {
-                Some("config/basket_universe_v1.toml")
+                Some("config/basket_universe.toml")
             } else {
                 Some("config/basket_universe_buildout.toml")
             }
@@ -160,7 +160,7 @@ struct StreamArgs {
 
     /// Basket universe TOML file. For basket paper, defaults to
     /// `config/basket_universe_buildout.toml`. For basket live/replay/fits, defaults
-    /// to `config/basket_universe_v1.toml`.
+    /// to `config/basket_universe.toml`.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -329,7 +329,7 @@ struct ReplayArgs {
     #[arg(long)]
     bar_cache: Option<PathBuf>,
 
-    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml`
+    /// Basket universe TOML file. Defaults to `config/basket_universe.toml`
     /// when --engine basket.
     #[arg(long)]
     universe: Option<PathBuf>,
@@ -414,6 +414,11 @@ struct ReplayArgs {
     #[arg(long)]
     report_tsv: Option<PathBuf>,
 
+    /// Optional SQLite journal for basket replay decisions, positions, and orders.
+    /// When omitted, replay remains report/log only.
+    #[arg(long)]
+    basket_journal_path: Option<PathBuf>,
+
     /// Ignore leadership overlay defaults from the universe TOML for this run.
     #[arg(long, default_value_t = false)]
     disable_leadership_overlay: bool,
@@ -479,7 +484,7 @@ struct ReplayArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 struct BasketFitArgs {
-    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml`.
+    /// Basket universe TOML file. Defaults to `config/basket_universe.toml`.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -610,6 +615,7 @@ struct BasketRuntimeOverrides<'a> {
 
 struct ResolvedBasketRuntime {
     portfolio_config: basket_engine::PortfolioConfig,
+    supported_reallocation_band_config: basket_live::SupportedReallocationBandConfig,
     leadership_overlay: Option<basket_live::LeadershipOverlayConfig>,
     overlay_picker: basket_overlay_picker::BasketOverlayPickerKind,
     rule_v1_config: Option<basket_overlay_picker::RuleV1OverlayPickerConfig>,
@@ -690,6 +696,20 @@ fn resolve_basket_runtime(
             .basket_admission_score
             .map(Into::into)
             .unwrap_or_default(),
+    };
+    let supported_reallocation_band_config = basket_live::SupportedReallocationBandConfig {
+        enabled: universe
+            .runner
+            .portfolio
+            .supported_reallocation_band_enabled,
+        max_notional: universe
+            .runner
+            .portfolio
+            .supported_reallocation_band_max_notional,
+        max_shares: universe
+            .runner
+            .portfolio
+            .supported_reallocation_band_max_shares,
     };
 
     let has_overlay_override = !overrides.leadership_overlay_sectors.is_empty()
@@ -800,6 +820,7 @@ fn resolve_basket_runtime(
 
     ResolvedBasketRuntime {
         portfolio_config,
+        supported_reallocation_band_config,
         leadership_overlay,
         overlay_picker,
         rule_v1_config,
@@ -1418,6 +1439,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
+            supported_reallocation_band_config: runtime.supported_reallocation_band_config,
         },
     )
     .await
@@ -1430,7 +1452,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
 fn run_freeze_basket_fits(args: BasketFitArgs) {
     let universe_path = args
         .universe
-        .unwrap_or_else(|| PathBuf::from("config/basket_universe_v1.toml"));
+        .unwrap_or_else(|| PathBuf::from("config/basket_universe.toml"));
     let bars_dir = args.bars_dir.unwrap_or_else(|| {
         std::env::var("QUANT_DATA_DIR")
             .map(PathBuf::from)
@@ -2297,11 +2319,12 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         &fit_artifact.fits,
         basket_live::BasketRunOptions {
             fit_artifact_path: None,
-            journal_path: None,
+            journal_path: args.basket_journal_path.clone(),
             leadership_overlay,
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
+            supported_reallocation_band_config: runtime.supported_reallocation_band_config,
         },
     )
     .await;
@@ -2428,23 +2451,23 @@ mod tests {
     fn stream_state_defaults_under_data_state() {
         let path = default_stream_state_path(
             Path::new("data"),
-            Path::new("config/basket_universe_v1.fits.json"),
+            Path::new("config/basket_universe.fits.json"),
         );
         assert_eq!(
             path,
-            PathBuf::from("data/state/basket_universe_v1.fits.state.json")
+            PathBuf::from("data/state/basket_universe.fits.state.json")
         );
     }
 
     #[test]
     fn suffix_preserves_state_extension() {
         let path = path_with_suffix(
-            Path::new("data/state/basket_universe_v1.fits.state.json"),
+            Path::new("data/state/basket_universe.fits.state.json"),
             "leadership-rule-v1",
         );
         assert_eq!(
             path,
-            PathBuf::from("data/state/basket_universe_v1.fits.state.leadership-rule-v1.json")
+            PathBuf::from("data/state/basket_universe.fits.state.leadership-rule-v1.json")
         );
     }
 

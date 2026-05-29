@@ -57,6 +57,14 @@ fn default_runner_n_active_baskets() -> usize {
     5
 }
 
+fn default_runner_supported_reallocation_band_max_notional() -> f64 {
+    1_000.0
+}
+
+fn default_runner_supported_reallocation_band_max_shares() -> f64 {
+    1.0
+}
+
 fn default_runner_picker() -> RunnerLeadershipPickerConfig {
     RunnerLeadershipPickerConfig::Fixed
 }
@@ -175,6 +183,12 @@ pub struct RunnerPortfolioConfig {
     pub capital: f64,
     #[serde(default = "default_runner_n_active_baskets")]
     pub n_active_baskets: usize,
+    #[serde(default)]
+    pub supported_reallocation_band_enabled: bool,
+    #[serde(default = "default_runner_supported_reallocation_band_max_notional")]
+    pub supported_reallocation_band_max_notional: f64,
+    #[serde(default = "default_runner_supported_reallocation_band_max_shares")]
+    pub supported_reallocation_band_max_shares: f64,
 }
 
 impl Default for RunnerPortfolioConfig {
@@ -182,6 +196,11 @@ impl Default for RunnerPortfolioConfig {
         Self {
             capital: default_runner_capital(),
             n_active_baskets: default_runner_n_active_baskets(),
+            supported_reallocation_band_enabled: false,
+            supported_reallocation_band_max_notional:
+                default_runner_supported_reallocation_band_max_notional(),
+            supported_reallocation_band_max_shares:
+                default_runner_supported_reallocation_band_max_shares(),
         }
     }
 }
@@ -343,7 +362,7 @@ impl Universe {
 
 /// Load universe from a TOML file.
 ///
-/// The file must follow the basket_universe_v1 schema.
+/// The file must follow the basket_universe schema.
 /// Returns an error string if parsing fails.
 pub fn load_universe(path: &Path) -> Result<Universe, String> {
     let content = fs::read_to_string(path).map_err(|e| format!("failed to read file: {}", e))?;
@@ -482,6 +501,9 @@ hl_trade_gate = false
 [runner.portfolio]
 capital = 10000
 n_active_baskets = 5
+supported_reallocation_band_enabled = true
+supported_reallocation_band_max_notional = 750
+supported_reallocation_band_max_shares = 2
 
 [runner.leadership_overlay]
 sectors = ["chips"]
@@ -499,6 +521,30 @@ long_only_leverage = 1.0
         assert_eq!(universe.num_baskets(), 2);
         assert_eq!(universe.runner.portfolio.capital, 10_000.0);
         assert_eq!(universe.runner.portfolio.n_active_baskets, 5);
+        assert!(
+            universe
+                .runner
+                .portfolio
+                .supported_reallocation_band_enabled
+        );
+        assert!(
+            (universe
+                .runner
+                .portfolio
+                .supported_reallocation_band_max_notional
+                - 750.0)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (universe
+                .runner
+                .portfolio
+                .supported_reallocation_band_max_shares
+                - 2.0)
+                .abs()
+                < 1e-9
+        );
         assert_eq!(
             universe.runner.leadership_overlay.as_ref().unwrap().picker,
             RunnerLeadershipPickerConfig::RuleV1
