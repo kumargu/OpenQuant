@@ -615,7 +615,6 @@ struct BasketRuntimeOverrides<'a> {
 
 struct ResolvedBasketRuntime {
     portfolio_config: basket_engine::PortfolioConfig,
-    share_floor_config: basket_live::ShareFloorConfig,
     supported_reallocation_band_config: basket_live::SupportedReallocationBandConfig,
     leadership_overlay: Option<basket_live::LeadershipOverlayConfig>,
     overlay_picker: basket_overlay_picker::BasketOverlayPickerKind,
@@ -697,13 +696,6 @@ fn resolve_basket_runtime(
             .basket_admission_score
             .map(Into::into)
             .unwrap_or_default(),
-    };
-    let share_floor_config = basket_live::ShareFloorConfig {
-        preserve_near_unit_shares: universe.runner.portfolio.preserve_near_unit_shares,
-        min_share_preservation_threshold: universe
-            .runner
-            .portfolio
-            .min_share_preservation_threshold,
     };
     let supported_reallocation_band_config = basket_live::SupportedReallocationBandConfig {
         enabled: universe
@@ -828,7 +820,6 @@ fn resolve_basket_runtime(
 
     ResolvedBasketRuntime {
         portfolio_config,
-        share_floor_config,
         supported_reallocation_band_config,
         leadership_overlay,
         overlay_picker,
@@ -1448,7 +1439,6 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
-            share_floor_config: runtime.share_floor_config,
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
         },
     )
@@ -2334,7 +2324,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
-            share_floor_config: runtime.share_floor_config,
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
         },
     )

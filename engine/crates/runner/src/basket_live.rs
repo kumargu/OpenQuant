@@ -123,7 +123,6 @@ pub struct BasketRunOptions {
     pub overlay_picker: BasketOverlayPickerKind,
     pub rule_v1_config: Option<crate::basket_overlay_picker::RuleV1OverlayPickerConfig>,
     pub gate_policy: GatePolicyKind,
-    pub share_floor_config: ShareFloorConfig,
     pub supported_reallocation_band_config: SupportedReallocationBandConfig,
 }
 
@@ -136,7 +135,6 @@ impl Default for BasketRunOptions {
             overlay_picker: BasketOverlayPickerKind::Fixed,
             rule_v1_config: None,
             gate_policy: GatePolicyKind::BertramFrozen,
-            share_floor_config: ShareFloorConfig::default(),
             supported_reallocation_band_config: SupportedReallocationBandConfig::default(),
         }
     }
@@ -176,8 +174,6 @@ impl SymbolTradeClass {
 struct SymbolSupportAccumulator {
     long_support_count: usize,
     short_support_count: usize,
-    long_signal_abs_sum: f64,
-    short_signal_abs_sum: f64,
     target_role_support_count: usize,
     peer_role_support_count: usize,
 }
@@ -194,14 +190,21 @@ struct SymbolSupportSnapshot {
     target_role_support_count: usize,
     peer_role_support_count: usize,
     same_side_support_count: usize,
-    same_side_signal_abs_sum: f64,
     trade_class: SymbolTradeClass,
 }
 
+/// Per-symbol suppression rule for tiny same-side reallocations after
+/// aggregation, ranked/admitted basket selection, and target-share conversion.
+///
+/// `max_notional` and `max_shares` are evaluated per symbol delta, not at the
+/// portfolio level. Support is counted from admitted baskets only.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SupportedReallocationBandConfig {
+    /// Enables suppression of small same-side supported trims/adds.
     pub enabled: bool,
+    /// Maximum per-symbol delta notional eligible for suppression.
     pub max_notional: f64,
+    /// Maximum per-symbol delta share count eligible for suppression.
     pub max_shares: f64,
 }
 
@@ -213,36 +216,6 @@ impl Default for SupportedReallocationBandConfig {
             max_shares: 1.0,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ShareFloorConfig {
-    pub preserve_near_unit_shares: bool,
-    pub min_share_preservation_threshold: f64,
-}
-
-impl Default for ShareFloorConfig {
-    fn default() -> Self {
-        Self {
-            preserve_near_unit_shares: false,
-            min_share_preservation_threshold: 0.85,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct ShareFloorPreservation {
-    symbol: String,
-    raw_shares: f64,
-    rounded_shares: f64,
-    price: f64,
-    target_notional: f64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct TargetShareConversion {
-    shares: HashMap<String, f64>,
-    preserved_near_unit: Vec<ShareFloorPreservation>,
 }
 
 // Grace period after session close before firing the engine. Lets
@@ -1324,19 +1297,12 @@ fn add_symbol_support(
     support: &mut HashMap<String, SymbolSupportAccumulator>,
     symbol: &str,
     side: i8,
-    signal_abs: f64,
     is_target_role: bool,
 ) {
     let entry = support.entry(symbol.to_string()).or_default();
     match side {
-        1 => {
-            entry.long_support_count += 1;
-            entry.long_signal_abs_sum += signal_abs;
-        }
-        -1 => {
-            entry.short_support_count += 1;
-            entry.short_signal_abs_sum += signal_abs;
-        }
+        1 => entry.long_support_count += 1,
+        -1 => entry.short_support_count += 1,
         _ => return,
     }
     if is_target_role {
@@ -1412,15 +1378,10 @@ fn build_symbol_support_snapshots(
         if state.position == 0 {
             continue;
         }
-        let signal_abs = state
-            .last_signal_score
-            .or(state.last_z)
-            .unwrap_or(0.0)
-            .abs();
         let target_side = if state.position > 0 { 1 } else { -1 };
-        add_symbol_support(&mut support, &params.target, target_side, signal_abs, true);
+        add_symbol_support(&mut support, &params.target, target_side, true);
         for peer in &params.peers {
-            add_symbol_support(&mut support, peer, -target_side, signal_abs, false);
+            add_symbol_support(&mut support, peer, -target_side, false);
         }
     }
 
@@ -1448,16 +1409,10 @@ fn build_symbol_support_snapshots(
                 side_from_shares(current)
             }
         };
-        let (same_side_support_count, same_side_signal_abs_sum) = match relevant_side {
-            1 => (
-                accumulator.long_support_count,
-                accumulator.long_signal_abs_sum,
-            ),
-            -1 => (
-                accumulator.short_support_count,
-                accumulator.short_signal_abs_sum,
-            ),
-            _ => (0, 0.0),
+        let same_side_support_count = match relevant_side {
+            1 => accumulator.long_support_count,
+            -1 => accumulator.short_support_count,
+            _ => 0,
         };
         snapshots.push(SymbolSupportSnapshot {
             symbol,
@@ -1470,7 +1425,6 @@ fn build_symbol_support_snapshots(
             target_role_support_count: accumulator.target_role_support_count,
             peer_role_support_count: accumulator.peer_role_support_count,
             same_side_support_count,
-            same_side_signal_abs_sum,
             trade_class: classify_symbol_trade(current, target, &accumulator),
         });
     }
@@ -1479,7 +1433,7 @@ fn build_symbol_support_snapshots(
 
 fn format_symbol_support_snapshot(snapshot: &SymbolSupportSnapshot) -> String {
     format!(
-        "{} {}->{} d={:+.0} notional={:.0} same_side_support={} target_roles={} peer_roles={} signal_abs_sum={:.2} class={}",
+        "{} {}->{} d={:+.0} notional={:.0} same_side_support={} target_roles={} peer_roles={} class={}",
         snapshot.symbol,
         snapshot.current_shares,
         snapshot.target_shares,
@@ -1488,7 +1442,6 @@ fn format_symbol_support_snapshot(snapshot: &SymbolSupportSnapshot) -> String {
         snapshot.same_side_support_count,
         snapshot.target_role_support_count,
         snapshot.peer_role_support_count,
-        snapshot.same_side_signal_abs_sum,
         snapshot.trade_class.as_str(),
     )
 }
@@ -2053,7 +2006,6 @@ pub async fn run_basket_live(
             ),
             &mut overlay_picker,
             options.leadership_overlay.as_ref(),
-            options.share_floor_config,
             options.supported_reallocation_band_config,
         )
         .await?;
@@ -2315,7 +2267,6 @@ pub async fn run_basket_live(
                         ),
                         &mut overlay_picker,
                         options.leadership_overlay.as_ref(),
-                        options.share_floor_config,
                         options.supported_reallocation_band_config,
                     )
                     .await?;
@@ -2680,7 +2631,6 @@ async fn process_session_close(
     picker_features: BasketOverlayPickerFeatures,
     overlay_picker: &mut impl BasketOverlayPicker,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
-    share_floor_config: ShareFloorConfig,
     supported_reallocation_band_config: SupportedReallocationBandConfig,
 ) -> Result<(), String> {
     debug_assert!(
@@ -2897,26 +2847,7 @@ async fn process_session_close(
         );
         engine.flatten_baskets(&engine_flatten_baskets);
     }
-    let share_conversion =
-        target_shares_from_notionals(&target_notionals, closes, share_floor_config)?;
-    if !share_conversion.preserved_near_unit.is_empty() {
-        info!(
-            date = %date,
-            preserved_symbols = share_conversion.preserved_near_unit.len(),
-            min_share_preservation_threshold = %format!("{:.2}", share_floor_config.min_share_preservation_threshold),
-            preserved_sample = ?share_conversion
-                .preserved_near_unit
-                .iter()
-                .take(6)
-                .map(|item| format!(
-                    "{} raw={:.2} rounded={} target_notional={:.0} price={:.2}",
-                    item.symbol, item.raw_shares, item.rounded_shares, item.target_notional, item.price
-                ))
-                .collect::<Vec<_>>(),
-            "preserved near-unit target shares during share conversion"
-        );
-    }
-    let mut target_shares = share_conversion.shares;
+    let mut target_shares = target_shares_from_notionals(&target_notionals, closes)?;
     let pre_band_support_snapshots = build_symbol_support_snapshots(
         engine,
         &plan.selected_baskets,
@@ -3053,6 +2984,9 @@ async fn process_session_close(
         );
     }
 
+    // This second snapshot is intentionally post-band. The earlier pre-band
+    // snapshot drives suppression decisions; this one drives observability for
+    // the final executable plan after small supported reallocations are removed.
     let support_snapshots = build_symbol_support_snapshots(
         engine,
         &plan.selected_baskets,
@@ -3584,10 +3518,8 @@ async fn process_session_close(
 fn target_shares_from_notionals(
     target_notionals: &HashMap<String, f64>,
     closes: &HashMap<String, f64>,
-    share_floor_config: ShareFloorConfig,
-) -> Result<TargetShareConversion, String> {
+) -> Result<HashMap<String, f64>, String> {
     let mut target_shares = HashMap::new();
-    let mut preserved_near_unit = Vec::new();
     let mut missing_prices = Vec::new();
     for (symbol, notional) in target_notionals {
         let price = match closes.get(symbol) {
@@ -3605,25 +3537,10 @@ fn target_shares_from_notionals(
         };
         if shares.abs() >= 1.0 {
             target_shares.insert(symbol.clone(), shares);
-        } else if share_floor_config.preserve_near_unit_shares
-            && raw_shares.abs() >= share_floor_config.min_share_preservation_threshold
-        {
-            let preserved_shares = if raw_shares > 0.0 { 1.0 } else { -1.0 };
-            target_shares.insert(symbol.clone(), preserved_shares);
-            preserved_near_unit.push(ShareFloorPreservation {
-                symbol: symbol.clone(),
-                raw_shares,
-                rounded_shares: preserved_shares,
-                price,
-                target_notional: *notional,
-            });
         }
     }
     if missing_prices.is_empty() {
-        Ok(TargetShareConversion {
-            shares: target_shares,
-            preserved_near_unit,
-        })
+        Ok(target_shares)
     } else {
         missing_prices.sort();
         Err(format!(
@@ -4094,7 +4011,6 @@ mod tests {
                 target_role_support_count: 1,
                 peer_role_support_count: 0,
                 same_side_support_count: 1,
-                same_side_signal_abs_sum: 2.0,
                 trade_class: SymbolTradeClass::SupportedTrim,
             },
             SymbolSupportSnapshot {
@@ -4108,7 +4024,6 @@ mod tests {
                 target_role_support_count: 1,
                 peer_role_support_count: 0,
                 same_side_support_count: 1,
-                same_side_signal_abs_sum: 1.5,
                 trade_class: SymbolTradeClass::SameSideAdd,
             },
         ];
@@ -4144,7 +4059,6 @@ mod tests {
                 target_role_support_count: 0,
                 peer_role_support_count: 1,
                 same_side_support_count: 1,
-                same_side_signal_abs_sum: 2.2,
                 trade_class: SymbolTradeClass::SupportedExit,
             },
             SymbolSupportSnapshot {
@@ -4158,7 +4072,6 @@ mod tests {
                 target_role_support_count: 1,
                 peer_role_support_count: 1,
                 same_side_support_count: 1,
-                same_side_signal_abs_sum: 11.6,
                 trade_class: SymbolTradeClass::SignFlip,
             },
             SymbolSupportSnapshot {
@@ -4172,7 +4085,6 @@ mod tests {
                 target_role_support_count: 0,
                 peer_role_support_count: 1,
                 same_side_support_count: 1,
-                same_side_signal_abs_sum: 11.6,
                 trade_class: SymbolTradeClass::SupportedTrim,
             },
         ];
@@ -4327,47 +4239,9 @@ mod tests {
         closes.insert("AMD".to_string(), 101.0);
         closes.insert("NVDA".to_string(), 200.0);
 
-        let shares =
-            target_shares_from_notionals(&notionals, &closes, ShareFloorConfig::default()).unwrap();
-        assert_eq!(shares.shares.get("AMD").copied(), Some(50.0));
-        assert_eq!(shares.shares.get("NVDA").copied(), Some(-12.0));
-    }
-
-    #[test]
-    fn test_target_shares_from_notionals_can_preserve_near_unit_exposure() {
-        let notionals = HashMap::from([("MU".to_string(), 800.0)]);
-        let closes = HashMap::from([("MU".to_string(), 896.85)]);
-
-        let shares = target_shares_from_notionals(
-            &notionals,
-            &closes,
-            ShareFloorConfig {
-                preserve_near_unit_shares: true,
-                min_share_preservation_threshold: 0.85,
-            },
-        )
-        .unwrap();
-        assert_eq!(shares.shares.get("MU").copied(), Some(1.0));
-        assert_eq!(shares.preserved_near_unit.len(), 1);
-        assert_eq!(shares.preserved_near_unit[0].symbol, "MU");
-    }
-
-    #[test]
-    fn test_target_shares_from_notionals_does_not_preserve_below_threshold() {
-        let notionals = HashMap::from([("MU".to_string(), 700.0)]);
-        let closes = HashMap::from([("MU".to_string(), 896.85)]);
-
-        let shares = target_shares_from_notionals(
-            &notionals,
-            &closes,
-            ShareFloorConfig {
-                preserve_near_unit_shares: true,
-                min_share_preservation_threshold: 0.85,
-            },
-        )
-        .unwrap();
-        assert!(shares.shares.get("MU").is_none());
-        assert!(shares.preserved_near_unit.is_empty());
+        let shares = target_shares_from_notionals(&notionals, &closes).unwrap();
+        assert_eq!(shares.get("AMD").copied(), Some(50.0));
+        assert_eq!(shares.get("NVDA").copied(), Some(-12.0));
     }
 
     #[test]
@@ -4719,8 +4593,7 @@ mod tests {
         let mut closes = HashMap::new();
         closes.insert("AMD".to_string(), 100.0);
 
-        let err = target_shares_from_notionals(&notionals, &closes, ShareFloorConfig::default())
-            .unwrap_err();
+        let err = target_shares_from_notionals(&notionals, &closes).unwrap_err();
         assert!(err.contains("NVDA"));
     }
 
