@@ -1456,14 +1456,16 @@ async fn submit_order_batch(
 fn pending_open_reconcile_due(
     pending: &PendingOpenReconcileState,
     dt: DateTime<Utc>,
-    observed_symbols_for_day: usize,
+    ready_symbols_for_day: usize,
     expected_symbols: usize,
+    fill_ready_minute_from_open: u32,
 ) -> bool {
     let today = market_session::trading_day_utc(dt);
     pending.trading_day < today
         && expected_symbols > 0
-        && observed_symbols_for_day >= expected_symbols
-        && market_session::minutes_from_open_utc(dt).is_some_and(|minutes| minutes >= 1)
+        && ready_symbols_for_day >= expected_symbols
+        && market_session::minutes_from_open_utc(dt)
+            .is_some_and(|minutes| minutes >= fill_ready_minute_from_open)
         && pending.attempted_reconcile_day != Some(today)
 }
 
@@ -1475,7 +1477,7 @@ async fn maybe_run_pending_open_reconcile(
     dt: DateTime<Utc>,
     current_shares: &mut HashMap<String, f64>,
     universe_symbols: &[String],
-    observed_symbols_for_day: usize,
+    ready_symbols_for_day: usize,
     pending_path: &Path,
     pending_state: &mut Option<PendingOpenReconcileState>,
     journal: Option<&BasketJournal>,
@@ -1484,11 +1486,13 @@ async fn maybe_run_pending_open_reconcile(
     let Some(mut pending) = pending_state.clone() else {
         return Ok(());
     };
+    let fill_ready_minute_from_open = broker.next_session_open_fill_ready_minute();
     if !pending_open_reconcile_due(
         &pending,
         dt,
-        observed_symbols_for_day,
+        ready_symbols_for_day,
         universe_symbols.len(),
+        fill_ready_minute_from_open,
     ) {
         return Ok(());
     }
@@ -2416,6 +2420,7 @@ pub async fn run_basket_live(
     //    arrival) so that no single symbol becoming a data source-of-failure can
     //    silently skip an entire session.
     let mut day_closes: HashMap<NaiveDate, HashMap<String, f64>> = HashMap::new();
+    let mut open_reconcile_ready_symbols: HashMap<NaiveDate, HashSet<String>> = HashMap::new();
     let mut processed_sessions: std::collections::HashSet<NaiveDate> = Default::default();
     if last_processed_trading_day == Some(today) {
         processed_sessions.insert(today);
@@ -2564,8 +2569,18 @@ pub async fn run_basket_live(
                     );
                 }
                 if let Some(mode) = execution.alpaca_mode() {
-                    let observed_symbols_for_day =
-                        day_closes.get(&date).map(|closes| closes.len()).unwrap_or(0);
+                    if market_session::minutes_from_open_utc(dt)
+                        .is_some_and(|minutes| minutes >= broker.next_session_open_fill_ready_minute())
+                    {
+                        open_reconcile_ready_symbols
+                            .entry(date)
+                            .or_default()
+                            .insert(bar.symbol.clone());
+                    }
+                    let ready_symbols_for_day = open_reconcile_ready_symbols
+                        .get(&date)
+                        .map(|symbols| symbols.len())
+                        .unwrap_or(0);
                     maybe_run_pending_open_reconcile(
                         broker,
                         mode,
@@ -2573,7 +2588,7 @@ pub async fn run_basket_live(
                         dt,
                         &mut current_shares,
                         &symbols,
-                        observed_symbols_for_day,
+                        ready_symbols_for_day,
                         &pending_open_reconcile_path,
                         &mut pending_open_reconcile,
                         journal.as_ref(),
@@ -2658,6 +2673,7 @@ pub async fn run_basket_live(
                         break 'session;
                     }
                     let closes_for_day = day_closes.remove(&today).unwrap_or_default();
+                    open_reconcile_ready_symbols.remove(&today);
                     if closes_for_day.is_empty() {
                         if !market_session::is_trading_day(today) {
                             info!(
@@ -5652,18 +5668,21 @@ mod tests {
         let at_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 30, 0).unwrap();
         let one_minute_after_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 31, 0).unwrap();
 
-        assert!(!pending_open_reconcile_due(&pending, at_open, 68, 68));
+        assert!(pending_open_reconcile_due(&pending, at_open, 68, 68, 0));
+        assert!(!pending_open_reconcile_due(&pending, at_open, 68, 68, 1));
         assert!(!pending_open_reconcile_due(
             &pending,
             one_minute_after_open,
             67,
-            68
+            68,
+            1
         ));
         assert!(pending_open_reconcile_due(
             &pending,
             one_minute_after_open,
             68,
-            68
+            68,
+            1
         ));
 
         let mut attempted = pending.clone();
@@ -5672,7 +5691,8 @@ mod tests {
             &attempted,
             one_minute_after_open,
             68,
-            68
+            68,
+            1
         ));
     }
 

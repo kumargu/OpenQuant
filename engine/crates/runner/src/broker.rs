@@ -57,6 +57,12 @@ pub trait Broker: Send + Sync {
     fn session_close_fill_contract(&self) -> SessionCloseFillContract {
         SessionCloseFillContract::Immediate
     }
+
+    /// Earliest minute-from-open when a prior session-close order set is
+    /// eligible for next-session open reconciliation.
+    fn next_session_open_fill_ready_minute(&self) -> u32 {
+        1
+    }
 }
 
 impl Broker for AlpacaClient {
@@ -89,5 +95,9 @@ impl Broker for AlpacaClient {
 
     fn session_close_fill_contract(&self) -> SessionCloseFillContract {
         SessionCloseFillContract::NextSessionOpen
+    }
+
+    fn next_session_open_fill_ready_minute(&self) -> u32 {
+        1
     }
 }

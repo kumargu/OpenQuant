@@ -499,6 +499,13 @@ impl Broker for SimulatedBroker {
             ReplayFillContract::NextSessionOpen => SessionCloseFillContract::NextSessionOpen,
         }
     }
+
+    fn next_session_open_fill_ready_minute(&self) -> u32 {
+        match self.state.config.fill_contract {
+            ReplayFillContract::ImmediateClose => 0,
+            ReplayFillContract::NextSessionOpen => self.state.config.fill_delay_minutes_after_open,
+        }
+    }
 }
 
 impl SimulatedBroker {
