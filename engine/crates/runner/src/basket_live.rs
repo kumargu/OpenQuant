@@ -1161,6 +1161,124 @@ struct SubmittedOrderBatch {
     next_seq: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct SymbolDriftSample {
+    symbol: String,
+    target_shares: f64,
+    actual_shares: f64,
+    delta_shares: f64,
+    delta_notional: f64,
+    gross_bps: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PositionDriftSummary {
+    target_gross: f64,
+    actual_gross: f64,
+    median_gross_bps: f64,
+    p95_gross_bps: f64,
+    max_gross_bps: f64,
+    sample: Vec<SymbolDriftSample>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PostSubmitReconciliation {
+    actual_shares: HashMap<String, f64>,
+    current_positions_after: usize,
+    actual_gross: f64,
+    divergence_pct: f64,
+    drift: PositionDriftSummary,
+    settlement_pending: bool,
+}
+
+fn reconciliation_exceeds_drift_thresholds(reconciliation: &PostSubmitReconciliation) -> bool {
+    reconciliation.divergence_pct > 10.0
+        || reconciliation.drift.median_gross_bps > 50.0
+        || reconciliation.drift.p95_gross_bps > 200.0
+}
+
+fn summarize_position_drift(
+    target_shares: &HashMap<String, f64>,
+    actual_shares: &HashMap<String, f64>,
+    closes: &HashMap<String, f64>,
+) -> PositionDriftSummary {
+    let target_gross = gross_notional(target_shares, closes);
+    let actual_gross = gross_notional(actual_shares, closes);
+    let gross_scale = target_gross.max(actual_gross).max(1.0);
+    let mut drifts = Vec::new();
+
+    let mut symbols: HashSet<String> = target_shares.keys().cloned().collect();
+    symbols.extend(actual_shares.keys().cloned());
+    for symbol in symbols {
+        let Some(price) = closes.get(&symbol).copied() else {
+            continue;
+        };
+        let target = target_shares.get(&symbol).copied().unwrap_or(0.0);
+        let actual = actual_shares.get(&symbol).copied().unwrap_or(0.0);
+        let delta_shares = actual - target;
+        let delta_notional = delta_shares.abs() * price;
+        drifts.push(SymbolDriftSample {
+            symbol,
+            target_shares: target,
+            actual_shares: actual,
+            delta_shares,
+            delta_notional,
+            gross_bps: delta_notional / gross_scale * 10_000.0,
+        });
+    }
+
+    drifts.sort_by(|a, b| b.delta_notional.total_cmp(&a.delta_notional));
+    let mut gross_bps: Vec<f64> = drifts.iter().map(|d| d.gross_bps).collect();
+    gross_bps.sort_by(|a, b| a.total_cmp(b));
+    let percentile = |p: f64| -> f64 {
+        if gross_bps.is_empty() {
+            return 0.0;
+        }
+        let idx = ((gross_bps.len() - 1) as f64 * p).round() as usize;
+        gross_bps[idx.min(gross_bps.len() - 1)]
+    };
+
+    PositionDriftSummary {
+        target_gross,
+        actual_gross,
+        median_gross_bps: percentile(0.5),
+        p95_gross_bps: percentile(0.95),
+        max_gross_bps: gross_bps.last().copied().unwrap_or(0.0),
+        sample: drifts.into_iter().take(8).collect(),
+    }
+}
+
+async fn reconcile_post_submission_positions(
+    broker: &impl Broker,
+    mode: ExecutionMode,
+    allowed_symbols: &[String],
+    target_shares: &HashMap<String, f64>,
+    closes: &HashMap<String, f64>,
+    accepted_unfilled_orders: usize,
+    fill_contract: SessionCloseFillContract,
+) -> Result<PostSubmitReconciliation, String> {
+    let actual_shares = seed_current_shares_from_alpaca(broker, mode, allowed_symbols).await?;
+    let actual_gross = gross_notional(&actual_shares, closes);
+    let target_gross = gross_notional(target_shares, closes);
+    let divergence_pct = if target_gross > 0.0 {
+        ((actual_gross - target_gross).abs() / target_gross) * 100.0
+    } else {
+        0.0
+    };
+    let settlement_pending = accepted_unfilled_orders > 0
+        && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen);
+    let drift = summarize_position_drift(target_shares, &actual_shares, closes);
+
+    Ok(PostSubmitReconciliation {
+        current_positions_after: actual_shares.len(),
+        actual_shares,
+        actual_gross,
+        divergence_pct,
+        drift,
+        settlement_pending,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn submit_order_batch(
     broker: &impl Broker,
@@ -3419,58 +3537,80 @@ async fn process_session_close(
                 let mut current_positions_after = current_shares.len();
                 let mut actual_gross = None;
                 let mut divergence_pct = None;
-                match seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await {
-                    Ok(actual_shares) => {
-                        let actual_gross_value: f64 = actual_shares
-                            .iter()
-                            .filter_map(|(sym, qty)| closes.get(sym).map(|p| (qty * p).abs()))
-                            .sum();
-                        let target_gross = gross_notional;
-                        let divergence_pct_value = if target_gross > 0.0 {
-                            ((actual_gross_value - target_gross).abs() / target_gross) * 100.0
-                        } else {
-                            0.0
-                        };
-                        let settlement_pending = (accepted_unfilled_orders > 0
-                            && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen))
+                match reconcile_post_submission_positions(
+                    broker,
+                    mode,
+                    &allowed_symbols,
+                    &target_shares,
+                    closes,
+                    accepted_unfilled_orders,
+                    fill_contract,
+                )
+                .await
+                {
+                    Ok(reconciliation) => {
+                        let settlement_pending = reconciliation.settlement_pending
                             || (accepted_unfilled_orders > 0
                                 && target_positions_len > 0
-                                && actual_shares.is_empty());
-                        actual_gross = Some(actual_gross_value);
-                        divergence_pct = Some(divergence_pct_value);
-                        current_positions_after = actual_shares.len();
-                        current_shares_after_json = Some(serialize_shares_map(&actual_shares));
+                                && reconciliation.actual_shares.is_empty());
+                        actual_gross = Some(reconciliation.actual_gross);
+                        divergence_pct = Some(reconciliation.divergence_pct);
+                        current_positions_after = reconciliation.current_positions_after;
+                        current_shares_after_json =
+                            Some(serialize_shares_map(&reconciliation.actual_shares));
+                        *current_shares = reconciliation.actual_shares.clone();
                         if settlement_pending {
                             warn!(
                                 date = %date,
-                                target_gross = %format!("{:.0}", target_gross),
-                                actual_gross = %format!("{:.0}", actual_gross_value),
-                                divergence_pct = %format!("{:.1}", divergence_pct_value),
+                                target_gross = %format!("{:.0}", reconciliation.drift.target_gross),
+                                actual_gross = %format!("{:.0}", reconciliation.actual_gross),
+                                divergence_pct = %format!("{:.1}", reconciliation.divergence_pct),
+                                median_gross_bps = %format!("{:.1}", reconciliation.drift.median_gross_bps),
+                                p95_gross_bps = %format!("{:.1}", reconciliation.drift.p95_gross_bps),
                                 accepted_orders,
                                 accepted_unfilled_orders,
-                                broker_positions = actual_shares.len(),
+                                broker_positions = reconciliation.actual_shares.len(),
                                 "post-submission reconciliation is still waiting for broker fills to settle"
                             );
-                        } else if divergence_pct_value > 10.0 {
+                        } else if reconciliation_exceeds_drift_thresholds(&reconciliation) {
                             bug!(
-                                "post_submit_gross_divergence",
+                                "post_submit_symbol_drift",
                                 date = %date,
-                                target_gross = %format!("{:.0}", target_gross),
-                                actual_gross = %format!("{:.0}", actual_gross_value),
-                                divergence_pct = %format!("{:.1}", divergence_pct_value),
+                                target_gross = %format!("{:.0}", reconciliation.drift.target_gross),
+                                actual_gross = %format!("{:.0}", reconciliation.actual_gross),
+                                divergence_pct = %format!("{:.1}", reconciliation.divergence_pct),
+                                median_gross_bps = %format!("{:.1}", reconciliation.drift.median_gross_bps),
+                                p95_gross_bps = %format!("{:.1}", reconciliation.drift.p95_gross_bps),
+                                max_gross_bps = %format!("{:.1}", reconciliation.drift.max_gross_bps),
+                                drift_sample = ?reconciliation
+                                    .drift
+                                    .sample
+                                    .iter()
+                                    .map(|item| format!(
+                                        "{} target={:.1} actual={:.1} delta_notional={:.0} gross_bps={:.1}",
+                                        item.symbol,
+                                        item.target_shares,
+                                        item.actual_shares,
+                                        item.delta_notional,
+                                        item.gross_bps
+                                    ))
+                                    .collect::<Vec<_>>(),
                                 accepted_orders,
                                 accepted_unfilled_orders,
                                 failed_orders,
-                                broker_positions = actual_shares.len(),
-                                "BROKER DIVERGENCE: actual gross differs from target by >10%"
+                                broker_positions = reconciliation.actual_shares.len(),
+                                "post-submission reconciliation exceeded drift thresholds"
                             );
                         } else {
                             info!(
                                 date = %date,
-                                target_gross = %format!("{:.0}", target_gross),
-                                actual_gross = %format!("{:.0}", actual_gross_value),
-                                divergence_pct = %format!("{:.1}", divergence_pct_value),
-                                broker_positions = actual_shares.len(),
+                                target_gross = %format!("{:.0}", reconciliation.drift.target_gross),
+                                actual_gross = %format!("{:.0}", reconciliation.actual_gross),
+                                divergence_pct = %format!("{:.1}", reconciliation.divergence_pct),
+                                median_gross_bps = %format!("{:.1}", reconciliation.drift.median_gross_bps),
+                                p95_gross_bps = %format!("{:.1}", reconciliation.drift.p95_gross_bps),
+                                max_gross_bps = %format!("{:.1}", reconciliation.drift.max_gross_bps),
+                                broker_positions = reconciliation.actual_shares.len(),
                                 "post-submission reconciliation OK"
                             );
                         }
@@ -3882,6 +4022,118 @@ mod tests {
             make_test_fit("AMD", &["NVDA", "INTC"], "chips"),
             make_test_fit("AAPL", &["AMZN", "GOOGL"], "faang"),
         ]
+    }
+
+    #[test]
+    fn test_summarize_position_drift_reports_percentiles() {
+        let target_shares = HashMap::from([
+            ("AMD".to_string(), 10.0),
+            ("NVDA".to_string(), -5.0),
+            ("AAPL".to_string(), 2.0),
+        ]);
+        let actual_shares = HashMap::from([
+            ("AMD".to_string(), 8.0),
+            ("NVDA".to_string(), -5.0),
+            ("AAPL".to_string(), 1.0),
+        ]);
+        let closes = HashMap::from([
+            ("AMD".to_string(), 100.0),
+            ("NVDA".to_string(), 50.0),
+            ("AAPL".to_string(), 200.0),
+        ]);
+
+        let drift = summarize_position_drift(&target_shares, &actual_shares, &closes);
+
+        assert_eq!(drift.target_gross, 1_650.0);
+        assert_eq!(drift.actual_gross, 1_250.0);
+        assert!(drift
+            .sample
+            .iter()
+            .any(|item| item.symbol == "AMD" && (item.delta_notional - 200.0).abs() < 1e-9));
+        assert!(drift.median_gross_bps > 0.0);
+        assert!(drift.p95_gross_bps >= drift.median_gross_bps);
+        assert!(drift.max_gross_bps >= drift.p95_gross_bps);
+    }
+
+    #[test]
+    fn test_reconciliation_thresholds_catch_sparse_large_mismatch() {
+        let mut target_shares = HashMap::new();
+        let mut actual_shares = HashMap::new();
+        let mut closes = HashMap::new();
+        for idx in 0..20 {
+            let symbol = format!("SYM{idx}");
+            target_shares.insert(symbol.clone(), 1.0);
+            actual_shares.insert(symbol.clone(), 1.0);
+            closes.insert(symbol, 100.0);
+        }
+        actual_shares.insert("SYM0".to_string(), 0.0);
+
+        let drift = summarize_position_drift(&target_shares, &actual_shares, &closes);
+        let reconciliation = PostSubmitReconciliation {
+            actual_shares,
+            current_positions_after: 19,
+            actual_gross: drift.actual_gross,
+            divergence_pct: 5.0,
+            drift,
+            settlement_pending: false,
+        };
+        assert!(!reconciliation_exceeds_drift_thresholds(&reconciliation));
+
+        let reconciliation = PostSubmitReconciliation {
+            divergence_pct: 12.0,
+            ..reconciliation
+        };
+        assert!(reconciliation_exceeds_drift_thresholds(&reconciliation));
+        assert_eq!(reconciliation.drift.median_gross_bps, 0.0);
+        assert_eq!(reconciliation.drift.p95_gross_bps, 0.0);
+        assert!(reconciliation.drift.max_gross_bps > 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_post_submission_positions_uses_actual_partial_fill() {
+        let closes = std::sync::Arc::new(std::sync::RwLock::new(HashMap::from([(
+            "AMD".to_string(),
+            100.0,
+        )])));
+        let broker = crate::simulated_broker::SimulatedBroker::with_config(
+            &basket_engine::PortfolioConfig {
+                capital: 10_000.0,
+                leverage: 1.0,
+                n_active_baskets: 1,
+                admission_score: basket_engine::AdmissionScoreKind::SignalScore,
+            },
+            closes,
+            crate::simulated_broker::SimulatedBrokerConfig {
+                fill_contract: crate::simulated_broker::ReplayFillContract::ImmediateClose,
+                partial_fill_rate: 1.0,
+                seed: 7,
+                ..Default::default()
+            },
+        );
+
+        let order = broker
+            .place_order("AMD", 10.0, "buy", crate::alpaca::ExecutionMode::Paper)
+            .await
+            .unwrap();
+        assert_eq!(order.status, "partially_filled");
+
+        let reconciliation = reconcile_post_submission_positions(
+            &broker,
+            crate::alpaca::ExecutionMode::Paper,
+            &["AMD".to_string()],
+            &HashMap::from([("AMD".to_string(), 10.0)]),
+            &HashMap::from([("AMD".to_string(), 100.0)]),
+            0,
+            SessionCloseFillContract::Immediate,
+        )
+        .await
+        .unwrap();
+
+        let actual_qty = reconciliation.actual_shares.get("AMD").copied().unwrap();
+        assert!((6.0..=9.0).contains(&actual_qty));
+        assert!(!reconciliation.settlement_pending);
+        assert!(reconciliation.drift.median_gross_bps > 0.0);
+        assert_eq!(reconciliation.current_positions_after, 1);
     }
 
     #[test]
