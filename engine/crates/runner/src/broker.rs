@@ -63,6 +63,12 @@ pub trait Broker: Send + Sync {
     fn next_session_open_fill_ready_minute(&self) -> u32 {
         1
     }
+
+    /// Whether deferred close orders can survive a process restart and
+    /// therefore need persisted next-open catch-up state.
+    fn supports_persisted_pending_open_reconcile(&self) -> bool {
+        false
+    }
 }
 
 impl Broker for AlpacaClient {
@@ -99,5 +105,9 @@ impl Broker for AlpacaClient {
 
     fn next_session_open_fill_ready_minute(&self) -> u32 {
         1
+    }
+
+    fn supports_persisted_pending_open_reconcile(&self) -> bool {
+        true
     }
 }
