@@ -6,7 +6,8 @@ use std::path::Path;
 
 use basket_picker::{BasketFit, OuFit};
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
+use serde::de::{self, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::{debug, info, trace, warn};
 
 use crate::gates::{evaluate_gate, GatePolicyKind};
@@ -55,6 +56,7 @@ pub struct EngineSnapshot {
     /// Per-basket parameters (frozen).
     pub params: Vec<BasketParams>,
     /// Per-basket runtime state.
+    #[serde(deserialize_with = "deserialize_unique_state_map")]
     pub states: HashMap<String, BasketState>,
     /// Signal / transition policy used to produce the persisted state.
     #[serde(default)]
@@ -83,22 +85,20 @@ impl BasketEngine {
     }
 
     pub fn with_gate_policy(fits: &[BasketFit], gate_policy: GatePolicyKind) -> Self {
-        let mut params = HashMap::new();
-        let mut states = HashMap::new();
+        Self::try_with_gate_policy(fits, gate_policy)
+            .unwrap_or_else(|e| panic!("invalid basket engine fit set: {e}"))
+    }
 
-        for fit in fits {
-            if let Some(p) = BasketParams::from_fit(fit) {
-                let id = p.basket_id.clone();
-                params.insert(id.clone(), p);
-                states.insert(id, BasketState::new());
-            }
-        }
-
-        Self {
+    pub fn try_with_gate_policy(
+        fits: &[BasketFit],
+        gate_policy: GatePolicyKind,
+    ) -> Result<Self, String> {
+        let (params, states) = build_engine_maps_from_fits(fits)?;
+        Ok(Self {
             params,
             states,
             gate_policy,
-        }
+        })
     }
 
     /// Get the number of active baskets.
@@ -384,11 +384,7 @@ impl BasketEngine {
     /// Load engine state from a JSON file.
     pub fn load_state(path: &Path) -> Result<Self, String> {
         let snapshot = Self::load_snapshot(path)?;
-
-        let mut params = HashMap::new();
-        for p in snapshot.params {
-            params.insert(p.basket_id.clone(), p);
-        }
+        let params = params_map_from_owned(snapshot.params)?;
 
         Ok(Self {
             params,
@@ -440,10 +436,7 @@ impl BasketEngine {
 
     fn validate_snapshot(snapshot: &EngineSnapshot) -> Result<(), String> {
         snapshot.gate_policy.validate()?;
-        let mut params = HashMap::new();
-        for p in &snapshot.params {
-            params.insert(p.basket_id.clone(), p);
-        }
+        let params = params_map_from_refs(&snapshot.params)?;
         for basket_id in params.keys() {
             if !snapshot.states.contains_key(basket_id) {
                 return Err(format!("missing runtime state for basket_id '{basket_id}'"));
@@ -458,6 +451,85 @@ impl BasketEngine {
         }
         Ok(())
     }
+}
+
+fn build_engine_maps_from_fits(
+    fits: &[BasketFit],
+) -> Result<(HashMap<String, BasketParams>, HashMap<String, BasketState>), String> {
+    let mut params = HashMap::new();
+    let mut states = HashMap::new();
+
+    for fit in fits {
+        if let Some(param) = BasketParams::from_fit(fit) {
+            let id = param.basket_id.clone();
+            if params.insert(id.clone(), param).is_some() {
+                return Err(format!("duplicate basket_id '{id}' in fit set"));
+            }
+            states.insert(id, BasketState::new());
+        }
+    }
+
+    Ok((params, states))
+}
+
+fn params_map_from_owned(
+    params: Vec<BasketParams>,
+) -> Result<HashMap<String, BasketParams>, String> {
+    let mut out = HashMap::new();
+    for param in params {
+        let id = param.basket_id.clone();
+        if out.insert(id.clone(), param).is_some() {
+            return Err(format!("duplicate basket_id '{id}' in snapshot params"));
+        }
+    }
+    Ok(out)
+}
+
+fn params_map_from_refs<'a>(
+    params: &'a [BasketParams],
+) -> Result<HashMap<String, &'a BasketParams>, String> {
+    let mut out = HashMap::new();
+    for param in params {
+        let id = param.basket_id.clone();
+        if out.insert(id.clone(), param).is_some() {
+            return Err(format!("duplicate basket_id '{id}' in snapshot params"));
+        }
+    }
+    Ok(out)
+}
+
+fn deserialize_unique_state_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, BasketState>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct UniqueStateMapVisitor;
+
+    impl<'de> Visitor<'de> for UniqueStateMapVisitor {
+        type Value = HashMap<String, BasketState>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a basket state map with unique basket_id keys")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut states = HashMap::new();
+            while let Some((basket_id, state)) = map.next_entry::<String, BasketState>()? {
+                if states.insert(basket_id.clone(), state).is_some() {
+                    return Err(de::Error::custom(format!(
+                        "duplicate runtime state for basket_id '{basket_id}'"
+                    )));
+                }
+            }
+            Ok(states)
+        }
+    }
+
+    deserializer.deserialize_map(UniqueStateMapVisitor)
 }
 
 #[cfg(test)]
@@ -513,6 +585,19 @@ mod tests {
         let fit = make_test_fit();
         let engine = BasketEngine::new(&[fit]);
         assert_eq!(engine.num_baskets(), 1);
+    }
+
+    #[test]
+    fn test_try_with_gate_policy_rejects_duplicate_basket_ids() {
+        let fit = make_test_fit();
+        let err = match BasketEngine::try_with_gate_policy(
+            &[fit.clone(), fit],
+            GatePolicyKind::BertramFrozen,
+        ) {
+            Ok(_) => panic!("expected duplicate basket_id rejection"),
+            Err(err) => err,
+        };
+        assert!(err.contains("duplicate basket_id"));
     }
 
     #[test]
@@ -724,6 +809,70 @@ mod tests {
         let loaded_state = loaded.get_state(&test_basket_id()).unwrap();
         assert_eq!(orig_state.position, loaded_state.position);
         assert_eq!(orig_state.entry_date, loaded_state.entry_date);
+    }
+
+    #[test]
+    fn test_load_state_rejects_duplicate_snapshot_param_ids() {
+        let fit = make_test_fit();
+        let engine = BasketEngine::new(std::slice::from_ref(&fit));
+        let basket_id = test_basket_id();
+        let snapshot = EngineSnapshot {
+            params: vec![
+                BasketParams::from_fit(&fit).unwrap(),
+                BasketParams::from_fit(&fit).unwrap(),
+            ],
+            states: HashMap::from([(basket_id, BasketState::default())]),
+            gate_policy: GatePolicyKind::BertramFrozen,
+            last_processed_trading_day: None,
+        };
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let json = serde_json::to_string_pretty(&snapshot).unwrap();
+        fs::write(tmp.path(), json).unwrap();
+
+        let err = match BasketEngine::load_state(tmp.path()) {
+            Ok(_) => panic!("expected duplicate snapshot param rejection"),
+            Err(err) => err,
+        };
+        assert!(err.contains("duplicate basket_id"));
+        assert_eq!(engine.num_baskets(), 1);
+    }
+
+    #[test]
+    fn test_load_snapshot_rejects_duplicate_runtime_state_keys() {
+        let fit = make_test_fit();
+        let params_json =
+            serde_json::to_string(&vec![BasketParams::from_fit(&fit).unwrap()]).unwrap();
+        let basket_id = test_basket_id();
+        let snapshot = format!(
+            r#"{{
+  "params": {params_json},
+  "states": {{
+    "{basket_id}": {{
+      "position": 0,
+      "entry_date": null,
+      "entry_spread": null,
+      "spread_history": [],
+      "last_z": null,
+      "last_signal_score": null
+    }},
+    "{basket_id}": {{
+      "position": 1,
+      "entry_date": null,
+      "entry_spread": null,
+      "spread_history": [],
+      "last_z": null,
+      "last_signal_score": null
+    }}
+  }},
+  "gate_policy": "BertramFrozen",
+  "last_processed_trading_day": null
+}}"#
+        );
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        fs::write(tmp.path(), snapshot).unwrap();
+
+        let err = BasketEngine::load_snapshot(tmp.path()).unwrap_err();
+        assert!(err.contains("duplicate runtime state"));
     }
 
     #[test]

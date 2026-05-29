@@ -2841,7 +2841,7 @@ fn initialize_engine_state(
         .filter(|f| f.valid)
         .map(|f| f.candidate.id())
         .collect();
-    let mut fresh = BasketEngine::with_gate_policy(fits, gate_policy.clone());
+    let mut fresh = BasketEngine::try_with_gate_policy(fits, gate_policy.clone())?;
 
     if !state_path.exists() {
         if broker_execution_enabled && !broker_shares.is_empty() {
