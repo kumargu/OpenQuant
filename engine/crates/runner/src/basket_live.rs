@@ -1493,6 +1493,30 @@ fn format_symbol_support_snapshot(snapshot: &SymbolSupportSnapshot) -> String {
     )
 }
 
+fn format_trade_class_counts(snapshots: &[SymbolSupportSnapshot]) -> Vec<String> {
+    let classes = [
+        SymbolTradeClass::Flat,
+        SymbolTradeClass::Aligned,
+        SymbolTradeClass::UnsupportedExit,
+        SymbolTradeClass::SupportedExit,
+        SymbolTradeClass::UnsupportedTrim,
+        SymbolTradeClass::SupportedTrim,
+        SymbolTradeClass::SameSideAdd,
+        SymbolTradeClass::NewEntry,
+        SymbolTradeClass::SignFlip,
+    ];
+    classes
+        .iter()
+        .map(|class| {
+            let count = snapshots
+                .iter()
+                .filter(|snapshot| snapshot.trade_class == *class)
+                .count();
+            format!("{}={count}", class.as_str())
+        })
+        .collect()
+}
+
 fn should_preserve_supported_reallocation(
     snapshot: &SymbolSupportSnapshot,
     config: SupportedReallocationBandConfig,
@@ -1500,12 +1524,10 @@ fn should_preserve_supported_reallocation(
     if !config.enabled {
         return false;
     }
-    let eligible_class = matches!(
+    matches!(
         snapshot.trade_class,
         SymbolTradeClass::SupportedTrim | SymbolTradeClass::SameSideAdd
-    );
-    eligible_class
-        && snapshot.same_side_support_count > 0
+    ) && snapshot.same_side_support_count > 0
         && snapshot.delta_shares.abs() <= config.max_shares
         && snapshot.delta_notional <= config.max_notional
 }
@@ -2920,6 +2942,35 @@ async fn process_session_close(
                 .collect::<Vec<_>>(),
             "supported reallocation band preserved incumbent shares"
         );
+    }
+    if supported_reallocation_band_config.enabled {
+        let eligible_supported_reallocations = pre_band_support_snapshots
+            .iter()
+            .filter(|snapshot| {
+                should_preserve_supported_reallocation(snapshot, supported_reallocation_band_config)
+            })
+            .count();
+        info!(
+            date = %date,
+            enabled = supported_reallocation_band_config.enabled,
+            trade_class_counts = ?format_trade_class_counts(&pre_band_support_snapshots),
+            eligible_supported_reallocations,
+            preserved_reallocations = preserved_reallocations.len(),
+            max_notional = %format!("{:.0}", supported_reallocation_band_config.max_notional),
+            max_shares = %format!("{:.1}", supported_reallocation_band_config.max_shares),
+            "support-aware portfolio arbitration summary"
+        );
+        if !preserved_reallocations.is_empty() {
+            debug!(
+                date = %date,
+                preserved_sample = ?preserved_reallocations
+                    .iter()
+                    .take(10)
+                    .map(format_symbol_support_snapshot)
+                    .collect::<Vec<_>>(),
+                "support-aware portfolio arbitration preserved trades"
+            );
+        }
     }
     let executable_target_notionals = notionals_from_target_shares(&target_shares, closes);
 
