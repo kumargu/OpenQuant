@@ -740,6 +740,65 @@ pub fn overlay_picker_state_path(engine_state_path: &Path) -> PathBuf {
     engine_state_path.with_file_name(name)
 }
 
+pub fn pending_open_reconcile_state_path(engine_state_path: &Path) -> PathBuf {
+    let mut name = engine_state_path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_else(|| OsString::from("basket.state.json"));
+    name.push(".pending-open.json");
+    engine_state_path.with_file_name(name)
+}
+
+fn load_pending_open_reconcile_state(
+    path: &Path,
+) -> Result<Option<PendingOpenReconcileState>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("read pending open reconcile state {}: {e}", path.display()))?;
+    let state: PendingOpenReconcileState = serde_json::from_str(&content)
+        .map_err(|e| format!("parse pending open reconcile state {}: {e}", path.display()))?;
+    Ok(Some(state))
+}
+
+fn save_pending_open_reconcile_state(
+    path: &Path,
+    state: &PendingOpenReconcileState,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create pending open reconcile dir {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+    let content = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("serialize pending open reconcile state: {e}"))?;
+    let tmp = path.with_extension("pending-open.tmp");
+    std::fs::write(&tmp, content)
+        .map_err(|e| format!("write pending open reconcile tmp {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        format!(
+            "rename pending open reconcile state {}: {e}",
+            path.display()
+        )
+    })
+}
+
+fn clear_pending_open_reconcile_state(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(path).map_err(|e| {
+        format!(
+            "remove pending open reconcile state {}: {e}",
+            path.display()
+        )
+    })
+}
+
 fn basket_sector(basket_id: &str) -> &str {
     basket_id.split(':').next().unwrap_or(basket_id)
 }
@@ -1191,6 +1250,14 @@ struct PostSubmitReconciliation {
     settlement_pending: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct PendingOpenReconcileState {
+    trading_day: NaiveDate,
+    target_shares: HashMap<String, f64>,
+    closes: HashMap<String, f64>,
+    attempted_reconcile_day: Option<NaiveDate>,
+}
+
 fn reconciliation_exceeds_drift_thresholds(reconciliation: &PostSubmitReconciliation) -> bool {
     reconciliation.divergence_pct > 10.0
         || reconciliation.drift.median_gross_bps > 50.0
@@ -1384,6 +1451,237 @@ async fn submit_order_batch(
         accepted_unfilled_orders,
         next_seq: seq,
     })
+}
+
+fn pending_open_reconcile_due(
+    pending: &PendingOpenReconcileState,
+    dt: DateTime<Utc>,
+    observed_symbols_for_day: usize,
+    expected_symbols: usize,
+) -> bool {
+    let today = market_session::trading_day_utc(dt);
+    pending.trading_day < today
+        && expected_symbols > 0
+        && observed_symbols_for_day >= expected_symbols
+        && market_session::minutes_from_open_utc(dt).is_some_and(|minutes| minutes >= 1)
+        && pending.attempted_reconcile_day != Some(today)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn maybe_run_pending_open_reconcile(
+    broker: &impl Broker,
+    mode: ExecutionMode,
+    execution: BasketExecution,
+    dt: DateTime<Utc>,
+    current_shares: &mut HashMap<String, f64>,
+    universe_symbols: &[String],
+    observed_symbols_for_day: usize,
+    pending_path: &Path,
+    pending_state: &mut Option<PendingOpenReconcileState>,
+    journal: Option<&BasketJournal>,
+    run_id: &str,
+) -> Result<(), String> {
+    let Some(mut pending) = pending_state.clone() else {
+        return Ok(());
+    };
+    if !pending_open_reconcile_due(
+        &pending,
+        dt,
+        observed_symbols_for_day,
+        universe_symbols.len(),
+    ) {
+        return Ok(());
+    }
+
+    let today = market_session::trading_day_utc(dt);
+    info!(
+        prior_trading_day = %pending.trading_day,
+        reconcile_day = %today,
+        target_positions = pending.target_shares.len(),
+        current_positions = current_shares.len(),
+        "running pending open reconcile against broker positions after session open"
+    );
+
+    let actual_before = seed_current_shares_from_alpaca(broker, mode, universe_symbols).await?;
+    *current_shares = actual_before.clone();
+    let staged_orders = staged_diff_to_orders(&actual_before, &pending.target_shares);
+    let orders = staged_orders.all_orders();
+    if orders.is_empty() {
+        clear_pending_open_reconcile_state(pending_path)?;
+        *pending_state = None;
+        info!(
+            prior_trading_day = %pending.trading_day,
+            reconcile_day = %today,
+            "pending open reconcile already matched broker inventory; cleared sidecar"
+        );
+        return Ok(());
+    }
+
+    if let Err(e) = check_order_set_affordability(
+        broker,
+        mode,
+        today,
+        &actual_before,
+        &pending.target_shares,
+        &orders,
+        &pending.closes,
+    )
+    .await
+    {
+        let prior_trading_day = pending.trading_day;
+        pending.attempted_reconcile_day = Some(today);
+        save_pending_open_reconcile_state(pending_path, &pending)?;
+        *pending_state = Some(pending);
+        return Err(format!(
+            "pending open reconcile affordability check failed for prior day {}: {e}",
+            prior_trading_day
+        ));
+    }
+
+    let mut accepted_orders = 0usize;
+    let mut failed_orders = 0usize;
+    let reducing_batch = submit_order_batch(
+        broker,
+        mode,
+        execution,
+        &staged_orders.reducing,
+        run_id,
+        today,
+        &pending.closes,
+        journal,
+        0,
+    )
+    .await?;
+    accepted_orders += reducing_batch.accepted_orders;
+    failed_orders += reducing_batch.failed_orders;
+
+    let mut shares_after_reducing = actual_before.clone();
+    let mut phase_one_reconciliation_confirmed = false;
+    if !staged_orders.expanding.is_empty() {
+        let reconciliation_delay_secs = broker.reconciliation_delay_secs();
+        if reconciliation_delay_secs > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs)).await;
+        }
+        match seed_current_shares_from_alpaca(broker, mode, universe_symbols).await {
+            Ok(actual_shares) => {
+                shares_after_reducing = actual_shares;
+                phase_one_reconciliation_confirmed = true;
+            }
+            Err(e) => {
+                bug!(
+                    "pending_open_reconcile_phase_one_reconciliation_failed",
+                    reconcile_day = %today,
+                    prior_trading_day = %pending.trading_day,
+                    error = e.as_str(),
+                    "failed to reconcile broker positions after pending-open reducing orders"
+                );
+            }
+        }
+        let expanding_target_shares = subset_target_after_orders(
+            &shares_after_reducing,
+            &pending.target_shares,
+            &staged_orders.expanding,
+        );
+        let mut phase_two_orders =
+            staged_diff_to_orders(&shares_after_reducing, &expanding_target_shares).all_orders();
+        phase_two_orders.retain(|order| {
+            can_submit_phase_two_order(
+                &actual_before,
+                &pending.target_shares,
+                &shares_after_reducing,
+                phase_one_reconciliation_confirmed,
+                &order.symbol,
+            )
+        });
+        if !phase_two_orders.is_empty() {
+            if let Err(e) = check_order_set_affordability(
+                broker,
+                mode,
+                today,
+                &shares_after_reducing,
+                &expanding_target_shares,
+                &phase_two_orders,
+                &pending.closes,
+            )
+            .await
+            {
+                failed_orders += phase_two_orders.len();
+                bug!(
+                    "pending_open_reconcile_phase_two_affordability_error",
+                    reconcile_day = %today,
+                    prior_trading_day = %pending.trading_day,
+                    error = e.as_str(),
+                    "pending-open phase-two affordability check failed"
+                );
+            } else {
+                let expanding_batch = submit_order_batch(
+                    broker,
+                    mode,
+                    execution,
+                    &phase_two_orders,
+                    run_id,
+                    today,
+                    &pending.closes,
+                    journal,
+                    reducing_batch.next_seq,
+                )
+                .await?;
+                accepted_orders += expanding_batch.accepted_orders;
+                failed_orders += expanding_batch.failed_orders;
+            }
+        }
+    }
+
+    let reconciliation_delay_secs = broker.reconciliation_delay_secs();
+    if reconciliation_delay_secs > 0 {
+        tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs)).await;
+    }
+    let actual_after = seed_current_shares_from_alpaca(broker, mode, universe_symbols).await?;
+    *current_shares = actual_after.clone();
+    let remaining_orders =
+        staged_diff_to_orders(&actual_after, &pending.target_shares).all_orders();
+    let drift = summarize_position_drift(&pending.target_shares, &actual_after, &pending.closes);
+    if remaining_orders.is_empty() {
+        clear_pending_open_reconcile_state(pending_path)?;
+        *pending_state = None;
+        info!(
+            prior_trading_day = %pending.trading_day,
+            reconcile_day = %today,
+            accepted_orders,
+            failed_orders,
+            broker_positions = actual_after.len(),
+            "pending open reconcile completed and cleared sidecar"
+        );
+        return Ok(());
+    }
+
+    pending.attempted_reconcile_day = Some(today);
+    save_pending_open_reconcile_state(pending_path, &pending)?;
+    warn!(
+        prior_trading_day = %pending.trading_day,
+        reconcile_day = %today,
+        accepted_orders,
+        failed_orders,
+        remaining_orders = remaining_orders.len(),
+        target_gross = %format!("{:.0}", drift.target_gross),
+        actual_gross = %format!("{:.0}", drift.actual_gross),
+        median_gross_bps = %format!("{:.1}", drift.median_gross_bps),
+        p95_gross_bps = %format!("{:.1}", drift.p95_gross_bps),
+        drift_sample = ?drift
+            .sample
+            .iter()
+            .map(|item| format!(
+                "{} target={:.1} actual={:.1} delta_notional={:.0}",
+                item.symbol,
+                item.target_shares,
+                item.actual_shares,
+                item.delta_notional
+            ))
+            .collect::<Vec<_>>(),
+        "pending open reconcile still diverges from target after corrective pass"
+    );
+    *pending_state = Some(pending);
+    Ok(())
 }
 
 fn push_order_if_nonzero(orders: &mut Vec<OrderIntent>, symbol: &str, delta: f64) {
@@ -1901,10 +2199,16 @@ pub async fn run_basket_live(
         )?;
     info!(gate_policy = ?engine.gate_policy(), "basket signal gate policy initialized");
     let leadership_state_path = leadership_classifier_state_path(state_path);
+    let pending_open_reconcile_path = pending_open_reconcile_state_path(state_path);
     let can_load_sidecar_state = matches!(startup_state_source, StartupStateSource::Snapshot);
     if !can_load_sidecar_state {
         move_sidecar_state_aside_if_present(
             &leadership_state_path,
+            startup_state_source,
+            "engine_state_not_loaded_from_snapshot",
+        )?;
+        move_sidecar_state_aside_if_present(
+            &pending_open_reconcile_path,
             startup_state_source,
             "engine_state_not_loaded_from_snapshot",
         )?;
@@ -2017,6 +2321,25 @@ pub async fn run_basket_live(
         picker_id = overlay_picker.id(),
         "basket overlay picker initialized"
     );
+    let mut pending_open_reconcile = match if can_load_sidecar_state {
+        load_pending_open_reconcile_state(&pending_open_reconcile_path)
+    } else {
+        Ok(None)
+    } {
+        Ok(state) => {
+            if let Some(pending) = state.as_ref() {
+                info!(
+                    state_path = %pending_open_reconcile_path.display(),
+                    trading_day = %pending.trading_day,
+                    target_positions = pending.target_shares.len(),
+                    attempted_reconcile_day = ?pending.attempted_reconcile_day,
+                    "loaded pending open reconcile state"
+                );
+            }
+            state
+        }
+        Err(e) => return Err(e),
+    };
 
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
     let journal = match options.journal_path.as_deref() {
@@ -2125,6 +2448,8 @@ pub async fn run_basket_live(
             &mut overlay_picker,
             options.leadership_overlay.as_ref(),
             options.supported_reallocation_band_config,
+            &pending_open_reconcile_path,
+            &mut pending_open_reconcile,
         )
         .await?;
         overlay_picker.save_state(&picker_state_path)?;
@@ -2237,6 +2562,24 @@ pub async fn run_basket_live(
                         symbols_expected,
                         "buffered bar"
                     );
+                }
+                if let Some(mode) = execution.alpaca_mode() {
+                    let observed_symbols_for_day =
+                        day_closes.get(&date).map(|closes| closes.len()).unwrap_or(0);
+                    maybe_run_pending_open_reconcile(
+                        broker,
+                        mode,
+                        execution,
+                        dt,
+                        &mut current_shares,
+                        &symbols,
+                        observed_symbols_for_day,
+                        &pending_open_reconcile_path,
+                        &mut pending_open_reconcile,
+                        journal.as_ref(),
+                        run_id.as_str(),
+                    )
+                    .await?;
                 }
             }
             _ = heartbeat.tick() => {
@@ -2386,6 +2729,8 @@ pub async fn run_basket_live(
                         &mut overlay_picker,
                         options.leadership_overlay.as_ref(),
                         options.supported_reallocation_band_config,
+                        &pending_open_reconcile_path,
+                        &mut pending_open_reconcile,
                     )
                     .await?;
                     overlay_picker.save_state(&picker_state_path)?;
@@ -2750,6 +3095,8 @@ async fn process_session_close(
     overlay_picker: &mut impl BasketOverlayPicker,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
     supported_reallocation_band_config: SupportedReallocationBandConfig,
+    pending_open_reconcile_path: &Path,
+    pending_open_reconcile_state: &mut Option<PendingOpenReconcileState>,
 ) -> Result<(), String> {
     debug_assert!(
         portfolio_config.validate().is_ok(),
@@ -3194,6 +3541,8 @@ async fn process_session_close(
     let staged_orders = staged_diff_to_orders(current_shares, &target_shares);
     let orders = staged_orders.all_orders();
     if staged_orders.is_empty() {
+        clear_pending_open_reconcile_state(pending_open_reconcile_path)?;
+        *pending_open_reconcile_state = None;
         info!(date = %date, "no orders to emit — targets already match current");
         if let Some(journal) = journal {
             journal.record_session_close(&BasketSessionCloseRecord {
@@ -3295,6 +3644,8 @@ async fn process_session_close(
                 }
             }
             *current_shares = target_shares.clone();
+            clear_pending_open_reconcile_state(pending_open_reconcile_path)?;
+            *pending_open_reconcile_state = None;
             if let Some(journal) = journal {
                 journal.record_session_close(&BasketSessionCloseRecord {
                     run_id,
@@ -3623,6 +3974,27 @@ async fn process_session_close(
                             "post-submission reconciliation failed — could not refetch broker positions"
                         );
                     }
+                }
+                if accepted_unfilled_orders > 0
+                    && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen)
+                {
+                    let pending_state = PendingOpenReconcileState {
+                        trading_day: date,
+                        target_shares: target_shares.clone(),
+                        closes: closes.clone(),
+                        attempted_reconcile_day: None,
+                    };
+                    save_pending_open_reconcile_state(pending_open_reconcile_path, &pending_state)?;
+                    *pending_open_reconcile_state = Some(pending_state);
+                    info!(
+                        date = %date,
+                        accepted_unfilled_orders,
+                        state_path = %pending_open_reconcile_path.display(),
+                        "persisted pending open reconcile target for next-session catch-up"
+                    );
+                } else {
+                    clear_pending_open_reconcile_state(pending_open_reconcile_path)?;
+                    *pending_open_reconcile_state = None;
                 }
                 if let Some(journal) = journal {
                     journal.record_session_close(&BasketSessionCloseRecord {
@@ -5267,5 +5639,59 @@ mod tests {
             true,
             "AIG",
         ));
+    }
+
+    #[test]
+    fn test_pending_open_reconcile_due_waits_until_one_minute_after_open() {
+        let pending = PendingOpenReconcileState {
+            trading_day: NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+            target_shares: HashMap::from([("XOM".to_string(), 21.0)]),
+            closes: HashMap::from([("XOM".to_string(), 101.0)]),
+            attempted_reconcile_day: None,
+        };
+        let at_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 30, 0).unwrap();
+        let one_minute_after_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 31, 0).unwrap();
+
+        assert!(!pending_open_reconcile_due(&pending, at_open, 68, 68));
+        assert!(!pending_open_reconcile_due(
+            &pending,
+            one_minute_after_open,
+            67,
+            68
+        ));
+        assert!(pending_open_reconcile_due(
+            &pending,
+            one_minute_after_open,
+            68,
+            68
+        ));
+
+        let mut attempted = pending.clone();
+        attempted.attempted_reconcile_day = Some(NaiveDate::from_ymd_opt(2026, 5, 29).unwrap());
+        assert!(!pending_open_reconcile_due(
+            &attempted,
+            one_minute_after_open,
+            68,
+            68
+        ));
+    }
+
+    #[test]
+    fn test_pending_open_reconcile_state_roundtrip() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("basket.state.json.pending-open.json");
+        let pending = PendingOpenReconcileState {
+            trading_day: NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+            target_shares: HashMap::from([("XOM".to_string(), 21.0)]),
+            closes: HashMap::from([("XOM".to_string(), 101.0)]),
+            attempted_reconcile_day: Some(NaiveDate::from_ymd_opt(2026, 5, 29).unwrap()),
+        };
+
+        save_pending_open_reconcile_state(&path, &pending).unwrap();
+        let loaded = load_pending_open_reconcile_state(&path).unwrap();
+        assert_eq!(loaded, Some(pending.clone()));
+
+        clear_pending_open_reconcile_state(&path).unwrap();
+        assert_eq!(load_pending_open_reconcile_state(&path).unwrap(), None);
     }
 }
