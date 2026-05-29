@@ -372,7 +372,7 @@ impl Universe {
 
 /// Load universe from a TOML file.
 ///
-/// The file must follow the basket_universe_v1 schema.
+/// The file must follow the basket_universe schema.
 /// Returns an error string if parsing fails.
 pub fn load_universe(path: &Path) -> Result<Universe, String> {
     let content = fs::read_to_string(path).map_err(|e| format!("failed to read file: {}", e))?;

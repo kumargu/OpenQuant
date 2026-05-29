@@ -26,6 +26,17 @@ pub fn is_after_close_grace_utc(dt_utc: DateTime<Utc>, grace_min: u32) -> bool {
     session_minute(local) >= (RTH_CLOSE.hour() * 60 + RTH_CLOSE.minute() + grace_min)
 }
 
+pub fn minutes_from_open_utc(dt_utc: DateTime<Utc>) -> Option<u32> {
+    let local = dt_utc.with_timezone(&New_York);
+    let minute = session_minute(local);
+    let open = RTH_OPEN.hour() * 60 + RTH_OPEN.minute();
+    let close = RTH_CLOSE.hour() * 60 + RTH_CLOSE.minute();
+    if !(open..close).contains(&minute) {
+        return None;
+    }
+    Some(minute - open)
+}
+
 pub fn is_trading_day(day: NaiveDate) -> bool {
     match day.is_busday() {
         Ok(open) => open,

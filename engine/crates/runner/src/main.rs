@@ -109,7 +109,7 @@ impl Engine {
     fn universe_path(&self) -> Option<&'static str> {
         match self {
             Engine::Snp500 | Engine::Metals => None,
-            Engine::Basket => Some("config/basket_universe_v1.toml"),
+            Engine::Basket => Some("config/basket_universe.toml"),
         }
     }
 
@@ -123,7 +123,7 @@ fn default_stream_universe_path(engine: Engine, is_live_command: bool) -> Option
         Engine::Snp500 | Engine::Metals => None,
         Engine::Basket => {
             if is_live_command {
-                Some("config/basket_universe_v1.toml")
+                Some("config/basket_universe.toml")
             } else {
                 Some("config/basket_universe_buildout.toml")
             }
@@ -160,7 +160,7 @@ struct StreamArgs {
 
     /// Basket universe TOML file. For basket paper, defaults to
     /// `config/basket_universe_buildout.toml`. For basket live/replay/fits, defaults
-    /// to `config/basket_universe_v1.toml`.
+    /// to `config/basket_universe.toml`.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -329,7 +329,7 @@ struct ReplayArgs {
     #[arg(long)]
     bar_cache: Option<PathBuf>,
 
-    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml`
+    /// Basket universe TOML file. Defaults to `config/basket_universe.toml`
     /// when --engine basket.
     #[arg(long)]
     universe: Option<PathBuf>,
@@ -388,6 +388,11 @@ struct ReplayArgs {
     /// One-sided fill slippage in basis points (basket only, default 0).
     #[arg(long, default_value_t = 0.0)]
     slippage_bps: f64,
+
+    /// Replay-only: fill basket orders this many minutes after the next
+    /// session open. `0` = next-session open, `60` = 10:30 ET, `330` = 15:00 ET.
+    #[arg(long, default_value_t = 0)]
+    basket_fill_delay_minutes_after_open: u32,
 
     /// Per-order probability of simulated rejection (0.0..=1.0, default 0).
     /// Exercises the `error!("ORDER FAILED")` path in basket_live.
@@ -484,7 +489,7 @@ struct ReplayArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 struct BasketFitArgs {
-    /// Basket universe TOML file. Defaults to `config/basket_universe_v1.toml`.
+    /// Basket universe TOML file. Defaults to `config/basket_universe.toml`.
     #[arg(long)]
     universe: Option<PathBuf>,
 
@@ -1462,7 +1467,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
 fn run_freeze_basket_fits(args: BasketFitArgs) {
     let universe_path = args
         .universe
-        .unwrap_or_else(|| PathBuf::from("config/basket_universe_v1.toml"));
+        .unwrap_or_else(|| PathBuf::from("config/basket_universe.toml"));
     let bars_dir = args.bars_dir.unwrap_or_else(|| {
         std::env::var("QUANT_DATA_DIR")
             .map(PathBuf::from)
@@ -2295,6 +2300,8 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         partial_fill_rate: args.partial_fill_rate,
         stale_position_rate: args.stale_position_rate,
         seed: args.failure_seed,
+        fill_contract: simulated_broker::ReplayFillContract::NextSessionOpen,
+        fill_delay_minutes_after_open: args.basket_fill_delay_minutes_after_open,
     };
     let replay = parquet_bar_source::new_replay_components(
         bars_dir.clone(),
@@ -2462,23 +2469,23 @@ mod tests {
     fn stream_state_defaults_under_data_state() {
         let path = default_stream_state_path(
             Path::new("data"),
-            Path::new("config/basket_universe_v1.fits.json"),
+            Path::new("config/basket_universe.fits.json"),
         );
         assert_eq!(
             path,
-            PathBuf::from("data/state/basket_universe_v1.fits.state.json")
+            PathBuf::from("data/state/basket_universe.fits.state.json")
         );
     }
 
     #[test]
     fn suffix_preserves_state_extension() {
         let path = path_with_suffix(
-            Path::new("data/state/basket_universe_v1.fits.state.json"),
+            Path::new("data/state/basket_universe.fits.state.json"),
             "leadership-rule-v1",
         );
         assert_eq!(
             path,
-            PathBuf::from("data/state/basket_universe_v1.fits.state.leadership-rule-v1.json")
+            PathBuf::from("data/state/basket_universe.fits.state.leadership-rule-v1.json")
         );
     }
 

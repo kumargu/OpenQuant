@@ -9,6 +9,12 @@ use chrono::NaiveDate;
 
 use crate::alpaca::{AlpacaAccount, AlpacaClient, AlpacaOrder, ExecutionMode};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionCloseFillContract {
+    Immediate,
+    NextSessionOpen,
+}
+
 /// Abstraction over the brokerage backend.
 ///
 /// Only broker actions (place orders, query positions / account) go through
@@ -45,6 +51,12 @@ pub trait Broker: Send + Sync {
     fn reconciliation_delay_secs(&self) -> u64 {
         30
     }
+
+    /// Fill contract for orders submitted by the basket runner after the
+    /// session-close decision point.
+    fn session_close_fill_contract(&self) -> SessionCloseFillContract {
+        SessionCloseFillContract::Immediate
+    }
 }
 
 impl Broker for AlpacaClient {
@@ -70,9 +82,12 @@ impl Broker for AlpacaClient {
     }
 
     fn reconciliation_delay_secs(&self) -> u64 {
-        // Paper/live MOC-style orders can remain accepted for a while after the
-        // close before positions reflect the fills. Give Alpaca more time than
-        // replay's synchronous broker path before judging reconciliation.
+        // The basket runner submits after the close, so Alpaca can keep
+        // those market/day orders queued until the next regular session.
         120
+    }
+
+    fn session_close_fill_contract(&self) -> SessionCloseFillContract {
+        SessionCloseFillContract::NextSessionOpen
     }
 }

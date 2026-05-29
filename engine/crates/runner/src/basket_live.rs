@@ -49,7 +49,7 @@ use crate::basket_overlay_picker::{
     BasketOverlayMode, BasketOverlayPicker, BasketOverlayPickerFeatures, BasketOverlayPickerHandle,
     BasketOverlayPickerKind,
 };
-use crate::broker::Broker;
+use crate::broker::{Broker, SessionCloseFillContract};
 use crate::clock::Clock;
 use crate::market_session;
 use crate::session_trigger::SessionTrigger;
@@ -1493,6 +1493,30 @@ fn format_symbol_support_snapshot(snapshot: &SymbolSupportSnapshot) -> String {
     )
 }
 
+fn format_trade_class_counts(snapshots: &[SymbolSupportSnapshot]) -> Vec<String> {
+    let classes = [
+        SymbolTradeClass::Flat,
+        SymbolTradeClass::Aligned,
+        SymbolTradeClass::UnsupportedExit,
+        SymbolTradeClass::SupportedExit,
+        SymbolTradeClass::UnsupportedTrim,
+        SymbolTradeClass::SupportedTrim,
+        SymbolTradeClass::SameSideAdd,
+        SymbolTradeClass::NewEntry,
+        SymbolTradeClass::SignFlip,
+    ];
+    classes
+        .iter()
+        .map(|class| {
+            let count = snapshots
+                .iter()
+                .filter(|snapshot| snapshot.trade_class == *class)
+                .count();
+            format!("{}={count}", class.as_str())
+        })
+        .collect()
+}
+
 fn should_preserve_supported_reallocation(
     snapshot: &SymbolSupportSnapshot,
     config: SupportedReallocationBandConfig,
@@ -1500,12 +1524,10 @@ fn should_preserve_supported_reallocation(
     if !config.enabled {
         return false;
     }
-    let eligible_class = matches!(
+    matches!(
         snapshot.trade_class,
         SymbolTradeClass::SupportedTrim | SymbolTradeClass::SameSideAdd
-    );
-    eligible_class
-        && snapshot.same_side_support_count > 0
+    ) && snapshot.same_side_support_count > 0
         && snapshot.delta_shares.abs() <= config.max_shares
         && snapshot.delta_notional <= config.max_notional
 }
@@ -2921,6 +2943,35 @@ async fn process_session_close(
             "supported reallocation band preserved incumbent shares"
         );
     }
+    if supported_reallocation_band_config.enabled {
+        let eligible_supported_reallocations = pre_band_support_snapshots
+            .iter()
+            .filter(|snapshot| {
+                should_preserve_supported_reallocation(snapshot, supported_reallocation_band_config)
+            })
+            .count();
+        info!(
+            date = %date,
+            enabled = supported_reallocation_band_config.enabled,
+            trade_class_counts = ?format_trade_class_counts(&pre_band_support_snapshots),
+            eligible_supported_reallocations,
+            preserved_reallocations = preserved_reallocations.len(),
+            max_notional = %format!("{:.0}", supported_reallocation_band_config.max_notional),
+            max_shares = %format!("{:.1}", supported_reallocation_band_config.max_shares),
+            "support-aware portfolio arbitration summary"
+        );
+        if !preserved_reallocations.is_empty() {
+            debug!(
+                date = %date,
+                preserved_sample = ?preserved_reallocations
+                    .iter()
+                    .take(10)
+                    .map(format_symbol_support_snapshot)
+                    .collect::<Vec<_>>(),
+                "support-aware portfolio arbitration preserved trades"
+            );
+        }
+    }
     let executable_target_notionals = notionals_from_target_shares(&target_shares, closes);
 
     // Summary of the notional plan before we diff — this is where yesterday's
@@ -3233,6 +3284,7 @@ async fn process_session_close(
             }
         }
         Some(mode) => {
+            let fill_contract = broker.session_close_fill_contract();
             let reducing_target_shares =
                 apply_orders_to_shares(current_shares, &staged_orders.reducing);
             if let Err(e) = check_order_set_affordability(
@@ -3311,89 +3363,104 @@ async fn process_session_close(
             let mut shares_after_reducing = reducing_target_shares.clone();
             let mut phase_one_reconciliation_confirmed = false;
             if !staged_orders.expanding.is_empty() {
-                let reconciliation_delay_secs = broker.reconciliation_delay_secs();
-                if reconciliation_delay_secs > 0 {
-                    tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs))
+                let reducing_settles_next_session = !staged_orders.reducing.is_empty()
+                    && reducing_batch.accepted_unfilled_orders > 0
+                    && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen);
+                if reducing_settles_next_session {
+                    info!(
+                        date = %date,
+                        reducing_orders = staged_orders.reducing.len(),
+                        expanding_orders = staged_orders.expanding.len(),
+                        accepted_unfilled_reducing_orders = reducing_batch.accepted_unfilled_orders,
+                        "skipping phase-two expansions because reducing orders settle next session"
+                    );
+                } else {
+                    let reconciliation_delay_secs = broker.reconciliation_delay_secs();
+                    if reconciliation_delay_secs > 0 {
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            reconciliation_delay_secs,
+                        ))
                         .await;
-                }
-                match seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await {
-                    Ok(actual_shares) => {
-                        shares_after_reducing = actual_shares;
-                        phase_one_reconciliation_confirmed = true;
                     }
-                    Err(e) => {
-                        bug!(
-                            "phase_one_reconciliation_failed",
-                            date = %date,
-                            error = e.as_str(),
-                            "failed to reconcile broker positions after reducing orders"
-                        );
-                    }
-                }
-                let expanding_target_shares = subset_target_after_orders(
-                    &shares_after_reducing,
-                    &target_shares,
-                    &staged_orders.expanding,
-                );
-                let mut phase_two_orders =
-                    staged_diff_to_orders(&shares_after_reducing, &expanding_target_shares)
-                        .all_orders();
-                phase_two_orders.retain(|order| {
-                    can_submit_phase_two_order(
-                        current_shares,
-                        &target_shares,
-                        &shares_after_reducing,
-                        phase_one_reconciliation_confirmed,
-                        &order.symbol,
-                    )
-                });
-                if !phase_two_orders.is_empty() {
-                    if let Err(e) = check_order_set_affordability(
-                        broker,
-                        mode,
-                        date,
-                        &shares_after_reducing,
-                        &expanding_target_shares,
-                        &phase_two_orders,
-                        closes,
-                    )
-                    .await
-                    {
-                        if let Some(journal) = journal {
-                            journal.record_order_event(&BasketOrderEvent {
-                                run_id,
-                                trading_day: date,
-                                seq,
-                                symbol: "__phase2__",
-                                side: "n/a",
-                                requested_qty: 0.0,
-                                intended_notional: None,
-                                reason: "aggregated",
-                                basket_id: None,
-                                broker_order_id: None,
-                                broker_status: None,
-                                submission_status: "phase2_affordability_error",
-                                error_text: Some(e.as_str()),
-                            })?;
+                    match seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await {
+                        Ok(actual_shares) => {
+                            shares_after_reducing = actual_shares;
+                            phase_one_reconciliation_confirmed = true;
                         }
-                        failed_orders += phase_two_orders.len();
-                    } else {
-                        let expanding_batch = submit_order_batch(
+                        Err(e) => {
+                            bug!(
+                                "phase_one_reconciliation_failed",
+                                date = %date,
+                                error = e.as_str(),
+                                "failed to reconcile broker positions after reducing orders"
+                            );
+                        }
+                    }
+                    let expanding_target_shares = subset_target_after_orders(
+                        &shares_after_reducing,
+                        &target_shares,
+                        &staged_orders.expanding,
+                    );
+                    let mut phase_two_orders =
+                        staged_diff_to_orders(&shares_after_reducing, &expanding_target_shares)
+                            .all_orders();
+                    phase_two_orders.retain(|order| {
+                        can_submit_phase_two_order(
+                            current_shares,
+                            &target_shares,
+                            &shares_after_reducing,
+                            phase_one_reconciliation_confirmed,
+                            &order.symbol,
+                        )
+                    });
+                    if !phase_two_orders.is_empty() {
+                        if let Err(e) = check_order_set_affordability(
                             broker,
                             mode,
-                            execution,
-                            &phase_two_orders,
-                            run_id,
                             date,
+                            &shares_after_reducing,
+                            &expanding_target_shares,
+                            &phase_two_orders,
                             closes,
-                            journal,
-                            seq,
                         )
-                        .await?;
-                        accepted_orders += expanding_batch.accepted_orders;
-                        failed_orders += expanding_batch.failed_orders;
-                        accepted_unfilled_orders += expanding_batch.accepted_unfilled_orders;
-                        let _ = expanding_batch.next_seq;
+                        .await
+                        {
+                            if let Some(journal) = journal {
+                                journal.record_order_event(&BasketOrderEvent {
+                                    run_id,
+                                    trading_day: date,
+                                    seq,
+                                    symbol: "__phase2__",
+                                    side: "n/a",
+                                    requested_qty: 0.0,
+                                    intended_notional: None,
+                                    reason: "aggregated",
+                                    basket_id: None,
+                                    broker_order_id: None,
+                                    broker_status: None,
+                                    submission_status: "phase2_affordability_error",
+                                    error_text: Some(e.as_str()),
+                                })?;
+                            }
+                            failed_orders += phase_two_orders.len();
+                        } else {
+                            let expanding_batch = submit_order_batch(
+                                broker,
+                                mode,
+                                execution,
+                                &phase_two_orders,
+                                run_id,
+                                date,
+                                closes,
+                                journal,
+                                seq,
+                            )
+                            .await?;
+                            accepted_orders += expanding_batch.accepted_orders;
+                            failed_orders += expanding_batch.failed_orders;
+                            accepted_unfilled_orders += expanding_batch.accepted_unfilled_orders;
+                            let _ = expanding_batch.next_seq;
+                        }
                     }
                 }
             }
@@ -3430,9 +3497,11 @@ async fn process_session_close(
                         } else {
                             0.0
                         };
-                        let settlement_pending = accepted_unfilled_orders > 0
-                            && target_positions_len > 0
-                            && actual_shares.is_empty();
+                        let settlement_pending = (accepted_unfilled_orders > 0
+                            && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen))
+                            || (accepted_unfilled_orders > 0
+                                && target_positions_len > 0
+                                && actual_shares.is_empty());
                         actual_gross = Some(actual_gross_value);
                         divergence_pct = Some(divergence_pct_value);
                         current_positions_after = actual_shares.len();

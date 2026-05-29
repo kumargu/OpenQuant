@@ -5,12 +5,13 @@
 //! [`AlpacaOrder`] records shaped like a successful fill so the
 //! basket-live code path runs unchanged.
 //!
-//! Replay fill contract (frozen here so replay vs paper/live stays
-//! comparable across PRs):
+//! Replay fill contract:
 //!
-//!   - Fills happen at the *latest known close* for the symbol — i.e.,
-//!     the close from the bar that triggered the session-close cycle.
-//!     This matches "MOC executes at the official close" used by paper.
+//!   - Default behavior matches the current live basket runner path:
+//!     orders submitted after the close are accepted immediately, then
+//!     filled on the next session's first RTH bar open for that symbol.
+//!   - Tests can still opt into the older same-close immediate-fill
+//!     behavior explicitly.
 //!   - Optional one-sided slippage in basis points: buys fill higher,
 //!     sells fill lower. Default 0 bps.
 //!
@@ -44,12 +45,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
 
 use basket_engine::PortfolioConfig;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::alpaca::{AlpacaAccount, AlpacaOrder, ExecutionMode};
-use crate::broker::Broker;
+use crate::broker::{Broker, SessionCloseFillContract};
 
 /// Shared close-price snapshot. Written by
 /// [`crate::parquet_bar_source::ParquetBarSource`] as bars are emitted,
@@ -62,6 +63,8 @@ pub type SharedCloses = Arc<RwLock<HashMap<String, f64>>>;
 #[derive(Debug, Clone)]
 pub struct SimulatedBrokerConfig {
     pub slippage_bps: f64,
+    pub fill_contract: ReplayFillContract,
+    pub fill_delay_minutes_after_open: u32,
     /// Per-order probability of returning a "buying power exceeded" /
     /// "insufficient liquidity"-shaped error. 0.0 = never reject.
     pub reject_rate: f64,
@@ -82,12 +85,21 @@ impl Default for SimulatedBrokerConfig {
     fn default() -> Self {
         Self {
             slippage_bps: 0.0,
+            fill_contract: ReplayFillContract::NextSessionOpen,
+            fill_delay_minutes_after_open: 0,
             reject_rate: 0.0,
             partial_fill_rate: 0.0,
             stale_position_rate: 0.0,
             seed: 0,
         }
     }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayFillContract {
+    ImmediateClose,
+    NextSessionOpen,
 }
 
 /// In-process broker. Cheaply cloneable — internal state is `Arc`-shared
@@ -106,6 +118,8 @@ struct SimulatedState {
     config: SimulatedBrokerConfig,
     next_order_id: std::sync::atomic::AtomicU64,
     rng: Mutex<StdRng>,
+    pending_orders: Mutex<Vec<PendingOrder>>,
+    last_seen_trading_day: Mutex<Option<NaiveDate>>,
     /// Snapshot of positions returned by the previous `get_positions`
     /// call. Used by `stale_position_rate` to occasionally serve a
     /// one-step-old view, exercising the BROKER DIVERGENCE path.
@@ -113,6 +127,14 @@ struct SimulatedState {
     /// End-of-day equity time series. Populated by `record_eod`,
     /// consumed by the parity wrapper after replay.
     daily_equity: Mutex<BTreeMap<NaiveDate, f64>>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingOrder {
+    symbol: String,
+    side: String,
+    filled_qty: f64,
+    order_day: NaiveDate,
 }
 
 impl SimulatedBroker {
@@ -126,6 +148,7 @@ impl SimulatedBroker {
             closes,
             SimulatedBrokerConfig {
                 slippage_bps,
+                fill_contract: ReplayFillContract::ImmediateClose,
                 ..Default::default()
             },
         )
@@ -148,13 +171,28 @@ impl SimulatedBroker {
                 config,
                 next_order_id: std::sync::atomic::AtomicU64::new(1),
                 rng: Mutex::new(rng),
+                pending_orders: Mutex::new(Vec::new()),
+                last_seen_trading_day: Mutex::new(None),
                 prev_positions: Mutex::new(None),
                 daily_equity: Mutex::new(BTreeMap::new()),
             }),
         }
     }
 
-    fn fill_price(&self, symbol: &str, side: &str) -> Result<f64, String> {
+    fn slippage_adjusted_price(&self, raw_price: f64, side: &str) -> Result<f64, String> {
+        if !raw_price.is_finite() || raw_price <= 0.0 {
+            return Err(format!("non-finite price: {raw_price}"));
+        }
+        let bps = self.state.config.slippage_bps / 1e4;
+        let signed_bps = match side {
+            "buy" => bps,
+            "sell" => -bps,
+            other => return Err(format!("unknown side: {other}")),
+        };
+        Ok(raw_price * (1.0 + signed_bps))
+    }
+
+    fn submit_price(&self, symbol: &str, side: &str) -> Result<f64, String> {
         let close = self
             .state
             .closes
@@ -163,16 +201,7 @@ impl SimulatedBroker {
             .get(symbol)
             .copied()
             .ok_or_else(|| format!("no close price for {symbol} (bar source not seeded)"))?;
-        if !close.is_finite() || close <= 0.0 {
-            return Err(format!("non-finite close price for {symbol}: {close}"));
-        }
-        let bps = self.state.config.slippage_bps / 1e4;
-        let signed_bps = match side {
-            "buy" => bps,
-            "sell" => -bps,
-            other => return Err(format!("unknown side: {other}")),
-        };
-        Ok(close * (1.0 + signed_bps))
+        self.slippage_adjusted_price(close, side)
     }
 
     fn equity_unlocked(&self, positions: &HashMap<String, (f64, f64)>, cash: f64) -> f64 {
@@ -190,6 +219,88 @@ impl SimulatedBroker {
         let equity = self.equity_unlocked(&positions, cash);
         self.state.daily_equity.lock().unwrap().insert(date, equity);
     }
+
+    fn apply_fill(
+        &self,
+        symbol: &str,
+        side: &str,
+        filled_qty: f64,
+        price: f64,
+    ) -> Result<(), String> {
+        let signed_qty = match side {
+            "buy" => filled_qty,
+            "sell" => -filled_qty,
+            other => return Err(format!("unknown side: {other}")),
+        };
+
+        let mut positions = self.state.positions.write().unwrap();
+        let mut cash = self.state.cash.write().unwrap();
+        let entry = positions.entry(symbol.to_string()).or_insert((0.0, price));
+        let prev_qty = entry.0;
+        let prev_avg = entry.1;
+        let new_qty = prev_qty + signed_qty;
+        let new_avg = if new_qty.abs() > 1e-9 && prev_qty.signum() == signed_qty.signum() {
+            (prev_avg * prev_qty.abs() + price * filled_qty) / new_qty.abs()
+        } else {
+            price
+        };
+        entry.0 = new_qty;
+        entry.1 = new_avg;
+        if entry.0.abs() < 1e-9 {
+            positions.remove(symbol);
+        }
+        *cash -= signed_qty * price;
+        Ok(())
+    }
+
+    pub fn process_bar_open(
+        &self,
+        symbol: &str,
+        dt_open: DateTime<Utc>,
+        open: f64,
+    ) -> Result<(), String> {
+        if self.state.config.fill_contract != ReplayFillContract::NextSessionOpen {
+            return Ok(());
+        }
+        if !open.is_finite() || open <= 0.0 {
+            return Ok(());
+        }
+        let bar_day = crate::market_session::trading_day_utc(dt_open);
+        *self.state.last_seen_trading_day.lock().unwrap() = Some(bar_day);
+        let Some(minutes_from_open) = crate::market_session::minutes_from_open_utc(dt_open) else {
+            return Ok(());
+        };
+
+        let mut pending = self.state.pending_orders.lock().unwrap();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let mut ready = Vec::new();
+        let mut still_pending = Vec::with_capacity(pending.len());
+        for order in pending.drain(..) {
+            if order.symbol == symbol
+                && bar_day > order.order_day
+                && minutes_from_open >= self.state.config.fill_delay_minutes_after_open
+            {
+                ready.push(order);
+            } else {
+                still_pending.push(order);
+            }
+        }
+        *pending = still_pending;
+        drop(pending);
+
+        for order in ready {
+            let price = self.slippage_adjusted_price(open, order.side.as_str())?;
+            self.apply_fill(
+                order.symbol.as_str(),
+                order.side.as_str(),
+                order.filled_qty,
+                price,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 impl Broker for SimulatedBroker {
@@ -203,7 +314,7 @@ impl Broker for SimulatedBroker {
         if !qty.is_finite() || qty <= 0.0 {
             return Err(format!("non-positive qty for {symbol}: {qty}"));
         }
-        let price = self.fill_price(symbol, side)?;
+        let submit_price = self.submit_price(symbol, side)?;
         let signed_qty_full = match side {
             "buy" => qty,
             "sell" => -qty,
@@ -238,10 +349,9 @@ impl Broker for SimulatedBroker {
 
         // Effective filled qty (may be smaller than requested).
         let filled_qty = partial_qty_opt.unwrap_or(qty);
-        let signed_filled_qty = signed_qty_full.signum() * filled_qty;
 
-        let mut positions = self.state.positions.write().unwrap();
-        let mut cash = self.state.cash.write().unwrap();
+        let positions = self.state.positions.write().unwrap();
+        let cash = self.state.cash.read().unwrap();
 
         // Buying-power check (per-symbol projection from the closes
         // map; see #302 review). Uses the FULL requested qty (not
@@ -262,7 +372,7 @@ impl Broker for SimulatedBroker {
                 .unwrap_or_else(|| positions.get(sym).map(|(_, a)| *a).unwrap_or(0.0));
             current_gross += q.abs() * current_price;
             if sym == symbol {
-                projected_gross += new_qty_signed_full.abs() * price;
+                projected_gross += new_qty_signed_full.abs() * submit_price;
                 traded_symbol_seen = true;
             } else if let Some(p) = closes_snapshot.get(sym) {
                 projected_gross += q.abs() * p;
@@ -272,7 +382,7 @@ impl Broker for SimulatedBroker {
             }
         }
         if !traded_symbol_seen {
-            projected_gross += new_qty_signed_full.abs() * price;
+            projected_gross += new_qty_signed_full.abs() * submit_price;
         }
         drop(closes_snapshot);
         let reduces_gross = projected_gross <= current_gross + 1e-9;
@@ -281,39 +391,49 @@ impl Broker for SimulatedBroker {
                 "buying power exceeded: gross {projected_gross:.2} > buying_power {buying_power:.2}"
             ));
         }
+        drop(cash);
+        drop(positions);
 
-        // Apply the fill (partial or full).
-        let entry = positions.entry(symbol.to_string()).or_insert((0.0, price));
-        let prev_qty = entry.0;
-        let prev_avg = entry.1;
-        let new_qty = prev_qty + signed_filled_qty;
-        let new_avg = if new_qty.abs() > 1e-9 && prev_qty.signum() == signed_filled_qty.signum() {
-            (prev_avg * prev_qty.abs() + price * filled_qty) / new_qty.abs()
-        } else {
-            price
+        let status = match self.state.config.fill_contract {
+            ReplayFillContract::ImmediateClose => {
+                self.apply_fill(symbol, side, filled_qty, submit_price)?;
+                if partial_qty_opt.is_some() {
+                    "partially_filled"
+                } else {
+                    "filled"
+                }
+            }
+            ReplayFillContract::NextSessionOpen => {
+                let order_day = self
+                    .state
+                    .last_seen_trading_day
+                    .lock()
+                    .unwrap()
+                    .ok_or_else(|| "missing replay trading day for deferred fill".to_string())?;
+                self.state
+                    .pending_orders
+                    .lock()
+                    .unwrap()
+                    .push(PendingOrder {
+                        symbol: symbol.to_string(),
+                        side: side.to_string(),
+                        filled_qty,
+                        order_day,
+                    });
+                "accepted"
+            }
         };
-        entry.0 = new_qty;
-        entry.1 = new_avg;
-        if entry.0.abs() < 1e-9 {
-            positions.remove(symbol);
-        }
-        *cash -= signed_filled_qty * price;
 
         let id = self
             .state
             .next_order_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let status = if partial_qty_opt.is_some() {
-            "partially_filled"
-        } else {
-            "filled"
-        };
         Ok(AlpacaOrder {
             id: format!("sim-{id:08}"),
             status: status.to_string(),
             symbol: symbol.to_string(),
             side: side.to_string(),
-            qty: format!("{filled_qty}"),
+            qty: format!("{qty}"),
         })
     }
 
@@ -372,6 +492,13 @@ impl Broker for SimulatedBroker {
     fn reconciliation_delay_secs(&self) -> u64 {
         0
     }
+
+    fn session_close_fill_contract(&self) -> SessionCloseFillContract {
+        match self.state.config.fill_contract {
+            ReplayFillContract::ImmediateClose => SessionCloseFillContract::Immediate,
+            ReplayFillContract::NextSessionOpen => SessionCloseFillContract::NextSessionOpen,
+        }
+    }
 }
 
 impl SimulatedBroker {
@@ -414,6 +541,7 @@ pub struct ReplaySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     fn shared_closes(pairs: &[(&str, f64)]) -> SharedCloses {
         Arc::new(RwLock::new(
@@ -595,6 +723,101 @@ mod tests {
         assert!(snap.positions.is_empty());
     }
 
+    #[tokio::test]
+    async fn next_session_open_contract_queues_then_fills_on_open() {
+        let closes = shared_closes(&[("AMD", 100.0)]);
+        let broker = SimulatedBroker::with_config(
+            &portfolio_config(),
+            closes,
+            SimulatedBrokerConfig {
+                fill_contract: ReplayFillContract::NextSessionOpen,
+                ..Default::default()
+            },
+        );
+        broker
+            .process_bar_open(
+                "AMD",
+                Utc.with_ymd_and_hms(2026, 1, 2, 14, 30, 0).unwrap(),
+                100.0,
+            )
+            .unwrap();
+        let order = broker
+            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+        assert_eq!(order.status, "accepted");
+        assert!(broker
+            .get_positions(ExecutionMode::Paper)
+            .await
+            .unwrap()
+            .is_empty());
+
+        broker
+            .process_bar_open(
+                "AMD",
+                Utc.with_ymd_and_hms(2026, 1, 5, 14, 30, 0).unwrap(),
+                102.0,
+            )
+            .unwrap();
+
+        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        assert_eq!(
+            positions.get("AMD").map(|(q, p)| (*q, *p)),
+            Some((10.0, 102.0))
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_next_session_fill_waits_until_target_minute() {
+        let closes = shared_closes(&[("AMD", 100.0)]);
+        let broker = SimulatedBroker::with_config(
+            &portfolio_config(),
+            closes,
+            SimulatedBrokerConfig {
+                fill_contract: ReplayFillContract::NextSessionOpen,
+                fill_delay_minutes_after_open: 60,
+                ..Default::default()
+            },
+        );
+        broker
+            .process_bar_open(
+                "AMD",
+                Utc.with_ymd_and_hms(2026, 1, 2, 14, 30, 0).unwrap(),
+                100.0,
+            )
+            .unwrap();
+        broker
+            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .await
+            .unwrap();
+
+        broker
+            .process_bar_open(
+                "AMD",
+                Utc.with_ymd_and_hms(2026, 1, 5, 14, 30, 0).unwrap(),
+                101.0,
+            )
+            .unwrap();
+        assert!(broker
+            .get_positions(ExecutionMode::Paper)
+            .await
+            .unwrap()
+            .is_empty());
+
+        broker
+            .process_bar_open(
+                "AMD",
+                Utc.with_ymd_and_hms(2026, 1, 5, 15, 30, 0).unwrap(),
+                103.0,
+            )
+            .unwrap();
+        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        assert_eq!(
+            positions.get("AMD").map(|(q, p)| (*q, *p)),
+            Some((10.0, 103.0))
+        );
+    }
+
     // ── failure injection (#294c-3) ───────────────────────────────
 
     #[tokio::test]
@@ -604,6 +827,7 @@ mod tests {
             &portfolio_config(),
             closes,
             SimulatedBrokerConfig {
+                fill_contract: ReplayFillContract::ImmediateClose,
                 reject_rate: 1.0, // always reject
                 seed: 42,
                 ..Default::default()
@@ -628,6 +852,7 @@ mod tests {
             &portfolio_config(),
             closes,
             SimulatedBrokerConfig {
+                fill_contract: ReplayFillContract::ImmediateClose,
                 partial_fill_rate: 1.0, // always partial
                 seed: 7,
                 ..Default::default()
@@ -656,6 +881,7 @@ mod tests {
             &portfolio_config(),
             closes,
             SimulatedBrokerConfig {
+                fill_contract: ReplayFillContract::ImmediateClose,
                 stale_position_rate: 1.0, // always stale (after the priming call)
                 seed: 1,
                 ..Default::default()
