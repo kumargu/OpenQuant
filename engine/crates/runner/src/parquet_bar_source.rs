@@ -63,6 +63,7 @@ pub struct ParquetBarSource {
     bars_dir: PathBuf,
     start: NaiveDate,
     end: NaiveDate,
+    broker: SimulatedBroker,
     closes: SharedCloses,
     channels: StdRwLock<Option<ReplayChannels>>,
 }
@@ -85,11 +86,16 @@ impl BarSource for ParquetBarSource {
         let bars_dir = self.bars_dir.clone();
         let start = self.start;
         let end = self.end;
+        let broker = self.broker.clone();
         let closes = self.closes.clone();
         let symbols: Vec<String> = symbols.to_vec();
 
         tokio::spawn(async move {
-            if let Err(e) = emit_loop(&bars_dir, start, end, &symbols, tx, channels, closes).await {
+            if let Err(e) = emit_loop(
+                &bars_dir, start, end, &symbols, tx, channels, broker, closes,
+            )
+            .await
+            {
                 warn!(error = %e, "parquet replay emitter terminated with error");
             }
         });
@@ -120,6 +126,7 @@ pub fn new_replay_components(
         bars_dir,
         start,
         end,
+        broker: broker.clone(),
         closes,
         channels: StdRwLock::new(Some(channels)),
     };
@@ -191,6 +198,7 @@ async fn emit_loop(
     symbols: &[String],
     bar_tx: mpsc::Sender<StreamBar>,
     mut channels: ReplayChannels,
+    broker: SimulatedBroker,
     closes: SharedCloses,
 ) -> Result<(), String> {
     info!(
@@ -289,6 +297,10 @@ async fn emit_loop(
             }
         }
         current_date = Some(bar_date);
+
+        // Settle any queued after-close orders at the next session's
+        // first open before we overwrite the close snapshot.
+        broker.process_bar_open(sym.as_str(), dt_open, bar.open)?;
 
         // Update shared closes BEFORE we send the bar, so SimulatedBroker
         // sees this price if a place_order races with bar-emit. (In
