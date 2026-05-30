@@ -629,7 +629,7 @@ struct BasketRuntimeOverrides<'a> {
 
 struct ResolvedBasketRuntime {
     portfolio_config: basket_engine::PortfolioConfig,
-    share_floor_config: basket_live::ShareFloorConfig,
+    supported_reallocation_band_config: basket_live::SupportedReallocationBandConfig,
     leadership_overlay: Option<basket_live::LeadershipOverlayConfig>,
     overlay_picker: basket_overlay_picker::BasketOverlayPickerKind,
     rule_v1_config: Option<basket_overlay_picker::RuleV1OverlayPickerConfig>,
@@ -711,12 +711,19 @@ fn resolve_basket_runtime(
             .map(Into::into)
             .unwrap_or_default(),
     };
-    let share_floor_config = basket_live::ShareFloorConfig {
-        preserve_near_unit_shares: universe.runner.portfolio.preserve_near_unit_shares,
-        min_share_preservation_threshold: universe
+    let supported_reallocation_band_config = basket_live::SupportedReallocationBandConfig {
+        enabled: universe
             .runner
             .portfolio
-            .min_share_preservation_threshold,
+            .supported_reallocation_band_enabled,
+        max_notional: universe
+            .runner
+            .portfolio
+            .supported_reallocation_band_max_notional,
+        max_shares: universe
+            .runner
+            .portfolio
+            .supported_reallocation_band_max_shares,
     };
 
     let has_overlay_override = !overrides.leadership_overlay_sectors.is_empty()
@@ -827,7 +834,7 @@ fn resolve_basket_runtime(
 
     ResolvedBasketRuntime {
         portfolio_config,
-        share_floor_config,
+        supported_reallocation_band_config,
         leadership_overlay,
         overlay_picker,
         rule_v1_config,
@@ -1446,7 +1453,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
-            share_floor_config: runtime.share_floor_config,
+            supported_reallocation_band_config: runtime.supported_reallocation_band_config,
         },
     )
     .await
@@ -2345,7 +2352,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             overlay_picker: runtime.overlay_picker,
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
-            share_floor_config: runtime.share_floor_config,
+            supported_reallocation_band_config: runtime.supported_reallocation_band_config,
         },
     )
     .await;

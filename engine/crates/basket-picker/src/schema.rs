@@ -42,15 +42,25 @@ impl BasketCandidate {
 
     /// Compute a stable 8-char hex hash of the sorted members.
     fn members_hash(&self) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let mut sorted_members = self.members.clone();
         sorted_members.sort();
 
-        let mut hasher = DefaultHasher::new();
-        sorted_members.hash(&mut hasher);
-        let hash = hasher.finish();
+        // FNV-1a is simple, deterministic, and independent of Rust's
+        // randomized `DefaultHasher`, which is not a stable persistence contract.
+        const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x100000001b3;
+
+        let mut hash = FNV_OFFSET_BASIS;
+        for member in sorted_members {
+            for byte in member.as_bytes() {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(FNV_PRIME);
+            }
+            // Separate member boundaries so concatenation remains unambiguous.
+            hash ^= 0x1f;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+
         format!("{:08x}", hash as u32)
     }
 }
@@ -99,5 +109,32 @@ impl BasketFit {
             valid: false,
             reject_reason: Some(reason.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate_with_members(members: &[&str]) -> BasketCandidate {
+        BasketCandidate {
+            target: "AMD".to_string(),
+            members: members.iter().map(|member| member.to_string()).collect(),
+            sector: "chips".to_string(),
+            fit_date: NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+        }
+    }
+
+    #[test]
+    fn test_members_hash_is_order_independent() {
+        let a = candidate_with_members(&["NVDA", "INTC"]);
+        let b = candidate_with_members(&["INTC", "NVDA"]);
+        assert_eq!(a.id(), b.id());
+    }
+
+    #[test]
+    fn test_members_hash_is_stable_for_known_members() {
+        let candidate = candidate_with_members(&["NVDA", "INTC"]);
+        assert_eq!(candidate.id(), "chips:AMD:2026-04-20:398f398c");
     }
 }
