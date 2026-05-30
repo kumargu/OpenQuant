@@ -17,6 +17,17 @@ For the AI buildout regime, the default evaluation pair is:
 - `buildout_core`
 - `buildout_overlay`
 
+Current causal 2026 YTD references after the chips detector-only change
+and next-session-open replay contract:
+
+- `buildout_core`: `+27.88%`, Sharpe `3.00`, max DD `7.90%`
+- `buildout_overlay`: `+53.14%`, Sharpe `4.16`, max DD `8.34%`
+
+Source artifacts:
+
+- [`/Users/gulshan/OpenQuant/outputs/buildout_core_recovery/post_fix_audit/core/report.tsv`](/Users/gulshan/OpenQuant/outputs/buildout_core_recovery/post_fix_audit/core/report.tsv)
+- [`/Users/gulshan/OpenQuant/outputs/buildout_core_recovery/post_fix_audit/overlay/report.tsv`](/Users/gulshan/OpenQuant/outputs/buildout_core_recovery/post_fix_audit/overlay/report.tsv)
+
 Definitions:
 
 - `buildout_core` = `config/basket_universe_buildout.toml` with leadership overlay disabled

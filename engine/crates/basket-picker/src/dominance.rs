@@ -1,5 +1,7 @@
 //! Component-dominance diagnostics for basket spreads.
 
+use crate::schema::DominanceContribution;
+
 /// Maximum absolute component contribution share to spread variance.
 ///
 /// Spread weights are `[+1, -1/n, -1/n, ...]` on log-prices. We compute the
@@ -11,6 +13,22 @@
 /// The returned score is `max_i |contrib_i|`. Values near 1 mean a single name
 /// effectively dominates the spread's risk budget.
 pub fn max_component_dominance(target: &[f64], peers: &[&[f64]]) -> Option<f64> {
+    let peer_symbols = vec![String::new(); peers.len()];
+    component_dominance_contributions("target", &peer_symbols, target, peers).map(|contribs| {
+        contribs
+            .iter()
+            .map(|entry| entry.contribution.abs())
+            .fold(0.0_f64, f64::max)
+    })
+}
+
+/// Per-component weighted variance contributions for a basket spread.
+pub fn component_dominance_contributions(
+    target_symbol: &str,
+    peer_symbols: &[String],
+    target: &[f64],
+    peers: &[&[f64]],
+) -> Option<Vec<DominanceContribution>> {
     if peers.is_empty() {
         return None;
     }
@@ -71,13 +89,24 @@ pub fn max_component_dominance(target: &[f64], peers: &[&[f64]]) -> Option<f64> 
         return None;
     }
 
-    let max_abs = w
-        .iter()
-        .zip(sigma_w.iter())
-        .map(|(wi, swi)| (wi * swi / total_var).abs())
-        .fold(0.0_f64, f64::max);
+    let mut symbols = Vec::with_capacity(m);
+    symbols.push(target_symbol.to_string());
+    symbols.extend(peer_symbols.iter().cloned());
+    if symbols.len() != m {
+        return None;
+    }
 
-    Some(max_abs)
+    Some(
+        symbols
+            .into_iter()
+            .zip(w.into_iter().zip(sigma_w))
+            .map(|(symbol, (weight, sigma_w_i))| DominanceContribution {
+                symbol,
+                weight,
+                contribution: weight * sigma_w_i / total_var,
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

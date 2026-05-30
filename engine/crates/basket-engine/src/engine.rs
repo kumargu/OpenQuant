@@ -28,6 +28,13 @@ pub struct BasketParams {
     pub ou: OuFit,
     /// Bertram threshold k (already clipped).
     pub threshold_k: f64,
+    /// Absolute variance contribution share of the target inside the fitted spread.
+    #[serde(default = "default_target_centrality")]
+    pub target_centrality_abs: f64,
+}
+
+fn default_target_centrality() -> f64 {
+    1.0
 }
 
 impl BasketParams {
@@ -46,6 +53,12 @@ impl BasketParams {
             peers: fit.candidate.members.clone(),
             ou: ou.clone(),
             threshold_k: fit.threshold_k,
+            target_centrality_abs: fit
+                .dominance_contributions
+                .iter()
+                .find(|entry| entry.symbol == fit.candidate.target)
+                .map(|entry| entry.contribution.abs())
+                .unwrap_or(1.0),
         })
     }
 }

@@ -33,7 +33,10 @@ dominance_max = 0.60
 
 [sectors.chips]
 members = ["NVDA", "AVGO", "AMD", "INTC", "MU", "ADI"]
-traded_targets = ["AMD", "INTC", "ADI", "MU", "NVDA"]
+# Keep chips as a detector sleeve for overlay logic, but disable basket-only
+# traded targets until the spread construction is reworked under realistic
+# next-open execution.
+traded_targets = []
 
 [sectors.hc_providers]
 members = ["UNH", "CI", "HUM", "CNC", "ELV", "MOH"]
