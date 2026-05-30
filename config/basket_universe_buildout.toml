@@ -98,9 +98,6 @@ decision_offset_minutes_before_close = 0
 [runner.portfolio]
 capital = 10000
 n_active_baskets = 5
-supported_reallocation_band_enabled = true
-supported_reallocation_band_max_notional = 1000
-supported_reallocation_band_max_shares = 1
 
 [runner.leadership_overlay]
 # Adaptive overlay uses the existing `rule_v1` picker under the hood.

@@ -124,7 +124,6 @@ pub struct BasketRunOptions {
     pub rule_v1_config: Option<crate::basket_overlay_picker::RuleV1OverlayPickerConfig>,
     pub gate_policy: GatePolicyKind,
     pub share_floor_config: ShareFloorConfig,
-    pub supported_reallocation_band_config: SupportedReallocationBandConfig,
 }
 
 impl Default for BasketRunOptions {
@@ -137,7 +136,6 @@ impl Default for BasketRunOptions {
             rule_v1_config: None,
             gate_policy: GatePolicyKind::BertramFrozen,
             share_floor_config: ShareFloorConfig::default(),
-            supported_reallocation_band_config: SupportedReallocationBandConfig::default(),
         }
     }
 }
@@ -196,23 +194,6 @@ struct SymbolSupportSnapshot {
     same_side_support_count: usize,
     same_side_signal_abs_sum: f64,
     trade_class: SymbolTradeClass,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SupportedReallocationBandConfig {
-    pub enabled: bool,
-    pub max_notional: f64,
-    pub max_shares: f64,
-}
-
-impl Default for SupportedReallocationBandConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            max_notional: 1_000.0,
-            max_shares: 1.0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1493,64 +1474,6 @@ fn format_symbol_support_snapshot(snapshot: &SymbolSupportSnapshot) -> String {
     )
 }
 
-fn format_trade_class_counts(snapshots: &[SymbolSupportSnapshot]) -> Vec<String> {
-    let classes = [
-        SymbolTradeClass::Flat,
-        SymbolTradeClass::Aligned,
-        SymbolTradeClass::UnsupportedExit,
-        SymbolTradeClass::SupportedExit,
-        SymbolTradeClass::UnsupportedTrim,
-        SymbolTradeClass::SupportedTrim,
-        SymbolTradeClass::SameSideAdd,
-        SymbolTradeClass::NewEntry,
-        SymbolTradeClass::SignFlip,
-    ];
-    classes
-        .iter()
-        .map(|class| {
-            let count = snapshots
-                .iter()
-                .filter(|snapshot| snapshot.trade_class == *class)
-                .count();
-            format!("{}={count}", class.as_str())
-        })
-        .collect()
-}
-
-fn should_preserve_supported_reallocation(
-    snapshot: &SymbolSupportSnapshot,
-    config: SupportedReallocationBandConfig,
-) -> bool {
-    if !config.enabled {
-        return false;
-    }
-    matches!(
-        snapshot.trade_class,
-        SymbolTradeClass::SupportedTrim | SymbolTradeClass::SameSideAdd
-    ) && snapshot.same_side_support_count > 0
-        && snapshot.delta_shares.abs() <= config.max_shares
-        && snapshot.delta_notional <= config.max_notional
-}
-
-fn apply_supported_reallocation_band(
-    target_shares: &mut HashMap<String, f64>,
-    snapshots: &[SymbolSupportSnapshot],
-    config: SupportedReallocationBandConfig,
-) -> Vec<SymbolSupportSnapshot> {
-    let mut preserved = Vec::new();
-    for snapshot in snapshots {
-        if !should_preserve_supported_reallocation(snapshot, config) {
-            continue;
-        }
-        if snapshot.current_shares.abs() < 0.5 {
-            continue;
-        }
-        target_shares.insert(snapshot.symbol.clone(), snapshot.current_shares);
-        preserved.push(snapshot.clone());
-    }
-    preserved
-}
-
 #[derive(Debug, Clone, Default)]
 struct StagedOrders {
     reducing: Vec<OrderIntent>,
@@ -2054,7 +1977,6 @@ pub async fn run_basket_live(
             &mut overlay_picker,
             options.leadership_overlay.as_ref(),
             options.share_floor_config,
-            options.supported_reallocation_band_config,
         )
         .await?;
         overlay_picker.save_state(&picker_state_path)?;
@@ -2316,7 +2238,6 @@ pub async fn run_basket_live(
                         &mut overlay_picker,
                         options.leadership_overlay.as_ref(),
                         options.share_floor_config,
-                        options.supported_reallocation_band_config,
                     )
                     .await?;
                     overlay_picker.save_state(&picker_state_path)?;
@@ -2681,7 +2602,6 @@ async fn process_session_close(
     overlay_picker: &mut impl BasketOverlayPicker,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
     share_floor_config: ShareFloorConfig,
-    supported_reallocation_band_config: SupportedReallocationBandConfig,
 ) -> Result<(), String> {
     debug_assert!(
         portfolio_config.validate().is_ok(),
@@ -2916,62 +2836,7 @@ async fn process_session_close(
             "preserved near-unit target shares during share conversion"
         );
     }
-    let mut target_shares = share_conversion.shares;
-    let pre_band_support_snapshots = build_symbol_support_snapshots(
-        engine,
-        &plan.selected_baskets,
-        current_shares,
-        &target_shares,
-        closes,
-    );
-    let preserved_reallocations = apply_supported_reallocation_band(
-        &mut target_shares,
-        &pre_band_support_snapshots,
-        supported_reallocation_band_config,
-    );
-    if !preserved_reallocations.is_empty() {
-        info!(
-            date = %date,
-            preserved_reallocations = preserved_reallocations.len(),
-            max_notional = %format!("{:.0}", supported_reallocation_band_config.max_notional),
-            max_shares = %format!("{:.1}", supported_reallocation_band_config.max_shares),
-            preserved_sample = ?preserved_reallocations
-                .iter()
-                .take(6)
-                .map(format_symbol_support_snapshot)
-                .collect::<Vec<_>>(),
-            "supported reallocation band preserved incumbent shares"
-        );
-    }
-    if supported_reallocation_band_config.enabled {
-        let eligible_supported_reallocations = pre_band_support_snapshots
-            .iter()
-            .filter(|snapshot| {
-                should_preserve_supported_reallocation(snapshot, supported_reallocation_band_config)
-            })
-            .count();
-        info!(
-            date = %date,
-            enabled = supported_reallocation_band_config.enabled,
-            trade_class_counts = ?format_trade_class_counts(&pre_band_support_snapshots),
-            eligible_supported_reallocations,
-            preserved_reallocations = preserved_reallocations.len(),
-            max_notional = %format!("{:.0}", supported_reallocation_band_config.max_notional),
-            max_shares = %format!("{:.1}", supported_reallocation_band_config.max_shares),
-            "support-aware portfolio arbitration summary"
-        );
-        if !preserved_reallocations.is_empty() {
-            debug!(
-                date = %date,
-                preserved_sample = ?preserved_reallocations
-                    .iter()
-                    .take(10)
-                    .map(format_symbol_support_snapshot)
-                    .collect::<Vec<_>>(),
-                "support-aware portfolio arbitration preserved trades"
-            );
-        }
-    }
+    let target_shares = share_conversion.shares;
     let executable_target_notionals = notionals_from_target_shares(&target_shares, closes);
 
     // Summary of the notional plan before we diff — this is where yesterday's
@@ -4096,123 +3961,6 @@ mod tests {
             SymbolTradeClass::SameSideAdd
         );
         assert_eq!(by_symbol.get("NVDA").unwrap().same_side_support_count, 1);
-    }
-
-    #[test]
-    fn test_supported_reallocation_band_preserves_small_supported_trim_and_add() {
-        let snapshots = vec![
-            SymbolSupportSnapshot {
-                symbol: "NVDA".to_string(),
-                current_shares: -4.0,
-                target_shares: -3.0,
-                delta_shares: 1.0,
-                delta_notional: 600.0,
-                long_support_count: 0,
-                short_support_count: 1,
-                target_role_support_count: 1,
-                peer_role_support_count: 0,
-                same_side_support_count: 1,
-                same_side_signal_abs_sum: 2.0,
-                trade_class: SymbolTradeClass::SupportedTrim,
-            },
-            SymbolSupportSnapshot {
-                symbol: "AMD".to_string(),
-                current_shares: -2.0,
-                target_shares: -3.0,
-                delta_shares: -1.0,
-                delta_notional: 700.0,
-                long_support_count: 0,
-                short_support_count: 1,
-                target_role_support_count: 1,
-                peer_role_support_count: 0,
-                same_side_support_count: 1,
-                same_side_signal_abs_sum: 1.5,
-                trade_class: SymbolTradeClass::SameSideAdd,
-            },
-        ];
-        let mut target_shares =
-            HashMap::from([("NVDA".to_string(), -3.0), ("AMD".to_string(), -3.0)]);
-
-        let preserved = apply_supported_reallocation_band(
-            &mut target_shares,
-            &snapshots,
-            SupportedReallocationBandConfig {
-                enabled: true,
-                max_notional: 1_000.0,
-                max_shares: 1.0,
-            },
-        );
-
-        assert_eq!(preserved.len(), 2);
-        assert_eq!(target_shares.get("NVDA").copied(), Some(-4.0));
-        assert_eq!(target_shares.get("AMD").copied(), Some(-2.0));
-    }
-
-    #[test]
-    fn test_supported_reallocation_band_skips_exits_flips_and_large_changes() {
-        let snapshots = vec![
-            SymbolSupportSnapshot {
-                symbol: "MU".to_string(),
-                current_shares: 1.0,
-                target_shares: 0.0,
-                delta_shares: -1.0,
-                delta_notional: 900.0,
-                long_support_count: 1,
-                short_support_count: 0,
-                target_role_support_count: 0,
-                peer_role_support_count: 1,
-                same_side_support_count: 1,
-                same_side_signal_abs_sum: 2.2,
-                trade_class: SymbolTradeClass::SupportedExit,
-            },
-            SymbolSupportSnapshot {
-                symbol: "AAPL".to_string(),
-                current_shares: -10.0,
-                target_shares: 2.0,
-                delta_shares: 12.0,
-                delta_notional: 3_700.0,
-                long_support_count: 1,
-                short_support_count: 1,
-                target_role_support_count: 1,
-                peer_role_support_count: 1,
-                same_side_support_count: 1,
-                same_side_signal_abs_sum: 11.6,
-                trade_class: SymbolTradeClass::SignFlip,
-            },
-            SymbolSupportSnapshot {
-                symbol: "MSFT".to_string(),
-                current_shares: 3.0,
-                target_shares: 1.0,
-                delta_shares: -2.0,
-                delta_notional: 832.0,
-                long_support_count: 1,
-                short_support_count: 0,
-                target_role_support_count: 0,
-                peer_role_support_count: 1,
-                same_side_support_count: 1,
-                same_side_signal_abs_sum: 11.6,
-                trade_class: SymbolTradeClass::SupportedTrim,
-            },
-        ];
-        let original_target_shares = HashMap::from([
-            ("MU".to_string(), 0.0),
-            ("AAPL".to_string(), 2.0),
-            ("MSFT".to_string(), 1.0),
-        ]);
-        let mut target_shares = original_target_shares.clone();
-
-        let preserved = apply_supported_reallocation_band(
-            &mut target_shares,
-            &snapshots,
-            SupportedReallocationBandConfig {
-                enabled: true,
-                max_notional: 1_000.0,
-                max_shares: 1.0,
-            },
-        );
-
-        assert!(preserved.is_empty());
-        assert_eq!(target_shares, original_target_shares);
     }
 
     #[test]
