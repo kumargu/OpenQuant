@@ -11,6 +11,7 @@ pub enum AdmissionScoreKind {
     #[default]
     SignalScore,
     RawZScore,
+    SignalScoreTargetCentrality,
 }
 
 /// Portfolio configuration.
@@ -131,7 +132,7 @@ pub fn plan_portfolio(engine: &BasketEngine, config: &PortfolioConfig) -> Portfo
     let mut symbol_notionals: HashMap<String, f64> = HashMap::new();
     let mut active: Vec<(String, f64)> = Vec::new();
 
-    for (basket_id, _params) in engine.iter_params() {
+    for (basket_id, params) in engine.iter_params() {
         let state = match engine.get_state(basket_id) {
             Some(s) => s,
             None => continue,
@@ -145,6 +146,10 @@ pub fn plan_portfolio(engine: &BasketEngine, config: &PortfolioConfig) -> Portfo
                 state.last_signal_score.or(state.last_z).unwrap_or(0.0)
             }
             AdmissionScoreKind::RawZScore => state.last_z.unwrap_or(0.0),
+            AdmissionScoreKind::SignalScoreTargetCentrality => {
+                state.last_signal_score.or(state.last_z).unwrap_or(0.0)
+                    * params.target_centrality_abs
+            }
         }
         .abs();
         active.push((basket_id.clone(), rank_score));
@@ -314,6 +319,7 @@ mod tests {
                 half_life_days: 13.51,
             },
             threshold_k: 1.25,
+            target_centrality_abs: 1.0,
         }
     }
 

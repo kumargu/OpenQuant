@@ -234,14 +234,78 @@ Do not:
 
 ## Next Concrete Task
 
-After the chips detector-only fix, audit replay-start fit breadth:
+After the chips detector-only fix, finish the generic lever sweep and then move
+to a second sleeve using the same reasoning discipline:
 
-- explain why the replay-start state still contains only a small fitted basket set
-- separate:
-  - targets removed intentionally
-  - targets invalid because of dominance gate
-  - targets invalid because OU fit itself failed
-- decide whether the next improvement should come from:
-  - fit/admission reform
-  - sleeve redesign in a second sector
-  - or leaving the narrower fitted universe alone
+- preserve whether dominance gate, basket cap, admission ranking, or gate
+  policy are still real improvement levers
+- if those levers are locally bounded, stop tuning them
+- rank remaining sleeves by:
+  - total sleeve P&L
+  - target-side vs peer-side contribution
+  - target concentration
+  - target validity breadth
+- then deep-dive the next weakest sleeves in order:
+  1. `gas_infra`
+  2. `ai_power`
+
+Decision rule:
+
+- only change a sleeve if the evidence shows the traded **spread expression**
+  is the problem, not just the outright theme
+
+Latest checkpoint:
+
+- `gas_infra` and `ai_power` were tested mathematically with sleeve-specific
+  replay variants.
+- Current conclusion:
+  - neither sleeve gives a clean “wrong stock, delete it” result
+  - `gas_infra` has bad selected targets (`KMI`, `WMB`) but removing the sleeve
+    still hurts the total core book
+  - `ai_power` has bad direct `NEE` target P&L, but removing `NEE` also hurts
+    the total core book
+- Therefore the next step is **within-sleeve fit-validity and target-selection
+  diagnosis**, not hand-pruning sector memberships.
+- New generic hypothesis from exact replay-start dominance decomposition:
+  - some accepted baskets are peer-dominated even though they pass the current
+    max-component dominance gate
+  - next mathematical test: target-centrality diagnostic / threshold on valid
+    baskets, evaluated on the full capped core replay
+- Result of that test:
+  - blanket target-centrality hard gates underperform baseline
+  - blanket target-centrality admission weighting also underperforms baseline
+  - keep target centrality as a diagnostic, not a standalone trading rule
+- New replay-contract finding:
+  - replay does not depend on the checked-in adjacent `.fits.json`
+  - the replay path builds a causal fit in memory from data strictly before
+    `--start`
+  - therefore fit-validity reasoning for `buildout_core` must stay anchored to
+    the replay-start in-memory fit path, not to the live paper fit artifact in
+    `config/`
+- New bounded overlap finding:
+  - duplicate-target overlap is not the next fix by itself
+  - removing utility-side `NEE` drops core to about `+12.26%`
+  - removing both `NEE` target expressions drops core further to about `+12.02%`
+- NEE case-study finding:
+  - `utilities:NEE` appears mathematically legitimate at the basket level even
+    though `NEE` itself has bad direct target P&L
+  - `ai_power:NEE` looks weaker as a standalone sleeve and may be earning its
+    keep mostly through cap-allocation / displacement effects
+  - next NEE-specific test should be marginal replacement value against the
+    excluded basket it displaces on selected days
+- Extended NEE-like candidate tests:
+  - `energy:CVX` is a strong NEE-like target
+    - removing it drops core from `+27.88%` to about `+17.26%`
+    - main replacements are weaker gas-infra and marginal utility baskets
+  - `hc_providers:UNH` is a weaker NEE-like target
+    - removing it drops core from `+27.88%` to about `+25.93%`
+  - therefore the generic next step is no longer single-name removal
+  - it is a **marginal replacement value** framework for cap ranking
+- Next missing-axis hypothesis:
+  - after chips, target centrality, frozen-fit timing, and duplicate-target
+    overlap were bounded, the most likely remaining missing factor is **cap
+    selection quality**
+  - the next work should measure whether 10-14 admitted baskets are being
+    compressed into the 5-slot cap with too much redundancy, or whether the
+    excluded baskets have better realized basket economics than the selected
+    set

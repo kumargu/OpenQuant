@@ -500,6 +500,11 @@ struct BasketFitArgs {
     #[arg(long)]
     bars_dir: Option<PathBuf>,
 
+    /// Build the fit artifact using data strictly before this trading day
+    /// (YYYY-MM-DD). Useful to reproduce replay-start fit validity exactly.
+    #[arg(long)]
+    as_of: Option<String>,
+
     /// Output fit artifact path. Defaults to `<universe>.fits.json`.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -528,6 +533,7 @@ enum BasketSignalPolicyArg {
 enum BasketAdmissionScoreArg {
     SignalScore,
     RawZScore,
+    SignalScoreTargetCentrality,
 }
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
@@ -550,6 +556,9 @@ impl From<BasketAdmissionScoreArg> for AdmissionScoreKind {
         match value {
             BasketAdmissionScoreArg::SignalScore => AdmissionScoreKind::SignalScore,
             BasketAdmissionScoreArg::RawZScore => AdmissionScoreKind::RawZScore,
+            BasketAdmissionScoreArg::SignalScoreTargetCentrality => {
+                AdmissionScoreKind::SignalScoreTargetCentrality
+            }
         }
     }
 }
@@ -1462,15 +1471,27 @@ fn run_freeze_basket_fits(args: BasketFitArgs) {
     let out = args
         .out
         .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
+    let as_of = args.as_of.as_deref().map(|raw| {
+        chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").unwrap_or_else(|e| {
+            error!(error = %e, value = %raw, "invalid --as-of date (expected YYYY-MM-DD)");
+            std::process::exit(1);
+        })
+    });
 
     info!(
         universe = %universe_path.display(),
         bars_dir = %bars_dir.display(),
+        as_of = ?as_of,
         out = %out.display(),
         "========== FREEZE BASKET FITS =========="
     );
 
-    let artifact = match basket_fits::build_live_fit_artifact(&universe_path, &bars_dir) {
+    let artifact = match match as_of {
+        Some(as_of) => {
+            basket_fits::build_replay_fit_artifact_as_of(&universe_path, &bars_dir, as_of)
+        }
+        None => basket_fits::build_live_fit_artifact(&universe_path, &bars_dir),
+    } {
         Ok(a) => a,
         Err(e) => {
             error!(error = %e, "failed to build basket fit artifact");

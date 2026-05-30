@@ -84,6 +84,8 @@ pub fn build_live_fit_artifact_from_inputs(
         adf_pvalue_max: universe.strategy.adf_pvalue_max,
         dominance_gate_enabled: universe.strategy.dominance_gate_enabled,
         dominance_max: universe.strategy.dominance_max,
+        target_centrality_gate_enabled: universe.strategy.target_centrality_gate_enabled,
+        target_centrality_min: universe.strategy.target_centrality_min,
     };
 
     let fits: Vec<BasketFit> = universe

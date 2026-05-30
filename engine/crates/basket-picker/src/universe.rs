@@ -39,6 +39,10 @@ pub struct StrategyConfig {
     pub dominance_gate_enabled: bool,
     #[serde(default = "default_dominance_max")]
     pub dominance_max: f64,
+    #[serde(default)]
+    pub target_centrality_gate_enabled: bool,
+    #[serde(default = "default_target_centrality_min")]
+    pub target_centrality_min: f64,
 }
 
 fn default_adf_pvalue_max() -> f64 {
@@ -47,6 +51,10 @@ fn default_adf_pvalue_max() -> f64 {
 
 fn default_dominance_max() -> f64 {
     0.60
+}
+
+fn default_target_centrality_min() -> f64 {
+    0.0
 }
 
 fn default_runner_capital() -> f64 {

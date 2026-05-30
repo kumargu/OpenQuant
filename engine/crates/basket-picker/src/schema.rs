@@ -6,6 +6,14 @@ use serde::{Deserialize, Serialize};
 use crate::bertram::BertramResult;
 use crate::ou::OuFit;
 
+/// One component's weighted variance contribution inside the basket spread.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DominanceContribution {
+    pub symbol: String,
+    pub weight: f64,
+    pub contribution: f64,
+}
+
 /// A basket trading candidate from the universe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BasketCandidate {
@@ -67,6 +75,9 @@ pub struct BasketFit {
     /// Maximum absolute component contribution share to spread variance.
     #[serde(default)]
     pub dominance_score: Option<f64>,
+    /// Per-component weighted variance contributions used by the dominance gate.
+    #[serde(default)]
+    pub dominance_contributions: Vec<DominanceContribution>,
     /// Whether this basket passed validation.
     pub valid: bool,
     /// Rejection reason if invalid.
@@ -84,6 +95,7 @@ impl BasketFit {
             adf_statistic: None,
             adf_pvalue: None,
             dominance_score: None,
+            dominance_contributions: Vec::new(),
             valid: false,
             reject_reason: Some(reason.into()),
         }

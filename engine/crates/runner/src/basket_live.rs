@@ -3820,6 +3820,7 @@ mod tests {
             adf_statistic: None,
             adf_pvalue: None,
             dominance_score: None,
+            dominance_contributions: Vec::new(),
             valid: true,
             reject_reason: None,
         }

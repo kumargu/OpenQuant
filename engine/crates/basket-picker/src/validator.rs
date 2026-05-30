@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adf::adf_test;
 use crate::bertram::optimize_symmetric_thresholds;
-use crate::dominance::max_component_dominance;
+use crate::dominance::{component_dominance_contributions, max_component_dominance};
 use crate::ou::fit_ou_ar1;
 use crate::schema::{BasketCandidate, BasketFit};
 use crate::spread::build_spread;
@@ -30,6 +30,10 @@ pub struct ValidatorConfig {
     pub dominance_gate_enabled: bool,
     /// Maximum allowed absolute component variance contribution share.
     pub dominance_max: f64,
+    /// Whether to reject baskets whose target contributes too little of spread variance.
+    pub target_centrality_gate_enabled: bool,
+    /// Minimum absolute variance contribution share required for the target.
+    pub target_centrality_min: f64,
 }
 
 impl Default for ValidatorConfig {
@@ -43,6 +47,8 @@ impl Default for ValidatorConfig {
             adf_pvalue_max: 0.05,
             dominance_gate_enabled: false,
             dominance_max: 0.60,
+            target_centrality_gate_enabled: false,
+            target_centrality_min: 0.0,
         }
     }
 }
@@ -142,23 +148,70 @@ pub fn validate(
         }
     }
 
+    let dominance_contributions = component_dominance_contributions(
+        &candidate.target,
+        &candidate.members,
+        target_window,
+        &peer_windows,
+    )
+    .unwrap_or_default();
     let dominance_score = max_component_dominance(target_window, &peer_windows);
+    let target_abs_contribution = dominance_contributions
+        .iter()
+        .find(|entry| entry.symbol == candidate.target)
+        .map(|entry| entry.contribution.abs());
     if config.dominance_gate_enabled {
         match dominance_score {
             Some(score) if score <= config.dominance_max => {}
             Some(score) => {
-                return BasketFit::rejected(
-                    candidate.clone(),
-                    format!(
+                return BasketFit {
+                    candidate: candidate.clone(),
+                    ou: None,
+                    bertram: None,
+                    threshold_k: 0.0,
+                    adf_statistic: adf.map(|r| r.test_statistic),
+                    adf_pvalue: adf.map(|r| r.p_value),
+                    dominance_score: Some(score),
+                    dominance_contributions,
+                    valid: false,
+                    reject_reason: Some(format!(
                         "dominance gate failed: score={:.3} > {:.3}",
                         score, config.dominance_max
-                    ),
-                );
+                    )),
+                };
             }
             None => {
                 return BasketFit::rejected(
                     candidate.clone(),
                     "dominance gate failed: score unavailable",
+                )
+            }
+        }
+    }
+    if config.target_centrality_gate_enabled {
+        match target_abs_contribution {
+            Some(score) if score >= config.target_centrality_min => {}
+            Some(score) => {
+                return BasketFit {
+                    candidate: candidate.clone(),
+                    ou: None,
+                    bertram: None,
+                    threshold_k: 0.0,
+                    adf_statistic: adf.map(|r| r.test_statistic),
+                    adf_pvalue: adf.map(|r| r.p_value),
+                    dominance_score,
+                    dominance_contributions,
+                    valid: false,
+                    reject_reason: Some(format!(
+                        "target centrality gate failed: target_abs_contrib={:.3} < {:.3}",
+                        score, config.target_centrality_min
+                    )),
+                };
+            }
+            None => {
+                return BasketFit::rejected(
+                    candidate.clone(),
+                    "target centrality gate failed: target contribution unavailable",
                 )
             }
         }
@@ -222,6 +275,7 @@ pub fn validate(
         adf_statistic: adf.map(|r| r.test_statistic),
         adf_pvalue: adf.map(|r| r.p_value),
         dominance_score,
+        dominance_contributions,
         valid,
         reject_reason,
     }
@@ -575,6 +629,87 @@ mod tests {
         assert!(
             reason.contains("dominance gate") || reason.contains("OU"),
             "reason should mention dominance or OU failure, got: {reason}"
+        );
+    }
+
+    #[test]
+    fn test_target_centrality_gate_rejects_peer_dominated_basket() {
+        let candidate = BasketCandidate {
+            target: "TGT".to_string(),
+            members: vec!["P1".to_string(), "P2".to_string()],
+            sector: "x".to_string(),
+            fit_date: chrono::NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+        };
+
+        let peer1 = make_random_walk(120, 41, 0.0);
+        let peer2 = make_random_walk(120, 42, 0.0);
+        let target: Vec<f64> = (0..120)
+            .map(|i| 100.0_f64 * ((i as f64 * 1e-4).sin() * 1e-3).exp())
+            .collect();
+
+        let mut bars = HashMap::new();
+        bars.insert("TGT".to_string(), target);
+        bars.insert("P1".to_string(), peer1);
+        bars.insert("P2".to_string(), peer2);
+
+        let config = ValidatorConfig {
+            dominance_gate_enabled: false,
+            target_centrality_gate_enabled: true,
+            target_centrality_min: 0.20,
+            ..Default::default()
+        };
+        let fit = validate(&candidate, &bars, &config);
+
+        assert!(
+            !fit.valid,
+            "peer-dominated basket must fail target centrality gate"
+        );
+        assert!(
+            fit.reject_reason
+                .as_deref()
+                .unwrap()
+                .contains("target centrality gate"),
+            "reason should mention target centrality gate, got: {:?}",
+            fit.reject_reason
+        );
+        assert!(
+            !fit.dominance_contributions.is_empty(),
+            "rejected fit should preserve dominance contributions"
+        );
+    }
+
+    #[test]
+    fn test_target_centrality_gate_admits_target_driven_basket() {
+        let candidate = BasketCandidate {
+            target: "BIG".to_string(),
+            members: vec!["TINY1".to_string(), "TINY2".to_string()],
+            sector: "x".to_string(),
+            fit_date: chrono::NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+        };
+
+        let big = make_random_walk(120, 11, 0.0);
+        let mut bars = HashMap::new();
+        bars.insert("BIG".to_string(), big);
+        bars.insert(
+            "TINY1".to_string(),
+            (0..120).map(|i| 100.0 + i as f64 * 1e-6).collect(),
+        );
+        bars.insert(
+            "TINY2".to_string(),
+            (0..120).map(|i| 100.0 - i as f64 * 1e-6).collect(),
+        );
+
+        let config = ValidatorConfig {
+            dominance_gate_enabled: false,
+            target_centrality_gate_enabled: true,
+            target_centrality_min: 0.20,
+            ..Default::default()
+        };
+        let fit = validate(&candidate, &bars, &config);
+        let reason = fit.reject_reason.as_deref().unwrap_or("");
+        assert!(
+            !reason.contains("target centrality gate"),
+            "target-driven basket should not be centrality-rejected, got: {reason}"
         );
     }
 }
