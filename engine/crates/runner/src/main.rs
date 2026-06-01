@@ -24,6 +24,7 @@ mod basket_overlay_picker;
 mod broker;
 mod clock;
 mod earnings;
+mod kite;
 mod market_session;
 mod pair_picker_service;
 mod parquet_bar_source;
@@ -34,7 +35,6 @@ mod session_trigger;
 mod simulated_broker;
 mod stream;
 
-use alpaca::ExecutionMode;
 use basket_engine::{AdmissionScoreKind, GatePolicyKind, RollingEntryMode, RollingSScoreV1Config};
 use basket_picker::{
     RunnerLeadershipOverlayModeConfig as UniverseLeadershipOverlayModeConfig,
@@ -49,12 +49,380 @@ use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
+use crate::bar_source::{AlpacaBarSource, KiteBarSource};
+use crate::broker::{Broker, BrokerExecutionMode};
+use crate::kite::{KiteClient, KiteOrderConfig};
+
 macro_rules! bug {
     ($kind:literal, $($field:tt)*) => {{
         metrics::counter!("bug", "component" => "basket_runtime_config", "kind" => $kind)
             .increment(1);
         error!(bug = true, bug_marker = "BUG", kind = $kind, $($field)*);
     }};
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrokerProvider {
+    Alpaca,
+    Kite,
+}
+
+impl BrokerProvider {
+    fn parse(raw: &str) -> Self {
+        match raw.to_ascii_lowercase().as_str() {
+            "kite" | "zerodha" => Self::Kite,
+            _ => Self::Alpaca,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct RunnerBrokerConfig {
+    provider: Option<String>,
+    env_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct RunnerAlpacaConfig {
+    api_key: Option<String>,
+    secret_key: Option<String>,
+    data_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct RunnerKiteConfig {
+    api_key: Option<String>,
+    api_secret: Option<String>,
+    access_token: Option<String>,
+    redirect_url: Option<String>,
+    exchange: Option<String>,
+    product: Option<String>,
+    order_variety: Option<String>,
+    order_type: Option<String>,
+    validity: Option<String>,
+    market_protection: Option<String>,
+    autoslice: Option<bool>,
+    include_holdings: Option<bool>,
+    tag_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct RunnerMarketConfig {
+    profile: Option<String>,
+    tz: Option<String>,
+    open: Option<String>,
+    close: Option<String>,
+    calendar: Option<String>,
+    close_grace_minutes: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct RunnerDataConfig {
+    bars_dir: Option<PathBuf>,
+    bootstrap_start_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct RunnerConfig {
+    broker: RunnerBrokerConfig,
+    alpaca: RunnerAlpacaConfig,
+    kite: RunnerKiteConfig,
+    market: RunnerMarketConfig,
+    data: RunnerDataConfig,
+}
+
+impl RunnerConfig {
+    fn load(path: &Path) -> Result<Self, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        toml::from_str(&contents).map_err(|e| format!("invalid TOML in {}: {e}", path.display()))
+    }
+}
+
+fn resolve_runner_config(explicit_path: Option<&Path>) -> Result<(RunnerConfig, PathBuf), String> {
+    let path = explicit_path
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("OPENQUANT_RUNNER_CONFIG")
+                .ok()
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from("config/runner.toml"));
+    if path.exists() {
+        Ok((RunnerConfig::load(&path)?, path))
+    } else {
+        Ok((RunnerConfig::default(), path))
+    }
+}
+
+fn resolve_broker_provider(cfg: &RunnerConfig) -> BrokerProvider {
+    if let Some(provider) = cfg.broker.provider.as_deref() {
+        return BrokerProvider::parse(provider);
+    }
+    BrokerProvider::parse(&std::env::var("OPENQUANT_BROKER").unwrap_or_else(|_| "alpaca".into()))
+}
+
+fn resolve_broker_env_file(cfg: &RunnerConfig) -> PathBuf {
+    cfg.broker
+        .env_file
+        .clone()
+        .map(expand_tilde_path)
+        .unwrap_or_else(|| PathBuf::from(".env"))
+}
+
+fn expand_tilde_path(path: PathBuf) -> PathBuf {
+    let Some(raw) = path.to_str() else {
+        return path;
+    };
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return path;
+    };
+    if raw == "~" {
+        home
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        path
+    }
+}
+
+fn set_env_if_some(key: &str, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        // SAFETY: process-level env mutation is intentionally used during startup
+        // before worker tasks begin, to keep legacy modules stable while runner
+        // configuration is migrated to TOML.
+        unsafe { std::env::set_var(key, value) };
+    }
+}
+
+fn apply_runner_config_env(cfg: &RunnerConfig) {
+    set_env_if_some("OPENQUANT_MARKET_PROFILE", cfg.market.profile.as_deref());
+    set_env_if_some("OPENQUANT_MARKET_TZ", cfg.market.tz.as_deref());
+    set_env_if_some("OPENQUANT_MARKET_OPEN", cfg.market.open.as_deref());
+    set_env_if_some("OPENQUANT_MARKET_CLOSE", cfg.market.close.as_deref());
+    set_env_if_some("OPENQUANT_MARKET_CALENDAR", cfg.market.calendar.as_deref());
+    set_env_if_some("ALPACA_DATA_URL", cfg.alpaca.data_url.as_deref());
+}
+
+fn resolve_bars_dir_from_runner_config(cfg: &RunnerConfig) -> Option<PathBuf> {
+    cfg.data.bars_dir.clone().map(expand_tilde_path)
+}
+
+fn parse_bootstrap_start_date(cfg: &RunnerConfig) -> Option<chrono::NaiveDate> {
+    cfg.data
+        .bootstrap_start_date
+        .as_deref()
+        .and_then(|raw| chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok())
+}
+
+fn resolve_live_broker_client(
+    cfg: &RunnerConfig,
+) -> Result<(BrokerProvider, PathBuf, LiveBrokerClient), String> {
+    let provider = resolve_broker_provider(cfg);
+    let broker_env_path = resolve_broker_env_file(cfg);
+    let client = match provider {
+        BrokerProvider::Alpaca => alpaca::AlpacaClient::from_values(
+            cfg.alpaca.api_key.as_deref(),
+            cfg.alpaca.secret_key.as_deref(),
+            Some(&broker_env_path),
+        )
+        .map(LiveBrokerClient::Alpaca)?,
+        BrokerProvider::Kite => KiteClient::from_values(
+            cfg.kite.api_key.as_deref(),
+            cfg.kite.api_secret.as_deref(),
+            cfg.kite.access_token.as_deref(),
+            cfg.kite.redirect_url.as_deref(),
+            kite_order_config(cfg),
+            Some(&broker_env_path),
+        )
+        .map(Box::new)
+        .map(LiveBrokerClient::Kite)?,
+    };
+    Ok((provider, broker_env_path, client))
+}
+
+fn kite_order_config(cfg: &RunnerConfig) -> KiteOrderConfig {
+    let mut order = KiteOrderConfig::default();
+    if let Some(value) = cfg
+        .kite
+        .exchange
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.exchange = value.to_string();
+    }
+    if let Some(value) = cfg.kite.product.as_deref().filter(|v| !v.trim().is_empty()) {
+        order.product = value.to_string();
+    }
+    if let Some(value) = cfg
+        .kite
+        .order_variety
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.order_variety = value.to_string();
+    }
+    if let Some(value) = cfg
+        .kite
+        .order_type
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.order_type = value.to_string();
+    }
+    if let Some(value) = cfg
+        .kite
+        .validity
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.validity = value.to_string();
+    }
+    if let Some(value) = cfg.market.open.as_deref().filter(|v| !v.trim().is_empty()) {
+        order.historical_open = value.to_string();
+    }
+    if let Some(value) = cfg.market.close.as_deref().filter(|v| !v.trim().is_empty()) {
+        order.historical_close = value.to_string();
+    }
+    if let Some(value) = cfg
+        .kite
+        .market_protection
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.market_protection = Some(value.to_string());
+    }
+    if let Some(value) = cfg.kite.autoslice {
+        order.autoslice = value;
+    }
+    if let Some(value) = cfg.kite.include_holdings {
+        order.include_holdings = value;
+    }
+    if let Some(value) = cfg
+        .kite
+        .tag_prefix
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.tag_prefix = Some(value.to_string());
+    }
+    order
+}
+
+enum LiveBrokerClient {
+    Alpaca(alpaca::AlpacaClient),
+    Kite(Box<KiteClient>),
+}
+
+impl Broker for LiveBrokerClient {
+    async fn place_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<broker::BrokerOrder, String> {
+        match self {
+            Self::Alpaca(client) => client.place_order(symbol, qty, side, execution).await,
+            Self::Kite(client) => client.place_order(symbol, qty, side, execution).await,
+        }
+    }
+
+    async fn place_session_open_reconcile_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<broker::BrokerOrder, String> {
+        match self {
+            Self::Alpaca(client) => {
+                client
+                    .place_session_open_reconcile_order(symbol, qty, side, execution)
+                    .await
+            }
+            Self::Kite(client) => {
+                client
+                    .place_session_open_reconcile_order(symbol, qty, side, execution)
+                    .await
+            }
+        }
+    }
+
+    async fn get_positions(
+        &self,
+        execution: BrokerExecutionMode,
+    ) -> Result<std::collections::HashMap<String, (f64, f64)>, String> {
+        match self {
+            Self::Alpaca(client) => client.get_positions(execution).await,
+            Self::Kite(client) => client.get_positions(execution).await,
+        }
+    }
+
+    async fn get_account(
+        &self,
+        execution: BrokerExecutionMode,
+    ) -> Result<broker::BrokerAccount, String> {
+        match self {
+            Self::Alpaca(client) => client.get_account(execution).await,
+            Self::Kite(client) => client.get_account(execution).await,
+        }
+    }
+
+    async fn record_eod(&self, date: chrono::NaiveDate) {
+        match self {
+            Self::Alpaca(client) => client.record_eod(date).await,
+            Self::Kite(client) => client.record_eod(date).await,
+        }
+    }
+
+    fn reconciliation_delay_secs(&self) -> u64 {
+        match self {
+            Self::Alpaca(client) => client.reconciliation_delay_secs(),
+            Self::Kite(client) => client.reconciliation_delay_secs(),
+        }
+    }
+
+    fn session_close_fill_contract(&self) -> broker::SessionCloseFillContract {
+        match self {
+            Self::Alpaca(client) => client.session_close_fill_contract(),
+            Self::Kite(client) => client.session_close_fill_contract(),
+        }
+    }
+
+    fn next_session_open_fill_ready_minute(&self) -> u32 {
+        match self {
+            Self::Alpaca(client) => client.next_session_open_fill_ready_minute(),
+            Self::Kite(client) => client.next_session_open_fill_ready_minute(),
+        }
+    }
+
+    fn supports_persisted_pending_open_reconcile(&self) -> bool {
+        match self {
+            Self::Alpaca(client) => client.supports_persisted_pending_open_reconcile(),
+            Self::Kite(client) => client.supports_persisted_pending_open_reconcile(),
+        }
+    }
+}
+
+enum LiveBarFeed {
+    Alpaca(AlpacaBarSource),
+    Kite(Box<KiteBarSource>),
+}
+
+impl bar_source::BarSource for LiveBarFeed {
+    async fn start(&self, symbols: &[String]) -> tokio::sync::mpsc::Receiver<stream::StreamBar> {
+        match self {
+            Self::Alpaca(src) => src.start(symbols).await,
+            Self::Kite(src) => src.start(symbols).await,
+        }
+    }
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────
@@ -68,13 +436,21 @@ struct Cli {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
-    /// Live trading — WebSocket bars, real Alpaca orders.
+    /// Live trading — WebSocket bars, real broker orders.
     Live(StreamArgs),
-    /// Paper trading — WebSocket bars, paper Alpaca orders.
+    /// Paper trading — WebSocket bars, paper broker orders when available.
     Paper(StreamArgs),
     /// Replay — historical minute bars from Alpaca REST, no orders.
     /// The engine processes bars identically to live; it doesn't know it's replaying.
     Replay(ReplayArgs),
+    /// Refresh broker minute-bar parquets through the maintained refresh pipeline.
+    RefreshData(RefreshDataArgs),
+    /// Exchange a Kite request_token for an access token and optionally persist it.
+    KiteLogin(KiteLoginArgs),
+    /// Validate Kite account access without placing orders.
+    KiteAccount(KiteAccountArgs),
+    /// Place one explicit Kite order. Requires an explicit real-money confirmation flag.
+    KiteOrder(KiteOrderArgs),
     /// Build a frozen basket fit artifact from the current universe and parquet history.
     FreezeBasketFits(BasketFitArgs),
 }
@@ -134,6 +510,10 @@ fn default_stream_universe_path(engine: Engine, is_live_command: bool) -> Option
 /// Shared args for live and paper (both use WebSocket streaming).
 #[derive(clap::Args, Debug, Clone)]
 struct StreamArgs {
+    /// Runner config TOML. Controls market/broker/runtime defaults.
+    #[arg(long)]
+    runner_config: Option<PathBuf>,
+
     /// Asset class / strategy variant.
     /// Pair engines (snp500, metals) use --config/--candidates;
     /// basket uses --universe/--fit-artifact.
@@ -292,6 +672,10 @@ struct StreamArgs {
 /// Args for replay (adds date range).
 #[derive(clap::Args, Debug, Clone)]
 struct ReplayArgs {
+    /// Runner config TOML. Controls market/broker/runtime defaults.
+    #[arg(long)]
+    runner_config: Option<PathBuf>,
+
     /// Asset class / strategy variant.
     /// Pair engines (snp500, metals) use --config/--candidates;
     /// basket uses --universe/--fit-artifact.
@@ -489,6 +873,10 @@ struct ReplayArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 struct BasketFitArgs {
+    /// Runner config TOML. Controls market/broker/runtime defaults.
+    #[arg(long)]
+    runner_config: Option<PathBuf>,
+
     /// Basket universe TOML file. Defaults to `config/basket_universe.toml`.
     #[arg(long)]
     universe: Option<PathBuf>,
@@ -508,6 +896,106 @@ struct BasketFitArgs {
     /// Output fit artifact path. Defaults to `<universe>.fits.json`.
     #[arg(long)]
     out: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct RefreshDataArgs {
+    /// Runner config TOML. Controls broker credentials, market profile, and data paths.
+    #[arg(long)]
+    runner_config: Option<PathBuf>,
+
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+
+    /// Basket universe TOML used to select symbols. Omit to refresh all existing parquets.
+    #[arg(long)]
+    universe: Option<PathBuf>,
+
+    /// Directory containing per-symbol 1-min parquets.
+    #[arg(long)]
+    bars_dir: Option<PathBuf>,
+
+    /// Refresh through this date (YYYY-MM-DD). Defaults to current UTC date.
+    #[arg(long)]
+    target: Option<String>,
+
+    /// Force the historical fetch floor to this date (YYYY-MM-DD).
+    #[arg(long = "from")]
+    from_date: Option<String>,
+
+    /// Optional comma-delimited symbol filter. Overrides --universe when set.
+    #[arg(long, value_delimiter = ',')]
+    symbols: Vec<String>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct KiteLoginArgs {
+    /// Runner config TOML. Uses the India profile by default.
+    #[arg(long, default_value = "config/runner.india.toml")]
+    runner_config: PathBuf,
+
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+
+    /// One-time request_token copied from the Kite redirect URL.
+    #[arg(long)]
+    request_token: Option<String>,
+
+    /// Wait for the local redirect URL configured in .env.india / runner TOML.
+    #[arg(long, default_value_t = false)]
+    wait_localhost: bool,
+
+    /// Wait timeout in seconds when --wait-localhost is used.
+    #[arg(long, default_value_t = 300)]
+    timeout_seconds: u64,
+
+    /// Do not persist the exchanged access token back into the configured env file.
+    #[arg(long, default_value_t = false)]
+    no_persist_env: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct KiteAccountArgs {
+    /// Runner config TOML. Uses the India profile by default.
+    #[arg(long, default_value = "config/runner.india.toml")]
+    runner_config: PathBuf,
+
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct KiteOrderArgs {
+    /// Runner config TOML. Uses the India profile by default.
+    #[arg(long, default_value = "config/runner.india.toml")]
+    runner_config: PathBuf,
+
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+
+    /// NSE trading symbol, for example INFY.
+    #[arg(long)]
+    symbol: String,
+
+    /// buy or sell.
+    #[arg(long)]
+    side: String,
+
+    /// Whole-share quantity.
+    #[arg(long)]
+    qty: f64,
+
+    /// Optional trigger price for a Kite SL-M stop-market order.
+    #[arg(long)]
+    stop_trigger_price: Option<f64>,
+
+    /// Optional Kite order variety override. Use `regular` during market hours; India basket live keeps AMO in TOML.
+    #[arg(long)]
+    order_variety: Option<String>,
+
+    /// Required safety flag for real-money Kite order placement.
+    #[arg(long, default_value_t = false)]
+    confirm_real_order: bool,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
@@ -671,6 +1159,12 @@ fn resolve_stream_execution(
             std::process::exit(1);
         }
     }
+}
+
+fn resolve_market_close_grace_minutes(cfg: &RunnerConfig) -> u32 {
+    cfg.market
+        .close_grace_minutes
+        .unwrap_or(basket_live::DEFAULT_CLOSE_GRACE_MIN)
 }
 
 fn rule_v1_picker_config_from_universe(
@@ -1117,13 +1611,26 @@ fn resolve_engine(
 /// What the runner does after the engine emits intents.
 enum RunMode {
     /// WebSocket bars + place orders on Alpaca.
-    Stream(ExecutionMode),
+    Stream(BrokerExecutionMode),
     /// Historical REST bars + log only.
     Replay {
         start: String,
         end: String,
         bar_cache: Option<PathBuf>,
     },
+}
+
+fn validate_legacy_stream_provider(
+    run_mode: &RunMode,
+    broker_provider: BrokerProvider,
+) -> Result<(), String> {
+    if matches!(run_mode, RunMode::Stream(_)) && broker_provider == BrokerProvider::Kite {
+        return Err(
+            "Kite provider is supported through --engine basket live/paper; the legacy pairs stream path still requires Alpaca. Use --engine basket or set broker.provider = \"alpaca\"."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -1136,6 +1643,10 @@ async fn main() {
     let data_dir = match &cli.command {
         Command::Live(a) | Command::Paper(a) => &a.data_dir,
         Command::Replay(a) => &a.data_dir,
+        Command::RefreshData(a) => &a.data_dir,
+        Command::KiteLogin(a) => &a.data_dir,
+        Command::KiteAccount(a) => &a.data_dir,
+        Command::KiteOrder(a) => &a.data_dir,
         Command::FreezeBasketFits(a) => &a.data_dir,
     };
 
@@ -1162,12 +1673,47 @@ async fn main() {
     }
 
     if let Command::FreezeBasketFits(a) = &cli.command {
-        run_freeze_basket_fits(a.clone());
+        run_freeze_basket_fits(a.clone()).await;
+        openquant_metrics::shutdown().await;
+        return;
+    }
+
+    if let Command::RefreshData(a) = &cli.command {
+        run_refresh_data(a.clone()).await;
+        openquant_metrics::shutdown().await;
+        return;
+    }
+
+    if let Command::KiteLogin(a) = &cli.command {
+        run_kite_login(a.clone()).await;
+        openquant_metrics::shutdown().await;
+        return;
+    }
+
+    if let Command::KiteAccount(a) = &cli.command {
+        run_kite_account(a.clone()).await;
+        openquant_metrics::shutdown().await;
+        return;
+    }
+
+    if let Command::KiteOrder(a) = &cli.command {
+        run_kite_order(a.clone()).await;
         openquant_metrics::shutdown().await;
         return;
     }
 
     // Convert CLI command → (config, trading_dir, data_dir, candidates, pipeline, run_mode)
+    let runner_config = match &cli.command {
+        Command::Live(a) => a.runner_config.clone(),
+        Command::Paper(a) => a.runner_config.clone(),
+        Command::Replay(a) => a.runner_config.clone(),
+        Command::RefreshData(a) => a.runner_config.clone(),
+        Command::KiteLogin(a) => Some(a.runner_config.clone()),
+        Command::KiteAccount(a) => Some(a.runner_config.clone()),
+        Command::KiteOrder(a) => Some(a.runner_config.clone()),
+        Command::FreezeBasketFits(a) => a.runner_config.clone(),
+    };
+
     let (config, trading_dir, data_dir, candidates, pipeline, run_mode) = match cli.command {
         Command::Live(a) => {
             let (config, candidates, pipeline) =
@@ -1178,7 +1724,7 @@ async fn main() {
                 a.data_dir,
                 candidates,
                 pipeline,
-                RunMode::Stream(ExecutionMode::Live),
+                RunMode::Stream(BrokerExecutionMode::Live),
             )
         }
         Command::Paper(a) => {
@@ -1190,7 +1736,7 @@ async fn main() {
                 a.data_dir,
                 candidates,
                 pipeline,
-                RunMode::Stream(ExecutionMode::Paper),
+                RunMode::Stream(BrokerExecutionMode::Paper),
             )
         }
         Command::Replay(a) => {
@@ -1215,6 +1761,10 @@ async fn main() {
                 },
             )
         }
+        Command::RefreshData(_) => unreachable!("handled before run-mode dispatch"),
+        Command::KiteLogin(_) => unreachable!("handled before run-mode dispatch"),
+        Command::KiteAccount(_) => unreachable!("handled before run-mode dispatch"),
+        Command::KiteOrder(_) => unreachable!("handled before run-mode dispatch"),
         Command::FreezeBasketFits(_) => unreachable!("handled before run-mode dispatch"),
     };
 
@@ -1224,6 +1774,7 @@ async fn main() {
         data_dir,
         candidates,
         pipeline,
+        runner_config,
         run_mode,
     )
     .await;
@@ -1233,6 +1784,14 @@ async fn main() {
 // ── Basket live/paper dispatch ──────────────────────────────────────
 
 async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
+    let (runner_cfg, runner_cfg_path) = match resolve_runner_config(args.runner_config.as_deref()) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+    apply_runner_config_env(&runner_cfg);
     let universe_path = args
         .universe
         .clone()
@@ -1243,12 +1802,14 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         });
 
     let bars_dir = args.bars_dir.unwrap_or_else(|| {
-        std::env::var("QUANT_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_default();
-                PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
-            })
+        resolve_bars_dir_from_runner_config(&runner_cfg).unwrap_or_else(|| {
+            std::env::var("QUANT_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
+                })
+        })
     });
     let fit_artifact_path = args
         .fit_artifact
@@ -1294,19 +1855,30 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         );
         std::process::exit(1);
     }
-    let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
-        Ok(c) => c,
+    let (provider, broker_env_path, live_broker) = match resolve_live_broker_client(&runner_cfg) {
+        Ok(v) => v,
         Err(e) => {
             error!("{e}");
             std::process::exit(1);
         }
     };
+    let bootstrap_start_date = parse_bootstrap_start_date(&runner_cfg);
+    info!(
+        runner_config = %runner_cfg_path.display(),
+        broker_provider = ?provider,
+        broker_env_file = %broker_env_path.display(),
+        "resolved runner broker configuration"
+    );
 
     // Refresh quant-data before the session starts so the universe's parquet
     // history stays current for any future artifact rebuilds and operator
     // diagnostics. Filter refresh to only the universe's symbols to avoid
     // touching unrelated SP500 names.
-    if bars_dir.exists() {
+    if let Err(e) = std::fs::create_dir_all(&bars_dir) {
+        error!(path = %bars_dir.display(), error = %e, "failed to create bars dir");
+        std::process::exit(1);
+    }
+    {
         let mut syms: Vec<String> = universe
             .sectors
             .values()
@@ -1321,16 +1893,44 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             filter_count = filter.as_ref().map(Vec::len).unwrap_or(0),
             "refreshing quant-data bars (basket universe)"
         );
-        match refresh::refresh_all(&bars_dir, &target, &alpaca, filter.as_deref()).await {
-            Ok(n) if n > 0 => info!(bars = n, "quant-data refreshed"),
-            Ok(_) => info!("quant-data already up to date"),
-            Err(e) => warn!(
-                error = e.as_str(),
-                "quant-data refresh failed — continuing with possibly stale data"
-            ),
+        match &live_broker {
+            LiveBrokerClient::Alpaca(alpaca) => {
+                match refresh::refresh_all(
+                    &bars_dir,
+                    &target,
+                    bootstrap_start_date,
+                    alpaca,
+                    filter.as_deref(),
+                )
+                .await
+                {
+                    Ok(n) if n > 0 => info!(bars = n, "quant-data refreshed"),
+                    Ok(_) => info!("quant-data already up to date"),
+                    Err(e) => warn!(
+                        error = e.as_str(),
+                        "quant-data refresh failed — continuing with possibly stale data"
+                    ),
+                }
+            }
+            LiveBrokerClient::Kite(kite) => {
+                match refresh::refresh_all(
+                    &bars_dir,
+                    &target,
+                    bootstrap_start_date,
+                    kite.as_ref(),
+                    filter.as_deref(),
+                )
+                .await
+                {
+                    Ok(n) if n > 0 => info!(bars = n, "quant-data refreshed from Kite"),
+                    Ok(_) => info!("quant-data already up to date"),
+                    Err(e) => warn!(
+                        error = e.as_str(),
+                        "quant-data refresh failed — continuing with possibly stale data"
+                    ),
+                }
+            }
         }
-    } else {
-        warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
     }
     let gate_policy = match resolve_basket_signal_policy(
         args.basket_signal_policy,
@@ -1420,14 +2020,28 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         }
     };
 
-    let bar_source =
-        bar_source::AlpacaBarSource::new(alpaca.api_key.clone(), alpaca.api_secret.clone());
+    let bar_source = match &live_broker {
+        LiveBrokerClient::Alpaca(alpaca) => LiveBarFeed::Alpaca(AlpacaBarSource::new(
+            alpaca.api_key.clone(),
+            alpaca.api_secret.clone(),
+        )),
+        LiveBrokerClient::Kite(kite) => {
+            LiveBarFeed::Kite(Box::new(KiteBarSource::new((**kite).clone())))
+        }
+    };
 
     // Live/paper use wall-clock time and a 30s polling session trigger.
-    // Replay (#294c-2) will swap these for bar-driven equivalents. Keep
-    // the grace constant in sync with `basket_live::CLOSE_GRACE_MIN`.
+    // Replay uses bar-driven equivalents. Keep this value in sync with
+    // BasketRunOptions so startup catch-up and heartbeats classify the
+    // same post-close boundary as the trigger.
     let clock = clock::SystemClock;
-    let mut session_trigger = session_trigger::IntervalSessionTrigger::new(clock::SystemClock, 2);
+    let close_grace_minutes = resolve_market_close_grace_minutes(&runner_cfg);
+    info!(
+        close_grace_minutes,
+        "configured live/paper session-close grace"
+    );
+    let mut session_trigger =
+        session_trigger::IntervalSessionTrigger::new(clock::SystemClock, close_grace_minutes);
     let basket_journal_path = args.basket_journal_path.clone().unwrap_or_else(|| {
         let base = args.data_dir.join("journal").join("basket_live.sqlite3");
         match overlay_fingerprint.as_deref() {
@@ -1436,7 +2050,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         }
     });
     if let Err(e) = basket_live::run_basket_live(
-        &alpaca,
+        &live_broker,
         &bar_source,
         &clock,
         &mut session_trigger,
@@ -1454,6 +2068,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
+            close_grace_min: close_grace_minutes,
         },
     )
     .await
@@ -1463,17 +2078,328 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     }
 }
 
-fn run_freeze_basket_fits(args: BasketFitArgs) {
+async fn run_refresh_data(args: RefreshDataArgs) {
+    let (runner_cfg, runner_cfg_path) = match resolve_runner_config(args.runner_config.as_deref()) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+    apply_runner_config_env(&runner_cfg);
+
+    let bars_dir = args.bars_dir.unwrap_or_else(|| {
+        resolve_bars_dir_from_runner_config(&runner_cfg).unwrap_or_else(refresh::default_bars_dir)
+    });
+    if let Err(e) = std::fs::create_dir_all(&bars_dir) {
+        error!(path = %bars_dir.display(), error = %e, "failed to create bars dir");
+        std::process::exit(1);
+    }
+
+    let parse_date = |raw: &str, flag: &str| {
+        chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").unwrap_or_else(|e| {
+            error!(error = %e, value = %raw, "invalid {flag} date (expected YYYY-MM-DD)");
+            std::process::exit(1);
+        })
+    };
+    let target_date = args
+        .target
+        .as_deref()
+        .map(|raw| parse_date(raw, "--target"))
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let target = target_date.format("%Y-%m-%d").to_string();
+    let config_bootstrap_start = parse_bootstrap_start_date(&runner_cfg);
+    let refresh_from = args
+        .from_date
+        .as_deref()
+        .map(|raw| parse_date(raw, "--from"));
+    let bootstrap_start_date = refresh_from.or(config_bootstrap_start);
+
+    let filter = if !args.symbols.is_empty() {
+        let mut symbols = args.symbols;
+        symbols.sort();
+        symbols.dedup();
+        Some(symbols)
+    } else if let Some(universe_path) = args.universe.as_ref() {
+        let universe = match basket_picker::load_universe(universe_path) {
+            Ok(u) => u,
+            Err(e) => {
+                error!(error = %e, universe = %universe_path.display(), "failed to load basket universe");
+                std::process::exit(1);
+            }
+        };
+        let mut symbols: Vec<String> = universe
+            .sectors
+            .values()
+            .flat_map(|sec| sec.members.iter().cloned())
+            .collect();
+        symbols.sort();
+        symbols.dedup();
+        Some(symbols)
+    } else {
+        None
+    };
+
+    let (provider, broker_env_path, history_client) = match resolve_live_broker_client(&runner_cfg)
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    info!(
+        runner_config = %runner_cfg_path.display(),
+        broker_provider = ?provider,
+        broker_env_file = %broker_env_path.display(),
+        bars_dir = %bars_dir.display(),
+        target = target.as_str(),
+        refresh_from = ?refresh_from,
+        filter_count = filter.as_ref().map(Vec::len).unwrap_or(0),
+        "========== REFRESH DATA =========="
+    );
+
+    let refresh_result = match &history_client {
+        LiveBrokerClient::Alpaca(alpaca) => {
+            refresh::refresh_all_from(
+                &bars_dir,
+                &target,
+                bootstrap_start_date,
+                refresh_from,
+                alpaca,
+                filter.as_deref(),
+            )
+            .await
+        }
+        LiveBrokerClient::Kite(kite) => {
+            refresh::refresh_all_from(
+                &bars_dir,
+                &target,
+                bootstrap_start_date,
+                refresh_from,
+                kite.as_ref(),
+                filter.as_deref(),
+            )
+            .await
+        }
+    };
+
+    match refresh_result {
+        Ok(n) => info!(bars = n, "data refresh complete"),
+        Err(e) => {
+            error!(error = e.as_str(), "data refresh failed");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run_kite_login(args: KiteLoginArgs) {
+    let (runner_cfg, runner_cfg_path) =
+        match resolve_runner_config(Some(args.runner_config.as_path())) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(1);
+            }
+        };
+    apply_runner_config_env(&runner_cfg);
+    let broker_env_path = resolve_broker_env_file(&runner_cfg);
+    let mut kite = match KiteClient::from_values(
+        runner_cfg.kite.api_key.as_deref(),
+        runner_cfg.kite.api_secret.as_deref(),
+        runner_cfg.kite.access_token.as_deref(),
+        runner_cfg.kite.redirect_url.as_deref(),
+        kite_order_config(&runner_cfg),
+        Some(&broker_env_path),
+    ) {
+        Ok(client) => client,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    let request_token = match args.request_token {
+        Some(token) => token,
+        None if args.wait_localhost => {
+            let login_url = kite.login_url();
+            println!("Open this Kite login URL:\n{login_url}");
+            match crate::kite::wait_for_local_request_token(
+                &kite.redirect_url,
+                std::time::Duration::from_secs(args.timeout_seconds),
+            ) {
+                Ok(token) => token,
+                Err(e) => {
+                    error!(error = %e, "failed to capture Kite request token");
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            let login_url = kite.login_url();
+            println!("Open this Kite login URL:\n{login_url}");
+            println!(
+                "Then rerun with --request-token <token>, or use --wait-localhost if the registered redirect URL is {}",
+                kite.redirect_url
+            );
+            return;
+        }
+    };
+
+    let access_token = match kite.exchange_request_token(&request_token).await {
+        Ok(token) => token,
+        Err(e) => {
+            error!(error = %e, "Kite token exchange failed");
+            std::process::exit(1);
+        }
+    };
+    if !args.no_persist_env {
+        if let Err(e) = kite.persist_access_token(&broker_env_path, &access_token) {
+            error!(error = %e, "failed to persist Kite access token");
+            std::process::exit(1);
+        }
+        info!(
+            runner_config = %runner_cfg_path.display(),
+            env_file = %broker_env_path.display(),
+            "Kite access token exchanged and persisted"
+        );
+    } else {
+        info!("Kite access token exchanged; persistence disabled");
+    }
+}
+
+fn load_kite_client_for_runner(
+    runner_config: &Path,
+) -> Result<(PathBuf, PathBuf, KiteClient), String> {
+    let (runner_cfg, runner_cfg_path) = resolve_runner_config(Some(runner_config))?;
+    apply_runner_config_env(&runner_cfg);
+    let broker_env_path = resolve_broker_env_file(&runner_cfg);
+    let kite = KiteClient::from_values(
+        runner_cfg.kite.api_key.as_deref(),
+        runner_cfg.kite.api_secret.as_deref(),
+        runner_cfg.kite.access_token.as_deref(),
+        runner_cfg.kite.redirect_url.as_deref(),
+        kite_order_config(&runner_cfg),
+        Some(&broker_env_path),
+    )?;
+    Ok((runner_cfg_path, broker_env_path, kite))
+}
+
+async fn run_kite_account(args: KiteAccountArgs) {
+    let (runner_cfg_path, broker_env_path, kite) =
+        match load_kite_client_for_runner(args.runner_config.as_path()) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(1);
+            }
+        };
+    match kite.get_account(BrokerExecutionMode::Live).await {
+        Ok(account) => {
+            println!(
+                "runner_config={}\nenv_file={}\nstatus={}\nequity={}\nbuying_power={}\ntrading_blocked={}\naccount_blocked={}",
+                runner_cfg_path.display(),
+                broker_env_path.display(),
+                account.status,
+                account.equity,
+                account.buying_power,
+                account.trading_blocked,
+                account.account_blocked
+            );
+        }
+        Err(e) => {
+            error!(error = %e, "Kite account check failed");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run_kite_order(args: KiteOrderArgs) {
+    if !args.confirm_real_order {
+        error!(
+            "refusing to place Kite order without --confirm-real-order; this command sends real-money orders"
+        );
+        std::process::exit(1);
+    }
+    let side = args.side.trim().to_ascii_lowercase();
+    if side != "buy" && side != "sell" {
+        error!("--side must be buy or sell");
+        std::process::exit(1);
+    }
+    let (_, _, mut kite) = match load_kite_client_for_runner(args.runner_config.as_path()) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if let Some(order_variety) = args
+        .order_variety
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        let normalized = order_variety.to_ascii_lowercase();
+        if normalized != "regular" && normalized != "amo" {
+            error!("--order-variety must be regular or amo");
+            std::process::exit(1);
+        }
+        kite.order.order_variety = normalized;
+    }
+    let result = if let Some(trigger_price) = args.stop_trigger_price {
+        kite.place_stop_market_order(
+            &args.symbol,
+            args.qty,
+            side.as_str(),
+            trigger_price,
+            BrokerExecutionMode::Live,
+        )
+        .await
+    } else {
+        kite.place_order(
+            &args.symbol,
+            args.qty,
+            side.as_str(),
+            BrokerExecutionMode::Live,
+        )
+        .await
+    };
+    match result {
+        Ok(order) => {
+            println!(
+                "order_id={}\nstatus={}\nsymbol={}\nside={}\nqty={}",
+                order.id, order.status, order.symbol, order.side, order.qty
+            );
+        }
+        Err(e) => {
+            error!(error = %e, "Kite order placement failed");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run_freeze_basket_fits(args: BasketFitArgs) {
+    let (runner_cfg, runner_cfg_path) = match resolve_runner_config(args.runner_config.as_deref()) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+    apply_runner_config_env(&runner_cfg);
     let universe_path = args
         .universe
         .unwrap_or_else(|| PathBuf::from("config/basket_universe.toml"));
     let bars_dir = args.bars_dir.unwrap_or_else(|| {
-        std::env::var("QUANT_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_default();
-                PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
-            })
+        resolve_bars_dir_from_runner_config(&runner_cfg).unwrap_or_else(|| {
+            std::env::var("QUANT_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
+                })
+        })
     });
     let out = args
         .out
@@ -1484,6 +2410,81 @@ fn run_freeze_basket_fits(args: BasketFitArgs) {
             std::process::exit(1);
         })
     });
+    let universe = match basket_picker::load_universe(&universe_path) {
+        Ok(u) => u,
+        Err(e) => {
+            error!(error = %e, "failed to load basket universe");
+            std::process::exit(1);
+        }
+    };
+    let symbols: Vec<String> = {
+        let mut s: Vec<String> = universe
+            .sectors
+            .values()
+            .flat_map(|sec| sec.members.iter().cloned())
+            .collect();
+        s.sort();
+        s.dedup();
+        s
+    };
+    let missing_symbols = refresh::symbols_needing_refresh(
+        &bars_dir,
+        &symbols,
+        as_of.unwrap_or_else(|| chrono::Utc::now().date_naive()),
+    );
+    if !missing_symbols.is_empty() {
+        let bootstrap_start_date = parse_bootstrap_start_date(&runner_cfg);
+        let (provider, broker_env_path, history_client) =
+            match resolve_live_broker_client(&runner_cfg) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+        let target = as_of
+            .unwrap_or_else(|| chrono::Utc::now().date_naive())
+            .format("%Y-%m-%d")
+            .to_string();
+        info!(
+            runner_config = %runner_cfg_path.display(),
+            broker_provider = ?provider,
+            broker_env_file = %broker_env_path.display(),
+            target = target.as_str(),
+            missing_symbols = missing_symbols.len(),
+            "fit freeze backfilling missing universe parquets"
+        );
+        if let Err(e) = std::fs::create_dir_all(&bars_dir) {
+            error!(path = %bars_dir.display(), error = %e, "failed to create bars dir");
+            std::process::exit(1);
+        }
+        let refresh_result = match &history_client {
+            LiveBrokerClient::Alpaca(alpaca) => {
+                refresh::refresh_all(
+                    &bars_dir,
+                    &target,
+                    bootstrap_start_date,
+                    alpaca,
+                    Some(&missing_symbols),
+                )
+                .await
+            }
+            LiveBrokerClient::Kite(kite) => {
+                refresh::refresh_all(
+                    &bars_dir,
+                    &target,
+                    bootstrap_start_date,
+                    kite.as_ref(),
+                    Some(&missing_symbols),
+                )
+                .await
+            }
+        };
+        if let Err(e) = refresh_result {
+            error!(error = %e, "failed to backfill missing fit-freeze symbols");
+            std::process::exit(1);
+        }
+    }
 
     info!(
         universe = %universe_path.display(),
@@ -1536,14 +2537,15 @@ async fn run(
     data_dir: PathBuf,
     candidates: Option<PathBuf>,
     pipeline_profile: String,
+    runner_config_path: Option<PathBuf>,
     run_mode: RunMode,
 ) {
     // ── Log mode ──
     match &run_mode {
-        RunMode::Stream(ExecutionMode::Paper) => {
+        RunMode::Stream(BrokerExecutionMode::Paper) => {
             info!(config = %config_path.display(), "========== OPENQUANT PAPER MODE ==========");
         }
-        RunMode::Stream(ExecutionMode::Live) => {
+        RunMode::Stream(BrokerExecutionMode::Live) => {
             info!(config = %config_path.display(), "========== OPENQUANT LIVE MODE ==========");
             warn!("LIVE MODE — real money orders will be placed");
         }
@@ -1558,7 +2560,31 @@ async fn run(
     }
 
     // ── Load Alpaca client (all modes need it — data API or trading API) ──
-    let alpaca = match alpaca::AlpacaClient::from_env(&PathBuf::from(".env")) {
+    let (runner_cfg, runner_cfg_path) = match resolve_runner_config(runner_config_path.as_deref()) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+    apply_runner_config_env(&runner_cfg);
+    let broker_env_path = resolve_broker_env_file(&runner_cfg);
+    let broker_provider = resolve_broker_provider(&runner_cfg);
+    info!(
+        runner_config = %runner_cfg_path.display(),
+        broker_provider = ?broker_provider,
+        broker_env_file = %broker_env_path.display(),
+        "resolved runner configuration"
+    );
+    if let Err(e) = validate_legacy_stream_provider(&run_mode, broker_provider) {
+        error!("{e}");
+        std::process::exit(1);
+    }
+    let alpaca = match alpaca::AlpacaClient::from_values(
+        runner_cfg.alpaca.api_key.as_deref(),
+        runner_cfg.alpaca.secret_key.as_deref(),
+        Some(&broker_env_path),
+    ) {
         Ok(c) => c,
         Err(e) => {
             error!("{e}");
@@ -1572,8 +2598,14 @@ async fn run(
     // Live/paper needs fresh bars, but only for symbols in the active candidates file;
     // refreshing the other ~436 symbols in a 501-symbol universe is dead work.
     if matches!(run_mode, RunMode::Stream(_)) {
-        let bars_dir = refresh::default_bars_dir();
-        if bars_dir.exists() {
+        let bars_dir = resolve_bars_dir_from_runner_config(&runner_cfg)
+            .unwrap_or_else(refresh::default_bars_dir);
+        let bootstrap_start_date = parse_bootstrap_start_date(&runner_cfg);
+        if let Err(e) = std::fs::create_dir_all(&bars_dir) {
+            error!(path = %bars_dir.display(), error = %e, "failed to create bars dir");
+            std::process::exit(1);
+        }
+        {
             let filter = candidates.as_deref().and_then(load_symbols_from_candidates);
             let target = chrono::Utc::now().format("%Y-%m-%d").to_string();
             info!(
@@ -1581,7 +2613,15 @@ async fn run(
                 filter_count = filter.as_ref().map(Vec::len).unwrap_or(0),
                 "refreshing quant-data bars"
             );
-            match refresh::refresh_all(&bars_dir, &target, &alpaca, filter.as_deref()).await {
+            match refresh::refresh_all(
+                &bars_dir,
+                &target,
+                bootstrap_start_date,
+                &alpaca,
+                filter.as_deref(),
+            )
+            .await
+            {
                 Ok(n) if n > 0 => info!(bars = n, "quant-data refreshed"),
                 Ok(_) => info!("quant-data already up to date"),
                 Err(e) => warn!(
@@ -1589,8 +2629,6 @@ async fn run(
                     "quant-data refresh failed — continuing with stale data"
                 ),
             }
-        } else {
-            warn!(path = %bars_dir.display(), "quant-data dir not found — skipping refresh");
         }
     } else {
         info!("replay mode: skipping quant-data refresh (parquets are static)");
@@ -1636,7 +2674,7 @@ async fn run(
 
     // ── Initialize pairs engine ──
     let mut ptc = cfg_file.pairs_trading.clone();
-    ptc.tz_offset_hours = cfg_file.data.timezone_offset_hours;
+    ptc.tz_offset_hours = cfg_file.data.timezone_offset_minutes() / 60;
 
     let history_path = trading_dir.join("pair_trading_history.json");
 
@@ -1814,7 +2852,7 @@ async fn run_stream(
     alpaca: &alpaca::AlpacaClient,
     engine: &mut PairsEngine,
     symbols: &[String],
-    execution: ExecutionMode,
+    execution: BrokerExecutionMode,
 ) {
     info!("starting Alpaca real-time bar stream");
 
@@ -2124,6 +3162,14 @@ fn log_intent(intent: &openquant_core::pairs::PairOrderIntent, side: &str) {
 // entirely at the call site.
 
 async fn run_basket_replay_live_path(args: ReplayArgs) {
+    let (runner_cfg, runner_cfg_path) = match resolve_runner_config(args.runner_config.as_deref()) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+    apply_runner_config_env(&runner_cfg);
     let universe_path = args
         .universe
         .clone()
@@ -2134,12 +3180,14 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
         });
 
     let bars_dir = args.bars_dir.clone().unwrap_or_else(|| {
-        std::env::var("QUANT_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_default();
-                PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
-            })
+        resolve_bars_dir_from_runner_config(&runner_cfg).unwrap_or_else(|| {
+            std::env::var("QUANT_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    PathBuf::from(home).join("quant-data/bars/v3_sp500_2024-2026_1min_adjusted")
+                })
+        })
     });
 
     // Parse start/end.
@@ -2260,6 +3308,69 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     }
     let leadership_overlay = runtime.leadership_overlay;
 
+    let symbols: Vec<String> = {
+        let mut s: Vec<String> = universe
+            .sectors
+            .values()
+            .flat_map(|sec| sec.members.iter().cloned())
+            .collect();
+        s.sort();
+        s.dedup();
+        s
+    };
+
+    let missing_symbols = refresh::symbols_needing_refresh(&bars_dir, &symbols, end);
+    if !missing_symbols.is_empty() {
+        let bootstrap_start_date = parse_bootstrap_start_date(&runner_cfg);
+        let (provider, broker_env_path, history_client) =
+            match resolve_live_broker_client(&runner_cfg) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+        let target = end.format("%Y-%m-%d").to_string();
+        info!(
+            runner_config = %runner_cfg_path.display(),
+            broker_provider = ?provider,
+            broker_env_file = %broker_env_path.display(),
+            target = target.as_str(),
+            missing_symbols = missing_symbols.len(),
+            "replay backfilling missing universe parquets"
+        );
+        if let Err(e) = std::fs::create_dir_all(&bars_dir) {
+            error!(path = %bars_dir.display(), error = %e, "failed to create bars dir");
+            std::process::exit(1);
+        }
+        let refresh_result = match &history_client {
+            LiveBrokerClient::Alpaca(alpaca) => {
+                refresh::refresh_all(
+                    &bars_dir,
+                    &target,
+                    bootstrap_start_date,
+                    alpaca,
+                    Some(&missing_symbols),
+                )
+                .await
+            }
+            LiveBrokerClient::Kite(kite) => {
+                refresh::refresh_all(
+                    &bars_dir,
+                    &target,
+                    bootstrap_start_date,
+                    kite.as_ref(),
+                    Some(&missing_symbols),
+                )
+                .await
+            }
+        };
+        if let Err(e) = refresh_result {
+            error!(error = %e, "failed to backfill missing replay symbols");
+            std::process::exit(1);
+        }
+    }
+
     // Walk-forward fit: build the basket fit using data STRICTLY BEFORE
     // the replay window (`--start`). Without this, replay leaks future
     // information into the fit and produces fantasy Sharpe numbers
@@ -2279,17 +3390,6 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
                 std::process::exit(1);
             }
         };
-
-    let symbols: Vec<String> = {
-        let mut s: Vec<String> = universe
-            .sectors
-            .values()
-            .flat_map(|sec| sec.members.iter().cloned())
-            .collect();
-        s.sort();
-        s.dedup();
-        s
-    };
 
     info!(
         universe = %universe_path.display(),
@@ -2353,6 +3453,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
+            close_grace_min: basket_live::DEFAULT_CLOSE_GRACE_MIN,
         },
     )
     .await;
@@ -2520,5 +3621,87 @@ mod tests {
                 "data/state/basket_universe_buildout.fits.state.gate-rssv1-l60-m40-e1p00-f1-emz.json"
             )
         );
+    }
+
+    #[test]
+    fn kite_order_config_respects_toml_without_erasing_defaults() {
+        let mut cfg = RunnerConfig::default();
+        cfg.kite.product = Some("MIS".to_string());
+        cfg.kite.order_variety = Some("amo".to_string());
+        cfg.kite.market_protection = Some("".to_string());
+        cfg.kite.autoslice = Some(false);
+        cfg.kite.include_holdings = Some(true);
+        cfg.kite.tag_prefix = Some("oqindia".to_string());
+        cfg.market.open = Some("09:15".to_string());
+        cfg.market.close = Some("15:30".to_string());
+
+        let order = kite_order_config(&cfg);
+        assert_eq!(order.product, "MIS");
+        assert_eq!(order.order_variety, "amo");
+        assert_eq!(order.historical_open, "09:15");
+        assert_eq!(order.historical_close, "15:30");
+        assert_eq!(order.market_protection.as_deref(), Some("-1"));
+        assert!(!order.autoslice);
+        assert!(order.include_holdings);
+        assert_eq!(order.tag_prefix.as_deref(), Some("oqindia"));
+    }
+
+    #[test]
+    fn market_close_grace_defaults_and_respects_toml() {
+        let mut cfg = RunnerConfig::default();
+        assert_eq!(
+            resolve_market_close_grace_minutes(&cfg),
+            basket_live::DEFAULT_CLOSE_GRACE_MIN
+        );
+
+        cfg.market.close_grace_minutes = Some(35);
+        assert_eq!(resolve_market_close_grace_minutes(&cfg), 35);
+    }
+
+    #[test]
+    fn india_runner_profile_keeps_live_settings_in_toml() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("repo root");
+        let runner_cfg = RunnerConfig::load(&repo_root.join("config/runner.india.toml")).unwrap();
+        assert_eq!(resolve_broker_provider(&runner_cfg), BrokerProvider::Kite);
+        assert_eq!(
+            resolve_broker_env_file(&runner_cfg),
+            PathBuf::from(".env.india")
+        );
+
+        let order = kite_order_config(&runner_cfg);
+        assert_eq!(order.exchange, "NSE");
+        assert_eq!(order.product, "MIS");
+        assert_eq!(order.order_variety, "amo");
+        assert_eq!(order.historical_open, "09:15");
+        assert_eq!(order.historical_close, "15:30");
+        assert!(!order.autoslice);
+        assert_eq!(resolve_market_close_grace_minutes(&runner_cfg), 35);
+
+        let universe = basket_picker::load_universe(
+            &repo_root.join("config/basket_universe_india.template.toml"),
+        )
+        .unwrap();
+        assert_eq!(universe.runner.portfolio.capital, 10_000.0);
+    }
+
+    #[test]
+    fn legacy_stream_rejects_kite_provider_explicitly() {
+        let mode = RunMode::Stream(BrokerExecutionMode::Paper);
+        let err = validate_legacy_stream_provider(&mode, BrokerProvider::Kite).unwrap_err();
+        assert!(err.contains("legacy pairs stream path still requires Alpaca"));
+        assert!(validate_legacy_stream_provider(&mode, BrokerProvider::Alpaca).is_ok());
+    }
+
+    #[test]
+    fn replay_mode_does_not_reject_kite_runner_config() {
+        let mode = RunMode::Replay {
+            start: "2026-01-01".to_string(),
+            end: "2026-01-31".to_string(),
+            bar_cache: None,
+        };
+        assert!(validate_legacy_stream_provider(&mode, BrokerProvider::Kite).is_ok());
     }
 }

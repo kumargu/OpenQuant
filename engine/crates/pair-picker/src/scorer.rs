@@ -579,7 +579,7 @@ mod tests {
                     for r2 in [0.5, 0.8, 0.95] {
                         let s = compute_score(p, hl, cv, r2, false);
                         assert!(
-                            s >= 0.0 && s <= 1.0,
+                            (0.0..=1.0).contains(&s),
                             "p={p}, hl={hl}, cv={cv}, r2={r2}, s={s}"
                         );
                     }

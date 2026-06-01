@@ -7,6 +7,7 @@
 
 use tokio::sync::mpsc;
 
+use crate::kite::KiteClient;
 use crate::stream::{self, StreamBar};
 
 /// Abstraction over the bar feed.
@@ -39,5 +40,22 @@ impl AlpacaBarSource {
 impl BarSource for AlpacaBarSource {
     async fn start(&self, symbols: &[String]) -> mpsc::Receiver<StreamBar> {
         stream::start_bar_stream(&self.api_key, &self.api_secret, symbols).await
+    }
+}
+
+/// Kite WebSocket source. The client aggregates Kite ticks into minute bars.
+pub struct KiteBarSource {
+    client: KiteClient,
+}
+
+impl KiteBarSource {
+    pub fn new(client: KiteClient) -> Self {
+        Self { client }
+    }
+}
+
+impl BarSource for KiteBarSource {
+    async fn start(&self, symbols: &[String]) -> mpsc::Receiver<StreamBar> {
+        self.client.start_bar_stream(symbols).await
     }
 }

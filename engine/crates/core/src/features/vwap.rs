@@ -21,7 +21,7 @@ pub struct VwapState {
     dev_stats: RollingStats, // rolling std of (close - vwap)
     last_day: Option<i32>,   // day ordinal for session reset detection
     bar_count: usize,
-    /// Timezone offset in milliseconds (from DataConfig::timezone_offset_hours).
+    /// Timezone offset in milliseconds.
     tz_offset_ms: i64,
 }
 
@@ -41,19 +41,19 @@ pub struct VwapValues {
 
 impl Default for VwapState {
     fn default() -> Self {
-        Self::new(-5) // default to US Eastern
+        Self::new(-300) // default to US Eastern
     }
 }
 
 impl VwapState {
-    pub fn new(timezone_offset_hours: i32) -> Self {
+    pub fn new(timezone_offset_minutes: i32) -> Self {
         Self {
             cum_tp_vol: 0.0,
             cum_vol: 0.0,
             dev_stats: RollingStats::new(32),
             last_day: None,
             bar_count: 0,
-            tz_offset_ms: timezone_offset_hours as i64 * 3600 * 1000,
+            tz_offset_ms: timezone_offset_minutes as i64 * 60 * 1000,
         }
     }
 

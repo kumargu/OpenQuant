@@ -116,7 +116,7 @@ pub fn new_replay_components(
 ) -> ReplayComponents {
     // Initial clock = start of the first session in the window. Updated
     // by the emitter task as bars flow.
-    let initial_dt = Utc.from_utc_datetime(&start.and_hms_opt(13, 30, 0).expect("valid hms"));
+    let initial_dt = market_session::open_datetime_utc_for_day(start);
     let (clock, session_trigger, channels) = make_replay_clock_and_trigger(initial_dt);
 
     let closes: SharedCloses = Arc::new(StdRwLock::new(HashMap::new()));

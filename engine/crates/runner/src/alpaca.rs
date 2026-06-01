@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{error, info};
 
+use crate::broker::{BrokerAccount, BrokerExecutionMode, BrokerOrder};
 use crate::market_session;
 
 const DATA_URL_DEFAULT: &str = "https://data.alpaca.markets/v2/stocks/bars";
@@ -17,17 +18,7 @@ fn data_url() -> String {
     std::env::var("ALPACA_DATA_URL").unwrap_or_else(|_| DATA_URL_DEFAULT.to_string())
 }
 
-/// Alpaca execution mode — controls the trading API endpoint.
-/// Replay mode never calls place_order, so it doesn't need a variant here.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExecutionMode {
-    /// paper-api.alpaca.markets
-    Paper,
-    /// api.alpaca.markets (real money)
-    Live,
-}
-
-impl ExecutionMode {
+impl BrokerExecutionMode {
     fn trading_url(self) -> &'static str {
         match self {
             Self::Paper => "https://paper-api.alpaca.markets/v2",
@@ -68,27 +59,6 @@ pub struct AlpacaBarsResponse {
     pub next_page_token: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct AlpacaOrder {
-    pub id: String,
-    pub status: String,
-    pub symbol: String,
-    pub side: String,
-    pub qty: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AlpacaAccount {
-    pub status: String,
-    pub buying_power: String,
-    pub equity: String,
-    #[serde(default)]
-    pub trading_blocked: bool,
-    #[serde(default)]
-    pub account_blocked: bool,
-}
-
 impl AlpacaClient {
     pub fn new(api_key: String, api_secret: String) -> Self {
         Self {
@@ -106,6 +76,22 @@ impl AlpacaClient {
             return Err("ALPACA_API_KEY or ALPACA_SECRET_KEY missing from .env".into());
         }
         Ok(Self::new(api_key, api_secret))
+    }
+
+    pub fn from_values(
+        api_key: Option<&str>,
+        api_secret: Option<&str>,
+        env_path: Option<&std::path::Path>,
+    ) -> Result<Self, String> {
+        match (api_key, api_secret) {
+            (Some(key), Some(secret)) if !key.is_empty() && !secret.is_empty() => {
+                Ok(Self::new(key.to_string(), secret.to_string()))
+            }
+            _ => {
+                let path = env_path.unwrap_or_else(|| std::path::Path::new(".env"));
+                Self::from_env(path)
+            }
+        }
     }
 
     /// Aggregate 1-min bars to daily RTH close (last tick per session day).
@@ -395,8 +381,8 @@ impl AlpacaClient {
         symbol: &str,
         qty: f64,
         side: &str,
-        execution: ExecutionMode,
-    ) -> Result<AlpacaOrder, String> {
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String> {
         let url = format!("{}/orders", execution.trading_url());
         let body = serde_json::json!({
             "symbol": symbol,
@@ -425,7 +411,7 @@ impl AlpacaClient {
             return Err(format!("order rejected {status}: {body}"));
         }
 
-        let order: AlpacaOrder = response
+        let order: BrokerOrder = response
             .json()
             .await
             .map_err(|e| format!("order response parse failed: {e}"))?;
@@ -444,7 +430,7 @@ impl AlpacaClient {
     /// Returns map of symbol → (qty, avg_entry_price). Positive qty = long.
     pub async fn get_positions(
         &self,
-        execution: ExecutionMode,
+        execution: BrokerExecutionMode,
     ) -> Result<HashMap<String, (f64, f64)>, String> {
         let url = format!("{}/positions", execution.trading_url());
         let response = self
@@ -487,7 +473,10 @@ impl AlpacaClient {
         Ok(map)
     }
 
-    pub async fn get_account(&self, execution: ExecutionMode) -> Result<AlpacaAccount, String> {
+    pub async fn get_account(
+        &self,
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerAccount, String> {
         let url = format!("{}/account", execution.trading_url());
         let response = self
             .http
@@ -504,7 +493,7 @@ impl AlpacaClient {
             return Err(format!("account API error {status}: {body}"));
         }
 
-        let account: AlpacaAccount = response
+        let account: BrokerAccount = response
             .json()
             .await
             .map_err(|e| format!("account parse failed: {e}"))?;
