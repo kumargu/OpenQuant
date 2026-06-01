@@ -18,7 +18,7 @@ order_variety = "amo"
 order_type = "MARKET"
 validity = "DAY"
 market_protection = "-1"
-autoslice = true
+autoslice = false
 include_holdings = false
 tag_prefix = "oqindia"
 

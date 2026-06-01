@@ -467,8 +467,10 @@ impl KiteClient {
             ("quantity", quantity.to_string()),
             ("product", self.order.product.clone()),
             ("validity", self.order.validity.clone()),
-            ("autoslice", self.order.autoslice.to_string()),
         ];
+        if self.order.autoslice {
+            form.push(("autoslice", "true".to_string()));
+        }
         if let Some(trigger_price) = trigger_price {
             form.push(("trigger_price", format!("{trigger_price:.2}")));
         }
@@ -1358,6 +1360,20 @@ mod tests {
             Some("98.25")
         );
         assert_eq!(client.order.order_type, "MARKET");
+    }
+
+    #[test]
+    fn order_form_omits_autoslice_unless_enabled() {
+        let mut client = KiteClient::new("key".into(), "secret".into(), Some("token".into()));
+        client.order.autoslice = false;
+        let form = client.build_order_form("TESTEQ", 1, "BUY", None, None);
+        assert!(!form.iter().any(|(key, _)| *key == "autoslice"));
+
+        client.order.autoslice = true;
+        let form = client.build_order_form("TESTEQ", 1, "BUY", None, None);
+        assert!(form
+            .iter()
+            .any(|(key, value)| *key == "autoslice" && value == "true"));
     }
 
     #[test]
