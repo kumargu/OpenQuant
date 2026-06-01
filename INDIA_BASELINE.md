@@ -78,8 +78,10 @@ engine/target/release/openquant-runner replay \
 ## Live Smoke
 
 Live starts small with the India universe default capital of INR 10,000. The
-Kite profile uses `order_variety = "amo"`, so session-close orders are submitted
-for next-session execution and then reconciled at the next NSE open.
+Kite profile uses `order_variety = "amo"` and `close_grace_minutes = 35`, so
+session-close orders are submitted around 16:05 IST for next-session execution
+and then reconciled at the next NSE open. This avoids submitting AMOs during
+the 15:30-16:00 post-close interval, when Zerodha may still reject AMO orders.
 
 ```bash
 engine/target/release/openquant-runner live \

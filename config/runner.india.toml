@@ -28,6 +28,7 @@ tz = "Asia/Kolkata"
 open = "09:15"
 close = "15:30"
 calendar = "weekdays"
+close_grace_minutes = 35
 
 [data]
 bars_dir = "~/quant-data/india/bars/2026_phase1_1min"

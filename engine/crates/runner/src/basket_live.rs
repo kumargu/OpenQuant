@@ -124,6 +124,7 @@ pub struct BasketRunOptions {
     pub rule_v1_config: Option<crate::basket_overlay_picker::RuleV1OverlayPickerConfig>,
     pub gate_policy: GatePolicyKind,
     pub supported_reallocation_band_config: SupportedReallocationBandConfig,
+    pub close_grace_min: u32,
 }
 
 impl Default for BasketRunOptions {
@@ -136,6 +137,7 @@ impl Default for BasketRunOptions {
             rule_v1_config: None,
             gate_policy: GatePolicyKind::BertramFrozen,
             supported_reallocation_band_config: SupportedReallocationBandConfig::default(),
+            close_grace_min: DEFAULT_CLOSE_GRACE_MIN,
         }
     }
 }
@@ -218,13 +220,10 @@ impl Default for SupportedReallocationBandConfig {
     }
 }
 
-// Grace period after session close before firing the engine. Lets
-// late-arriving final-RTH-minute bars land in the buffer.
-//
-// The `clock` and `session_trigger` parameters MUST agree on this value:
-// `IntervalSessionTrigger` is constructed with the same constant in
-// `main.rs`. If they diverge, replay/live cadence drifts.
-const CLOSE_GRACE_MIN: u32 = 2;
+// Default grace period after session close before firing the engine. Lets
+// late-arriving final-RTH-minute bars land in the buffer. Runner profiles may
+// override this for broker-specific order windows, e.g. NSE equity AMO.
+pub const DEFAULT_CLOSE_GRACE_MIN: u32 = 2;
 const BROKER_QTY_EPSILON: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2360,7 +2359,8 @@ pub async fn run_basket_live(
             Err(e) => return Err(e),
         };
 
-    let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
+    let close_grace_min = options.close_grace_min;
+    let startup_phase = classify_startup_phase(now, last_processed_trading_day, close_grace_min);
     let journal = match options.journal_path.as_deref() {
         Some(path) => Some(BasketJournal::open(path)?),
         None => None,
@@ -2442,7 +2442,7 @@ pub async fn run_basket_live(
     }
 
     if market_session::is_trading_day(today)
-        && market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN)
+        && market_session::is_after_close_grace_utc(now, close_grace_min)
         && last_processed_trading_day != Some(today)
     {
         let catchup_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
@@ -2625,7 +2625,7 @@ pub async fn run_basket_live(
                 let now = clock.now();
                 let today = market_session::trading_day_utc(now);
                 let in_rth = market_session::is_rth_utc(now);
-                let past_close = market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN);
+                let past_close = market_session::is_after_close_grace_utc(now, close_grace_min);
                 let buffered_today = day_closes.get(&today).map(|m| m.len()).unwrap_or(0);
                 let last_bar_age_s = if last_bar_rx_ts_ms == 0 {
                     -1i64

@@ -42,6 +42,7 @@ tz = "Asia/Kolkata"
 open = "09:15"
 close = "15:30"
 calendar = "weekdays"
+close_grace_minutes = 35
 ```
 
 Direct selection:
@@ -77,7 +78,8 @@ openquant-runner kite-login \
 
 India live smoke run uses the India TOML profile and keeps capital at the
 universe default of INR 10,000. The profile uses Kite `amo` orders so the
-session-close basket decision can reconcile at the next NSE open.
+session-close basket decision can reconcile at the next NSE open. India sets a
+35-minute close grace so live AMO submission waits until about 16:05 IST.
 
 ```bash
 openquant-runner live \

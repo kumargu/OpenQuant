@@ -117,6 +117,7 @@ struct RunnerMarketConfig {
     open: Option<String>,
     close: Option<String>,
     calendar: Option<String>,
+    close_grace_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -1138,6 +1139,12 @@ fn resolve_stream_execution(
     }
 }
 
+fn resolve_market_close_grace_minutes(cfg: &RunnerConfig) -> u32 {
+    cfg.market
+        .close_grace_minutes
+        .unwrap_or(basket_live::DEFAULT_CLOSE_GRACE_MIN)
+}
+
 fn rule_v1_picker_config_from_universe(
     cfg: &UniverseRuleV1OverlayConfig,
 ) -> basket_overlay_picker::RuleV1OverlayPickerConfig {
@@ -1987,10 +1994,17 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     };
 
     // Live/paper use wall-clock time and a 30s polling session trigger.
-    // Replay (#294c-2) will swap these for bar-driven equivalents. Keep
-    // the grace constant in sync with `basket_live::CLOSE_GRACE_MIN`.
+    // Replay uses bar-driven equivalents. Keep this value in sync with
+    // BasketRunOptions so startup catch-up and heartbeats classify the
+    // same post-close boundary as the trigger.
     let clock = clock::SystemClock;
-    let mut session_trigger = session_trigger::IntervalSessionTrigger::new(clock::SystemClock, 2);
+    let close_grace_minutes = resolve_market_close_grace_minutes(&runner_cfg);
+    info!(
+        close_grace_minutes,
+        "configured live/paper session-close grace"
+    );
+    let mut session_trigger =
+        session_trigger::IntervalSessionTrigger::new(clock::SystemClock, close_grace_minutes);
     let basket_journal_path = args.basket_journal_path.clone().unwrap_or_else(|| {
         let base = args.data_dir.join("journal").join("basket_live.sqlite3");
         match overlay_fingerprint.as_deref() {
@@ -2017,6 +2031,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
+            close_grace_min: close_grace_minutes,
         },
     )
     .await
@@ -3396,6 +3411,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
+            close_grace_min: basket_live::DEFAULT_CLOSE_GRACE_MIN,
         },
     )
     .await;
@@ -3586,5 +3602,17 @@ mod tests {
         assert!(!order.autoslice);
         assert!(order.include_holdings);
         assert_eq!(order.tag_prefix.as_deref(), Some("oqindia"));
+    }
+
+    #[test]
+    fn market_close_grace_defaults_and_respects_toml() {
+        let mut cfg = RunnerConfig::default();
+        assert_eq!(
+            resolve_market_close_grace_minutes(&cfg),
+            basket_live::DEFAULT_CLOSE_GRACE_MIN
+        );
+
+        cfg.market.close_grace_minutes = Some(35);
+        assert_eq!(resolve_market_close_grace_minutes(&cfg), 35);
     }
 }
