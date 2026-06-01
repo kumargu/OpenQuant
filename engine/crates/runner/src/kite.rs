@@ -1,9 +1,10 @@
 //! Zerodha Kite execution, history, auth, and streaming adapter.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use chrono::TimeZone;
@@ -11,8 +12,8 @@ use chrono::{NaiveDate, Utc};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
+use tokio::sync::{mpsc, Mutex};
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
 use tracing::{debug, error, info, warn};
 
 use crate::broker::{BrokerAccount, BrokerExecutionMode, BrokerOrder, SessionCloseFillContract};
@@ -26,6 +27,7 @@ const DEFAULT_REDIRECT_URL: &str = "http://localhost:8080/kite/callback";
 const MINUTE_MS: i64 = 60_000;
 const STREAM_HEARTBEAT_SECS: u64 = 60;
 const STREAM_READ_TIMEOUT_SECS: u64 = 90;
+const INSTRUMENT_FAILURE_BACKOFF_SECS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct KiteOrderConfig {
@@ -70,6 +72,13 @@ pub struct KiteClient {
     http: reqwest::Client,
     api_base_url: String,
     ws_url: String,
+    instrument_cache: Arc<Mutex<KiteInstrumentCache>>,
+}
+
+#[derive(Default)]
+struct KiteInstrumentCache {
+    tokens: Option<HashMap<String, String>>,
+    last_error: Option<(Instant, String)>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -248,6 +257,7 @@ impl KiteClient {
             http: reqwest::Client::new(),
             api_base_url: KITE_API_BASE.to_string(),
             ws_url: KITE_WS_URL.to_string(),
+            instrument_cache: Arc::new(Mutex::new(KiteInstrumentCache::default())),
         }
     }
 
@@ -635,22 +645,39 @@ impl KiteClient {
         let symbols = symbols.to_vec();
         tokio::spawn(async move {
             let mut reconnect_count: u64 = 0;
+            let (token_to_symbol, tokens) = loop {
+                match client.resolve_stream_tokens(&symbols).await {
+                    Ok(v) => break v,
+                    Err(e) => {
+                        metrics::counter!("kite.stream.token_resolve", "result" => "error")
+                            .increment(1);
+                        error!("Kite stream token resolution failed: {e}; retrying in 60s");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                    }
+                }
+            };
             loop {
                 info!(reconnect_count, "connecting to Kite stream");
-                match client.run_stream_once(&symbols, &tx).await {
+                match client
+                    .run_stream_once_with_tokens(token_to_symbol.clone(), tokens.clone(), &tx)
+                    .await
+                {
                     Ok(()) => {
                         metrics::counter!("kite.stream.reconnect", "reason" => "closed")
                             .increment(1);
-                        warn!("Kite stream closed; reconnecting in 5s");
+                        warn!("Kite stream closed; reconnecting after backoff");
                     }
                     Err(e) => {
                         metrics::counter!("kite.stream.reconnect", "reason" => "error")
                             .increment(1);
-                        error!("Kite stream error: {e}; reconnecting in 5s");
+                        error!("Kite stream error: {e}; reconnecting after backoff");
                     }
                 }
                 reconnect_count += 1;
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(
+                    kite_stream_reconnect_delay_secs(reconnect_count),
+                ))
+                .await;
             }
         });
         rx
@@ -687,41 +714,89 @@ impl KiteClient {
         &self,
         symbols: &[String],
     ) -> Result<HashMap<String, String>, String> {
-        let response = self
+        let mut cache = self.instrument_cache.lock().await;
+        if let Some(tokens) = cache.tokens.as_ref() {
+            return filter_instrument_tokens(symbols, tokens);
+        }
+        if let Some((at, _error)) = cache.last_error.as_ref() {
+            let elapsed = at.elapsed();
+            if elapsed < Duration::from_secs(INSTRUMENT_FAILURE_BACKOFF_SECS) {
+                return Err(format!(
+                    "Kite instruments temporarily unavailable after recent failure; suppressing refetch for another {}s",
+                    INSTRUMENT_FAILURE_BACKOFF_SECS.saturating_sub(elapsed.as_secs())
+                ));
+            }
+        }
+        let response = match self
             .http
             .get(format!("{}/instruments", self.api_base_url))
             .header("X-Kite-Version", KITE_VERSION)
             .header("Authorization", self.auth_header()?)
             .send()
             .await
-            .map_err(|e| format!("kite instruments request failed: {e}"))?;
-        let csv = parse_kite_text(response, "kite instruments").await?;
-        resolve_tokens_from_csv(&csv, symbols, &self.order.exchange)
+        {
+            Ok(response) => response,
+            Err(e) => {
+                let error = format!("kite instruments request failed: {e}");
+                cache.last_error = Some((Instant::now(), error.clone()));
+                return Err(error);
+            }
+        };
+        let csv = match parse_kite_text(response, "kite instruments").await {
+            Ok(csv) => csv,
+            Err(e) => {
+                cache.last_error = Some((Instant::now(), e.clone()));
+                return Err(e);
+            }
+        };
+        let tokens = match resolve_tokens_from_csv(&csv, &self.order.exchange) {
+            Ok(tokens) => tokens,
+            Err(e) => {
+                cache.last_error = Some((Instant::now(), e.clone()));
+                return Err(e);
+            }
+        };
+        cache.tokens = Some(tokens);
+        cache.last_error = None;
+        filter_instrument_tokens(
+            symbols,
+            cache.tokens.as_ref().expect("instrument cache set"),
+        )
     }
 
-    async fn run_stream_once(
+    async fn resolve_stream_tokens(
         &self,
         symbols: &[String],
+    ) -> Result<(HashMap<u32, String>, Vec<u32>), String> {
+        let token_map = self.resolve_instrument_tokens(symbols).await?;
+        stream_tokens_from_map(symbols, &token_map)
+    }
+
+    async fn run_stream_once_with_tokens(
+        &self,
+        token_to_symbol: HashMap<u32, String>,
+        tokens: Vec<u32>,
         tx: &mpsc::Sender<StreamBar>,
     ) -> Result<(), String> {
-        let token_map = self.resolve_instrument_tokens(symbols).await?;
-        let mut token_to_symbol = HashMap::new();
-        let mut tokens = Vec::new();
-        for symbol in symbols {
-            let token = token_map
-                .get(symbol)
-                .ok_or_else(|| format!("instrument token not found for {symbol}"))?
-                .parse::<u32>()
-                .map_err(|e| format!("bad instrument token for {symbol}: {e}"))?;
-            token_to_symbol.insert(token, symbol.clone());
-            tokens.push(token);
-        }
         let access_token = self.access_token()?;
         let url = format!(
-            "{}?api_key={}&access_token={}",
-            self.ws_url, self.api_key, access_token
+            "{}?api_key={}&access_token={}&uid={}",
+            self.ws_url,
+            self.api_key,
+            access_token,
+            Utc::now().timestamp_millis()
         );
-        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| format!("Kite WebSocket request build failed: {e}"))?;
+        request
+            .headers_mut()
+            .insert("X-Kite-Version", HeaderValue::from_static(KITE_VERSION));
+        request.headers_mut().insert(
+            "User-Agent",
+            HeaderValue::from_static("openquant-runner/0.1"),
+        );
+        let (ws_stream, _) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(|e| format!("Kite WebSocket connect failed: {e}"))?;
         let (mut write, mut read) = ws_stream.split();
@@ -738,7 +813,7 @@ impl KiteClient {
             .await
             .map_err(|e| format!("Kite mode send failed: {e}"))?;
         info!(
-            symbols = symbols.len(),
+            symbols = token_to_symbol.len(),
             "subscribed to Kite full quote stream"
         );
 
@@ -1030,12 +1105,7 @@ fn historical_request_window(
     )
 }
 
-fn resolve_tokens_from_csv(
-    csv: &str,
-    symbols: &[String],
-    exchange: &str,
-) -> Result<HashMap<String, String>, String> {
-    let wanted: HashSet<&str> = symbols.iter().map(String::as_str).collect();
+fn resolve_tokens_from_csv(csv: &str, exchange: &str) -> Result<HashMap<String, String>, String> {
     let mut map = HashMap::new();
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(true)
@@ -1048,11 +1118,50 @@ fn resolve_tokens_from_csv(
         if row.exchange != exchange || row.segment != exchange || row.instrument_type != "EQ" {
             continue;
         }
-        if wanted.contains(row.tradingsymbol.as_str()) {
-            map.insert(row.tradingsymbol, row.instrument_token);
-        }
+        map.insert(row.tradingsymbol, row.instrument_token);
     }
     Ok(map)
+}
+
+fn filter_instrument_tokens(
+    symbols: &[String],
+    token_map: &HashMap<String, String>,
+) -> Result<HashMap<String, String>, String> {
+    let mut out = HashMap::new();
+    for symbol in symbols {
+        let token = token_map
+            .get(symbol)
+            .ok_or_else(|| format!("instrument token not found for {symbol}"))?;
+        out.insert(symbol.clone(), token.clone());
+    }
+    Ok(out)
+}
+
+fn stream_tokens_from_map(
+    symbols: &[String],
+    token_map: &HashMap<String, String>,
+) -> Result<(HashMap<u32, String>, Vec<u32>), String> {
+    let mut token_to_symbol = HashMap::new();
+    let mut tokens = Vec::new();
+    for symbol in symbols {
+        let token = token_map
+            .get(symbol)
+            .ok_or_else(|| format!("instrument token not found for {symbol}"))?
+            .parse::<u32>()
+            .map_err(|e| format!("bad instrument token for {symbol}: {e}"))?;
+        token_to_symbol.insert(token, symbol.clone());
+        tokens.push(token);
+    }
+    Ok((token_to_symbol, tokens))
+}
+
+fn kite_stream_reconnect_delay_secs(reconnect_count: u64) -> u64 {
+    match reconnect_count {
+        0 | 1 => 5,
+        2 => 10,
+        3 => 20,
+        _ => 60,
+    }
 }
 
 fn merge_position(map: &mut HashMap<String, (f64, f64)>, symbol: String, qty: f64, avg: f64) {
@@ -1437,8 +1546,60 @@ mod tests {
     #[test]
     fn filters_nse_equity_tokens_from_csv() {
         let csv = "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange\n1,1,TESTEQ,TESTEQ,0,,0,0.05,1,EQ,NSE,NSE\n2,2,TESTEQ,TESTEQ,0,,0,0.05,1,EQ,BSE,BSE\n3,3,INDEXEQ,INDEXEQ,0,,0,0.05,1,EQ,INDICES,NSE\n";
-        let map = resolve_tokens_from_csv(csv, &["TESTEQ".to_string()], "NSE").unwrap();
+        let map = resolve_tokens_from_csv(csv, "NSE").unwrap();
         assert_eq!(map.get("TESTEQ").map(String::as_str), Some("1"));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn filters_cached_instrument_tokens_to_requested_symbols() {
+        let mut map = HashMap::new();
+        map.insert("TESTEQ".to_string(), "123".to_string());
+        map.insert("OTHEREQ".to_string(), "456".to_string());
+        let filtered = filter_instrument_tokens(&["TESTEQ".to_string()], &map).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered.get("TESTEQ").map(String::as_str), Some("123"));
+    }
+
+    #[test]
+    fn stream_tokens_are_reused_without_refetching_instruments() {
+        let mut map = HashMap::new();
+        map.insert("TESTEQ".to_string(), "123".to_string());
+        let (token_to_symbol, tokens) =
+            stream_tokens_from_map(&["TESTEQ".to_string()], &map).expect("stream tokens");
+        assert_eq!(tokens, vec![123]);
+        assert_eq!(
+            token_to_symbol.get(&123).map(String::as_str),
+            Some("TESTEQ")
+        );
+    }
+
+    #[test]
+    fn kite_stream_reconnect_backoff_caps_at_sixty_seconds() {
+        assert_eq!(kite_stream_reconnect_delay_secs(1), 5);
+        assert_eq!(kite_stream_reconnect_delay_secs(2), 10);
+        assert_eq!(kite_stream_reconnect_delay_secs(3), 20);
+        assert_eq!(kite_stream_reconnect_delay_secs(4), 60);
+        assert_eq!(kite_stream_reconnect_delay_secs(99), 60);
+    }
+
+    #[tokio::test]
+    async fn instrument_resolution_suppresses_recent_failure_without_refetch() {
+        let client = KiteClient::new(
+            "key".to_string(),
+            "secret".to_string(),
+            Some("token".into()),
+        );
+        {
+            let mut cache = client.instrument_cache.lock().await;
+            cache.last_error = Some((Instant::now(), "previous failure".to_string()));
+        }
+
+        let error = client
+            .resolve_instrument_tokens(&["TESTEQ".to_string()])
+            .await
+            .unwrap_err();
+        assert!(error.contains("suppressing refetch"));
     }
 
     #[test]

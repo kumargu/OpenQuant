@@ -2691,17 +2691,35 @@ pub async fn run_basket_live(
                         );
                         break 'session;
                     }
-                    let closes_for_day = day_closes.remove(&today).unwrap_or_default();
+                    let mut closes_for_day = day_closes.remove(&today).unwrap_or_default();
                     open_reconcile_ready_symbols.remove(&today);
-                    if closes_for_day.is_empty() {
-                        if !market_session::is_trading_day(today) {
+                    if !market_session::is_trading_day(today) && closes_for_day.is_empty() {
+                        info!(
+                            date = %today,
+                            "session close grace elapsed on non-trading day with zero buffered closes — marking processed"
+                        );
+                        processed_sessions.insert(today);
+                        break 'session;
+                    }
+                    if closes_for_day.len() < symbols_expected {
+                        let parquet_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
+                        let before = closes_for_day.len();
+                        for (symbol, close) in parquet_closes {
+                            closes_for_day.entry(symbol).or_insert(close);
+                        }
+                        let added = closes_for_day.len().saturating_sub(before);
+                        if added > 0 {
                             info!(
                                 date = %today,
-                                "session close grace elapsed on non-trading day with zero buffered closes — marking processed"
+                                buffered_before = before,
+                                added_from_parquet = added,
+                                closes_after = closes_for_day.len(),
+                                symbols_expected,
+                                "filled session close snapshot from refreshed parquet"
                             );
-                            processed_sessions.insert(today);
-                            break 'session;
                         }
+                    }
+                    if closes_for_day.is_empty() {
                         bug!(
                             "zero_buffered_closes_on_trading_day",
                             date = %today,

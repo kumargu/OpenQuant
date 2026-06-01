@@ -91,6 +91,9 @@ engine/target/release/openquant-runner live \
   --disable-leadership-overlay
 ```
 
+Use the default journals unless a debugging run needs isolation:
+`data/journal/engine.log` daily files for application logs and
+`data/journal/basket_live.sqlite3` for basket decisions, positions, and orders.
 Use `paper --execution noop` with the same runner/universe for a dry operational
 check. Kite does not provide a paper endpoint, and the adapter fails closed for
 `paper` execution.
