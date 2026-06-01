@@ -1,8 +1,9 @@
 //! Zerodha Kite execution, history, auth, and streaming adapter.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -27,7 +28,7 @@ const DEFAULT_REDIRECT_URL: &str = "http://localhost:8080/kite/callback";
 const MINUTE_MS: i64 = 60_000;
 const STREAM_HEARTBEAT_SECS: u64 = 60;
 const STREAM_READ_TIMEOUT_SECS: u64 = 90;
-const INSTRUMENT_FAILURE_BACKOFF_SECS: u64 = 60;
+const INSTRUMENT_FAILURE_BACKOFF_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct KiteOrderConfig {
@@ -651,8 +652,14 @@ impl KiteClient {
                     Err(e) => {
                         metrics::counter!("kite.stream.token_resolve", "result" => "error")
                             .increment(1);
-                        error!("Kite stream token resolution failed: {e}; retrying in 60s");
-                        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                        error!(
+                            "Kite stream token resolution failed: {e}; retrying in {}s",
+                            INSTRUMENT_FAILURE_BACKOFF_SECS
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_secs(
+                            INSTRUMENT_FAILURE_BACKOFF_SECS,
+                        ))
+                        .await;
                     }
                 }
             };
@@ -718,6 +725,27 @@ impl KiteClient {
         if let Some(tokens) = cache.tokens.as_ref() {
             return filter_instrument_tokens(symbols, tokens);
         }
+        if let Some(tokens) = load_cached_instrument_tokens(&self.order.exchange) {
+            match filter_instrument_tokens(symbols, &tokens) {
+                Ok(filtered) => {
+                    info!(
+                        exchange = self.order.exchange.as_str(),
+                        symbols = filtered.len(),
+                        "loaded Kite instrument tokens from disk cache"
+                    );
+                    cache.tokens = Some(tokens);
+                    cache.last_error = None;
+                    return Ok(filtered);
+                }
+                Err(e) => {
+                    warn!(
+                        error = e.as_str(),
+                        exchange = self.order.exchange.as_str(),
+                        "Kite instrument disk cache incomplete; refetching instruments"
+                    );
+                }
+            }
+        }
         if let Some((at, _error)) = cache.last_error.as_ref() {
             let elapsed = at.elapsed();
             if elapsed < Duration::from_secs(INSTRUMENT_FAILURE_BACKOFF_SECS) {
@@ -756,6 +784,7 @@ impl KiteClient {
                 return Err(e);
             }
         };
+        persist_instrument_cache(&self.order.exchange, &csv);
         cache.tokens = Some(tokens);
         cache.last_error = None;
         filter_instrument_tokens(
@@ -1121,6 +1150,84 @@ fn resolve_tokens_from_csv(csv: &str, exchange: &str) -> Result<HashMap<String, 
         map.insert(row.tradingsymbol, row.instrument_token);
     }
     Ok(map)
+}
+
+fn kite_instrument_cache_path_in(base_dir: &Path, exchange: &str) -> PathBuf {
+    let exchange = exchange
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    base_dir
+        .join("data/cache/kite")
+        .join(format!("instruments_{exchange}.csv"))
+}
+
+fn persist_instrument_cache(exchange: &str, csv: &str) {
+    persist_instrument_cache_at(Path::new("."), exchange, csv);
+}
+
+fn persist_instrument_cache_at(base_dir: &Path, exchange: &str, csv: &str) {
+    let path = kite_instrument_cache_path_in(base_dir, exchange);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            warn!(
+                path = %parent.display(),
+                error = %e,
+                "failed to create Kite instrument cache directory"
+            );
+            return;
+        }
+    }
+    if let Err(e) = fs::write(&path, csv) {
+        warn!(
+            path = %path.display(),
+            error = %e,
+            "failed to persist Kite instrument cache"
+        );
+    }
+}
+
+fn load_cached_instrument_tokens(exchange: &str) -> Option<HashMap<String, String>> {
+    load_cached_instrument_tokens_at(Path::new("."), exchange)
+}
+
+fn load_cached_instrument_tokens_at(
+    base_dir: &Path,
+    exchange: &str,
+) -> Option<HashMap<String, String>> {
+    let path = kite_instrument_cache_path_in(base_dir, exchange);
+    let csv = match fs::read_to_string(&path) {
+        Ok(csv) => csv,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to read Kite instrument cache"
+            );
+            return None;
+        }
+    };
+    match resolve_tokens_from_csv(&csv, exchange) {
+        Ok(tokens) if !tokens.is_empty() => Some(tokens),
+        Ok(_) => {
+            warn!(
+                path = %path.display(),
+                exchange,
+                "Kite instrument cache did not contain equity tokens"
+            );
+            None
+        }
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to parse Kite instrument cache"
+            );
+            None
+        }
+    }
 }
 
 fn filter_instrument_tokens(
@@ -1552,6 +1659,34 @@ mod tests {
     }
 
     #[test]
+    fn instrument_cache_path_is_exchange_scoped_and_sanitized() {
+        let base = Path::new("/tmp/openquant-test");
+        assert_eq!(
+            kite_instrument_cache_path_in(base, "NSE")
+                .display()
+                .to_string(),
+            "/tmp/openquant-test/data/cache/kite/instruments_nse.csv"
+        );
+        assert_eq!(
+            kite_instrument_cache_path_in(base, "NSE/../BSE")
+                .display()
+                .to_string(),
+            "/tmp/openquant-test/data/cache/kite/instruments_nsebse.csv"
+        );
+    }
+
+    #[test]
+    fn instrument_cache_round_trips_without_kite_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange\n123,1,TESTEQ,TESTEQ,0,,0,0.05,1,EQ,NSE,NSE\n456,2,OTHEREQ,OTHEREQ,0,,0,0.05,1,EQ,NSE,NSE\n";
+        persist_instrument_cache_at(dir.path(), "NSE", csv);
+
+        let map = load_cached_instrument_tokens_at(dir.path(), "NSE").unwrap();
+        assert_eq!(map.get("TESTEQ").map(String::as_str), Some("123"));
+        assert_eq!(map.get("OTHEREQ").map(String::as_str), Some("456"));
+    }
+
+    #[test]
     fn filters_cached_instrument_tokens_to_requested_symbols() {
         let mut map = HashMap::new();
         map.insert("TESTEQ".to_string(), "123".to_string());
@@ -1581,6 +1716,11 @@ mod tests {
         assert_eq!(kite_stream_reconnect_delay_secs(3), 20);
         assert_eq!(kite_stream_reconnect_delay_secs(4), 60);
         assert_eq!(kite_stream_reconnect_delay_secs(99), 60);
+    }
+
+    #[test]
+    fn instrument_failure_backoff_is_long_enough_for_kite_throttle_cooldown() {
+        assert!(INSTRUMENT_FAILURE_BACKOFF_SECS >= 300);
     }
 
     #[tokio::test]

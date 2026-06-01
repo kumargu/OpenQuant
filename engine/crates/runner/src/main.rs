@@ -3615,4 +3615,33 @@ mod tests {
         cfg.market.close_grace_minutes = Some(35);
         assert_eq!(resolve_market_close_grace_minutes(&cfg), 35);
     }
+
+    #[test]
+    fn india_runner_profile_keeps_live_settings_in_toml() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("repo root");
+        let runner_cfg = RunnerConfig::load(&repo_root.join("config/runner.india.toml")).unwrap();
+        assert_eq!(resolve_broker_provider(&runner_cfg), BrokerProvider::Kite);
+        assert_eq!(
+            resolve_broker_env_file(&runner_cfg),
+            PathBuf::from(".env.india")
+        );
+
+        let order = kite_order_config(&runner_cfg);
+        assert_eq!(order.exchange, "NSE");
+        assert_eq!(order.product, "MIS");
+        assert_eq!(order.order_variety, "amo");
+        assert_eq!(order.historical_open, "09:15");
+        assert_eq!(order.historical_close, "15:30");
+        assert!(!order.autoslice);
+        assert_eq!(resolve_market_close_grace_minutes(&runner_cfg), 35);
+
+        let universe = basket_picker::load_universe(
+            &repo_root.join("config/basket_universe_india.template.toml"),
+        )
+        .unwrap();
+        assert_eq!(universe.runner.portfolio.capital, 10_000.0);
+    }
 }
