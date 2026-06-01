@@ -1222,6 +1222,21 @@ struct SubmittedOrderBatch {
     next_seq: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrderSubmissionPurpose {
+    SessionClose,
+    PendingOpenReconcile,
+}
+
+impl OrderSubmissionPurpose {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SessionClose => "session_close",
+            Self::PendingOpenReconcile => "pending_open_reconcile",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct SymbolDriftSample {
     symbol: String,
@@ -1353,6 +1368,7 @@ async fn submit_order_batch(
     broker: &impl Broker,
     mode: BrokerExecutionMode,
     execution: BasketExecution,
+    purpose: OrderSubmissionPurpose,
     orders: &[OrderIntent],
     run_id: &str,
     trading_day: NaiveDate,
@@ -1372,10 +1388,24 @@ async fn submit_order_batch(
             Side::Sell => "sell",
         };
         let (reason, basket_id) = order_reason_fields(&order.reason);
-        match broker
-            .place_order(&order.symbol, order.qty as f64, side_str, mode)
-            .await
-        {
+        let order_result = match purpose {
+            OrderSubmissionPurpose::SessionClose => {
+                broker
+                    .place_order(&order.symbol, order.qty as f64, side_str, mode)
+                    .await
+            }
+            OrderSubmissionPurpose::PendingOpenReconcile => {
+                broker
+                    .place_session_open_reconcile_order(
+                        &order.symbol,
+                        order.qty as f64,
+                        side_str,
+                        mode,
+                    )
+                    .await
+            }
+        };
+        match order_result {
             Ok(o) => {
                 info!(
                     symbol = order.symbol.as_str(),
@@ -1383,6 +1413,7 @@ async fn submit_order_batch(
                     side = side_str,
                     reason,
                     basket_id,
+                    submission_purpose = purpose.label(),
                     order_id = o.id.as_str(),
                     status = o.status.as_str(),
                     "ORDER PLACED"
@@ -1420,6 +1451,7 @@ async fn submit_order_batch(
                     side = side_str,
                     reason,
                     basket_id,
+                    submission_purpose = purpose.label(),
                     error = e.as_str(),
                     "ORDER FAILED"
                 );
@@ -1458,14 +1490,10 @@ async fn submit_order_batch(
 fn pending_open_reconcile_due(
     pending: &PendingOpenReconcileState,
     dt: DateTime<Utc>,
-    ready_symbols_for_day: usize,
-    expected_symbols: usize,
     fill_ready_minute_from_open: u32,
 ) -> bool {
     let today = market_session::trading_day_utc(dt);
     pending.trading_day < today
-        && expected_symbols > 0
-        && ready_symbols_for_day >= expected_symbols
         && market_session::minutes_from_open_utc(dt)
             .is_some_and(|minutes| minutes >= fill_ready_minute_from_open)
         && pending.attempted_reconcile_day != Some(today)
@@ -1479,7 +1507,6 @@ async fn maybe_run_pending_open_reconcile(
     dt: DateTime<Utc>,
     current_shares: &mut HashMap<String, f64>,
     universe_symbols: &[String],
-    ready_symbols_for_day: usize,
     pending_path: &Path,
     pending_state: &mut Option<PendingOpenReconcileState>,
     journal: Option<&BasketJournal>,
@@ -1489,13 +1516,7 @@ async fn maybe_run_pending_open_reconcile(
         return Ok(());
     };
     let fill_ready_minute_from_open = broker.next_session_open_fill_ready_minute();
-    if !pending_open_reconcile_due(
-        &pending,
-        dt,
-        ready_symbols_for_day,
-        universe_symbols.len(),
-        fill_ready_minute_from_open,
-    ) {
+    if !pending_open_reconcile_due(&pending, dt, fill_ready_minute_from_open) {
         return Ok(());
     }
 
@@ -1550,6 +1571,7 @@ async fn maybe_run_pending_open_reconcile(
         broker,
         mode,
         execution,
+        OrderSubmissionPurpose::PendingOpenReconcile,
         &staged_orders.reducing,
         run_id,
         today,
@@ -1624,6 +1646,7 @@ async fn maybe_run_pending_open_reconcile(
                     broker,
                     mode,
                     execution,
+                    OrderSubmissionPurpose::PendingOpenReconcile,
                     &phase_two_orders,
                     run_id,
                     today,
@@ -2435,7 +2458,6 @@ pub async fn run_basket_live(
     //    arrival) so that no single symbol becoming a data source-of-failure can
     //    silently skip an entire session.
     let mut day_closes: HashMap<NaiveDate, HashMap<String, f64>> = HashMap::new();
-    let mut open_reconcile_ready_symbols: HashMap<NaiveDate, HashSet<String>> = HashMap::new();
     let mut processed_sessions: std::collections::HashSet<NaiveDate> = Default::default();
     if last_processed_trading_day == Some(today) {
         processed_sessions.insert(today);
@@ -2586,20 +2608,8 @@ pub async fn run_basket_live(
                 }
                 if pending_open_reconcile_enabled {
                     let Some(mode) = execution.broker_mode() else {
-                        unreachable!("pending open reconcile requires alpaca execution mode");
+                        unreachable!("pending open reconcile requires broker execution mode");
                     };
-                    if market_session::minutes_from_open_utc(dt)
-                        .is_some_and(|minutes| minutes >= broker.next_session_open_fill_ready_minute())
-                    {
-                        open_reconcile_ready_symbols
-                            .entry(date)
-                            .or_default()
-                            .insert(bar.symbol.clone());
-                    }
-                    let ready_symbols_for_day = open_reconcile_ready_symbols
-                        .get(&date)
-                        .map(|symbols| symbols.len())
-                        .unwrap_or(0);
                     maybe_run_pending_open_reconcile(
                         broker,
                         mode,
@@ -2607,7 +2617,6 @@ pub async fn run_basket_live(
                         dt,
                         &mut current_shares,
                         &symbols,
-                        ready_symbols_for_day,
                         &pending_open_reconcile_path,
                         &mut pending_open_reconcile,
                         journal.as_ref(),
@@ -2645,6 +2654,24 @@ pub async fn run_basket_live(
                     "BAR_LOOP heartbeat"
                 );
                 bars_processed_window = 0;
+                if pending_open_reconcile_enabled {
+                    let Some(mode) = execution.broker_mode() else {
+                        unreachable!("pending open reconcile requires broker execution mode");
+                    };
+                    maybe_run_pending_open_reconcile(
+                        broker,
+                        mode,
+                        execution,
+                        now,
+                        &mut current_shares,
+                        &symbols,
+                        &pending_open_reconcile_path,
+                        &mut pending_open_reconcile,
+                        journal.as_ref(),
+                        run_id.as_str(),
+                    )
+                    .await?;
+                }
             }
             session_event = session_trigger.next() => {
                 // Session-close trigger: the trigger has determined that
@@ -2692,7 +2719,6 @@ pub async fn run_basket_live(
                         break 'session;
                     }
                     let mut closes_for_day = day_closes.remove(&today).unwrap_or_default();
-                    open_reconcile_ready_symbols.remove(&today);
                     if !market_session::is_trading_day(today) && closes_for_day.is_empty() {
                         info!(
                             date = %today,
@@ -3805,6 +3831,7 @@ async fn process_session_close(
                 broker,
                 mode,
                 execution,
+                OrderSubmissionPurpose::SessionClose,
                 &staged_orders.reducing,
                 run_id,
                 date,
@@ -3906,6 +3933,7 @@ async fn process_session_close(
                                 broker,
                                 mode,
                                 execution,
+                                OrderSubmissionPurpose::SessionClose,
                                 &phase_two_orders,
                                 run_id,
                                 date,
@@ -4563,6 +4591,111 @@ mod tests {
         assert!(!reconciliation.settlement_pending);
         assert!(reconciliation.drift.median_gross_bps > 0.0);
         assert_eq!(reconciliation.current_positions_after, 1);
+    }
+
+    #[derive(Default)]
+    struct RoutingTestBroker {
+        session_close_orders: std::sync::atomic::AtomicUsize,
+        session_open_reconcile_orders: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Broker for RoutingTestBroker {
+        async fn place_order(
+            &self,
+            symbol: &str,
+            qty: f64,
+            side: &str,
+            _execution: BrokerExecutionMode,
+        ) -> Result<crate::broker::BrokerOrder, String> {
+            self.session_close_orders
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::broker::BrokerOrder {
+                id: format!("close-{symbol}"),
+                status: "filled".to_string(),
+                symbol: symbol.to_string(),
+                side: side.to_string(),
+                qty: qty.to_string(),
+            })
+        }
+
+        async fn place_session_open_reconcile_order(
+            &self,
+            symbol: &str,
+            qty: f64,
+            side: &str,
+            _execution: BrokerExecutionMode,
+        ) -> Result<crate::broker::BrokerOrder, String> {
+            self.session_open_reconcile_orders
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::broker::BrokerOrder {
+                id: format!("open-{symbol}"),
+                status: "filled".to_string(),
+                symbol: symbol.to_string(),
+                side: side.to_string(),
+                qty: qty.to_string(),
+            })
+        }
+
+        async fn get_positions(
+            &self,
+            _execution: BrokerExecutionMode,
+        ) -> Result<HashMap<String, (f64, f64)>, String> {
+            Ok(HashMap::new())
+        }
+
+        async fn get_account(
+            &self,
+            _execution: BrokerExecutionMode,
+        ) -> Result<BrokerAccount, String> {
+            Ok(BrokerAccount {
+                status: "ACTIVE".to_string(),
+                buying_power: "10000".to_string(),
+                equity: "10000".to_string(),
+                trading_blocked: false,
+                account_blocked: false,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_order_batch_routes_pending_open_reconcile_orders_to_broker_hook() {
+        let broker = RoutingTestBroker::default();
+        let orders = vec![OrderIntent {
+            symbol: "AMD".to_string(),
+            qty: 3,
+            side: Side::Buy,
+            reason: basket_engine::OrderReason::Aggregated,
+        }];
+        let closes = HashMap::from([("AMD".to_string(), 100.0)]);
+        let day = NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
+
+        submit_order_batch(
+            &broker,
+            BrokerExecutionMode::Paper,
+            BasketExecution::Paper,
+            OrderSubmissionPurpose::PendingOpenReconcile,
+            &orders,
+            "test-run",
+            day,
+            &closes,
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            broker
+                .session_close_orders
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(
+            broker
+                .session_open_reconcile_orders
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 
     #[test]
@@ -5709,20 +5842,11 @@ mod tests {
         let at_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 30, 0).unwrap();
         let one_minute_after_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 31, 0).unwrap();
 
-        assert!(pending_open_reconcile_due(&pending, at_open, 68, 68, 0));
-        assert!(!pending_open_reconcile_due(&pending, at_open, 68, 68, 1));
-        assert!(!pending_open_reconcile_due(
-            &pending,
-            one_minute_after_open,
-            67,
-            68,
-            1
-        ));
+        assert!(pending_open_reconcile_due(&pending, at_open, 0));
+        assert!(!pending_open_reconcile_due(&pending, at_open, 1));
         assert!(pending_open_reconcile_due(
             &pending,
             one_minute_after_open,
-            68,
-            68,
             1
         ));
 
@@ -5731,8 +5855,6 @@ mod tests {
         assert!(!pending_open_reconcile_due(
             &attempted,
             one_minute_after_open,
-            68,
-            68,
             1
         ));
     }

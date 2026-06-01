@@ -63,6 +63,7 @@ pub struct RefreshBar {
     pub vw: Option<f64>,
 }
 
+#[allow(async_fn_in_trait)]
 pub trait HistoricalBarClient: Send + Sync {
     async fn fetch_minute_bars_raw(
         &self,

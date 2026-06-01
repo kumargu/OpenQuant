@@ -52,6 +52,19 @@ pub trait Broker: Send + Sync {
         execution: BrokerExecutionMode,
     ) -> Result<BrokerOrder, String>;
 
+    /// Place a corrective order for prior session-close orders that settle at
+    /// the next session open. Brokers can override this when the close-order
+    /// venue differs from the regular-session venue.
+    async fn place_session_open_reconcile_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String> {
+        self.place_order(symbol, qty, side, execution).await
+    }
+
     /// Fetch open positions as `symbol → (qty, avg_entry_price)`.
     async fn get_positions(
         &self,
@@ -143,6 +156,16 @@ impl Broker for KiteClient {
         execution: BrokerExecutionMode,
     ) -> Result<BrokerOrder, String> {
         KiteClient::place_order(self, symbol, qty, side, execution).await
+    }
+
+    async fn place_session_open_reconcile_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String> {
+        KiteClient::place_session_open_reconcile_order(self, symbol, qty, side, execution).await
     }
 
     async fn get_positions(

@@ -285,9 +285,7 @@ impl KiteClient {
         order: KiteOrderConfig,
         env_path: Option<&Path>,
     ) -> Result<Self, String> {
-        let env = env_path
-            .map(crate::alpaca::load_env)
-            .unwrap_or_else(HashMap::new);
+        let env = env_path.map(crate::alpaca::load_env).unwrap_or_default();
         let api_key = non_empty(api_key)
             .map(ToString::to_string)
             .or_else(|| env_value(&env, "KITE_API_KEY"))
@@ -355,6 +353,36 @@ impl KiteClient {
         side: &str,
         execution: BrokerExecutionMode,
     ) -> Result<BrokerOrder, String> {
+        let order_variety = self.order.order_variety.clone();
+        self.place_market_order_with_variety(symbol, qty, side, execution, &order_variety)
+            .await
+    }
+
+    pub async fn place_session_open_reconcile_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String> {
+        self.place_market_order_with_variety(
+            symbol,
+            qty,
+            side,
+            execution,
+            Self::session_open_reconcile_order_variety(),
+        )
+        .await
+    }
+
+    async fn place_market_order_with_variety(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: BrokerExecutionMode,
+        order_variety: &str,
+    ) -> Result<BrokerOrder, String> {
         if execution != BrokerExecutionMode::Live {
             return Err("Kite has no paper endpoint; use live or basket noop mode".into());
         }
@@ -375,7 +403,8 @@ impl KiteClient {
             other => return Err(format!("unknown side for Kite order: {other}")),
         };
         let form = self.build_order_form(symbol, quantity, transaction_type, None, None);
-        self.submit_order(symbol, side, quantity, form).await
+        self.submit_order(symbol, side, quantity, order_variety, form)
+            .await
     }
 
     #[allow(dead_code)]
@@ -418,7 +447,9 @@ impl KiteClient {
             Some("SL-M"),
             Some(trigger_price),
         );
-        self.submit_order(symbol, side, quantity, form).await
+        let order_variety = self.order.order_variety.clone();
+        self.submit_order(symbol, side, quantity, &order_variety, form)
+            .await
     }
 
     async fn submit_order(
@@ -426,14 +457,15 @@ impl KiteClient {
         symbol: &str,
         side: &str,
         quantity: u32,
+        order_variety: &str,
         form: Vec<(&'static str, String)>,
     ) -> Result<BrokerOrder, String> {
-        let url = format!("{}/orders/{}", self.api_base_url, self.order.order_variety);
+        let url = format!("{}/orders/{order_variety}", self.api_base_url);
         info!(
             symbol,
             quantity,
             side,
-            variety = self.order.order_variety.as_str(),
+            variety = order_variety,
             product = self.order.product.as_str(),
             "placing Kite order"
         );
@@ -700,6 +732,10 @@ impl KiteClient {
 
     pub fn supports_persisted_pending_open_reconcile(&self) -> bool {
         self.session_close_fill_contract() == SessionCloseFillContract::NextSessionOpen
+    }
+
+    fn session_open_reconcile_order_variety() -> &'static str {
+        "regular"
     }
 
     async fn get_holdings(&self) -> Result<Vec<KiteHoldingRow>, String> {
@@ -1596,6 +1632,17 @@ mod tests {
             SessionCloseFillContract::NextSessionOpen
         );
         assert!(client.supports_persisted_pending_open_reconcile());
+    }
+
+    #[test]
+    fn amo_session_open_reconcile_orders_use_regular_variety() {
+        let mut client = KiteClient::new("key".into(), "secret".into(), Some("token".into()));
+        client.order.order_variety = "amo".into();
+        assert_eq!(client.order.order_variety, "amo");
+        assert_eq!(
+            KiteClient::session_open_reconcile_order_variety(),
+            "regular"
+        );
     }
 
     #[tokio::test]

@@ -15,6 +15,8 @@ use crate::intent::PositionIntent;
 use crate::state::BasketState;
 use crate::DailyBar;
 
+type EngineStateMaps = (HashMap<String, BasketParams>, HashMap<String, BasketState>);
+
 /// Per-basket frozen parameters (read-only after engine start).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BasketParams {
@@ -466,9 +468,7 @@ impl BasketEngine {
     }
 }
 
-fn build_engine_maps_from_fits(
-    fits: &[BasketFit],
-) -> Result<(HashMap<String, BasketParams>, HashMap<String, BasketState>), String> {
+fn build_engine_maps_from_fits(fits: &[BasketFit]) -> Result<EngineStateMaps, String> {
     let mut params = HashMap::new();
     let mut states = HashMap::new();
 
@@ -498,9 +498,7 @@ fn params_map_from_owned(
     Ok(out)
 }
 
-fn params_map_from_refs<'a>(
-    params: &'a [BasketParams],
-) -> Result<HashMap<String, &'a BasketParams>, String> {
+fn params_map_from_refs(params: &[BasketParams]) -> Result<HashMap<String, &BasketParams>, String> {
     let mut out = HashMap::new();
     for param in params {
         let id = param.basket_id.clone();
@@ -584,6 +582,7 @@ mod tests {
             adf_statistic: None,
             adf_pvalue: None,
             dominance_score: None,
+            dominance_contributions: Vec::new(),
             valid: true,
             reject_reason: None,
         }

@@ -386,6 +386,7 @@ mod tests {
                 sigma: 1.0,
             },
             threshold_k: 1.25,
+            target_centrality_abs: 1.0,
         }
     }
 

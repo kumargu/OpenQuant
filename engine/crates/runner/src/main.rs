@@ -241,6 +241,7 @@ fn resolve_live_broker_client(
             kite_order_config(cfg),
             Some(&broker_env_path),
         )
+        .map(Box::new)
         .map(LiveBrokerClient::Kite)?,
     };
     Ok((provider, broker_env_path, client))
@@ -316,7 +317,7 @@ fn kite_order_config(cfg: &RunnerConfig) -> KiteOrderConfig {
 
 enum LiveBrokerClient {
     Alpaca(alpaca::AlpacaClient),
-    Kite(KiteClient),
+    Kite(Box<KiteClient>),
 }
 
 impl Broker for LiveBrokerClient {
@@ -330,6 +331,27 @@ impl Broker for LiveBrokerClient {
         match self {
             Self::Alpaca(client) => client.place_order(symbol, qty, side, execution).await,
             Self::Kite(client) => client.place_order(symbol, qty, side, execution).await,
+        }
+    }
+
+    async fn place_session_open_reconcile_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<broker::BrokerOrder, String> {
+        match self {
+            Self::Alpaca(client) => {
+                client
+                    .place_session_open_reconcile_order(symbol, qty, side, execution)
+                    .await
+            }
+            Self::Kite(client) => {
+                client
+                    .place_session_open_reconcile_order(symbol, qty, side, execution)
+                    .await
+            }
         }
     }
 
@@ -391,7 +413,7 @@ impl Broker for LiveBrokerClient {
 
 enum LiveBarFeed {
     Alpaca(AlpacaBarSource),
-    Kite(KiteBarSource),
+    Kite(Box<KiteBarSource>),
 }
 
 impl bar_source::BarSource for LiveBarFeed {
@@ -1598,6 +1620,19 @@ enum RunMode {
     },
 }
 
+fn validate_legacy_stream_provider(
+    run_mode: &RunMode,
+    broker_provider: BrokerProvider,
+) -> Result<(), String> {
+    if matches!(run_mode, RunMode::Stream(_)) && broker_provider == BrokerProvider::Kite {
+        return Err(
+            "Kite provider is supported through --engine basket live/paper; the legacy pairs stream path still requires Alpaca. Use --engine basket or set broker.provider = \"alpaca\"."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -1882,7 +1917,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
                     &bars_dir,
                     &target,
                     bootstrap_start_date,
-                    kite,
+                    kite.as_ref(),
                     filter.as_deref(),
                 )
                 .await
@@ -1990,7 +2025,9 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             alpaca.api_key.clone(),
             alpaca.api_secret.clone(),
         )),
-        LiveBrokerClient::Kite(kite) => LiveBarFeed::Kite(KiteBarSource::new(kite.clone())),
+        LiveBrokerClient::Kite(kite) => {
+            LiveBarFeed::Kite(Box::new(KiteBarSource::new((**kite).clone())))
+        }
     };
 
     // Live/paper use wall-clock time and a 30s polling session trigger.
@@ -2141,7 +2178,7 @@ async fn run_refresh_data(args: RefreshDataArgs) {
                 &target,
                 bootstrap_start_date,
                 refresh_from,
-                kite,
+                kite.as_ref(),
                 filter.as_deref(),
             )
             .await
@@ -2437,7 +2474,7 @@ async fn run_freeze_basket_fits(args: BasketFitArgs) {
                     &bars_dir,
                     &target,
                     bootstrap_start_date,
-                    kite,
+                    kite.as_ref(),
                     Some(&missing_symbols),
                 )
                 .await
@@ -2532,12 +2569,17 @@ async fn run(
     };
     apply_runner_config_env(&runner_cfg);
     let broker_env_path = resolve_broker_env_file(&runner_cfg);
+    let broker_provider = resolve_broker_provider(&runner_cfg);
     info!(
         runner_config = %runner_cfg_path.display(),
-        broker_provider = ?resolve_broker_provider(&runner_cfg),
+        broker_provider = ?broker_provider,
         broker_env_file = %broker_env_path.display(),
         "resolved runner configuration"
     );
+    if let Err(e) = validate_legacy_stream_provider(&run_mode, broker_provider) {
+        error!("{e}");
+        std::process::exit(1);
+    }
     let alpaca = match alpaca::AlpacaClient::from_values(
         runner_cfg.alpaca.api_key.as_deref(),
         runner_cfg.alpaca.secret_key.as_deref(),
@@ -3317,7 +3359,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
                     &bars_dir,
                     &target,
                     bootstrap_start_date,
-                    kite,
+                    kite.as_ref(),
                     Some(&missing_symbols),
                 )
                 .await
@@ -3643,5 +3685,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(universe.runner.portfolio.capital, 10_000.0);
+    }
+
+    #[test]
+    fn legacy_stream_rejects_kite_provider_explicitly() {
+        let mode = RunMode::Stream(BrokerExecutionMode::Paper);
+        let err = validate_legacy_stream_provider(&mode, BrokerProvider::Kite).unwrap_err();
+        assert!(err.contains("legacy pairs stream path still requires Alpaca"));
+        assert!(validate_legacy_stream_provider(&mode, BrokerProvider::Alpaca).is_ok());
+    }
+
+    #[test]
+    fn replay_mode_does_not_reject_kite_runner_config() {
+        let mode = RunMode::Replay {
+            start: "2026-01-01".to_string(),
+            end: "2026-01-31".to_string(),
+            bar_cache: None,
+        };
+        assert!(validate_legacy_stream_provider(&mode, BrokerProvider::Kite).is_ok());
     }
 }
