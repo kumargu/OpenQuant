@@ -728,6 +728,14 @@ pub async fn refresh_all_from(
             Err(e) => {
                 warn!(symbol = sym.as_str(), error = e.as_str(), "refresh failed");
                 errors += 1;
+                if should_stop_refresh_after_error(&e) {
+                    warn!(
+                        error = e.as_str(),
+                        remaining = symbols.len().saturating_sub(i + 1),
+                        "stopping refresh early after broker-wide rate/instrument error"
+                    );
+                    break;
+                }
             }
         }
         if (i + 1) % 50 == 0 {
@@ -753,6 +761,13 @@ pub async fn refresh_all_from(
     Ok(total)
 }
 
+fn should_stop_refresh_after_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("too many requests")
+        || lower.contains("instruments temporarily unavailable")
+        || lower.contains("suppressing refetch")
+}
+
 /// Resolve the quant-data bars directory. Override with `QUANT_DATA_BARS_DIR`.
 pub fn default_bars_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("QUANT_DATA_BARS_DIR") {
@@ -765,6 +780,7 @@ pub fn default_bars_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
 
     struct DuplicateBarClient;
@@ -790,6 +806,22 @@ mod tests {
                 symbols[0].clone(),
                 vec![bar.clone(), bar],
             )]))
+        }
+    }
+
+    struct RateLimitedClient {
+        calls: AtomicUsize,
+    }
+
+    impl HistoricalBarClient for RateLimitedClient {
+        async fn fetch_minute_bars_raw(
+            &self,
+            _symbols: &[String],
+            _start: &str,
+            _end: &str,
+        ) -> Result<HashMap<String, Vec<RefreshBar>>, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err("kite instruments error 429 Too Many Requests".to_string())
         }
     }
 
@@ -979,5 +1011,37 @@ mod tests {
         let (ts, _, _, _, _, _, _, _) =
             read_full_parquet(&dir.path().join("TESTEQ.parquet")).unwrap();
         assert_eq!(ts.len(), 1);
+    }
+
+    #[test]
+    fn test_refresh_stops_after_broker_wide_rate_limit_error() {
+        assert!(should_stop_refresh_after_error(
+            "kite instruments error 429 Too Many Requests"
+        ));
+        assert!(should_stop_refresh_after_error(
+            "Kite instruments temporarily unavailable after recent failure"
+        ));
+        assert!(!should_stop_refresh_after_error("symbol had no new bars"));
+    }
+
+    #[tokio::test]
+    async fn test_refresh_all_stops_after_rate_limit_error() {
+        let dir = TempDir::new().unwrap();
+        let client = RateLimitedClient {
+            calls: AtomicUsize::new(0),
+        };
+        let symbols = vec!["AAA".to_string(), "BBB".to_string(), "CCC".to_string()];
+        let total = refresh_all_from(
+            dir.path(),
+            "2026-01-02",
+            Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+            Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+            &client,
+            Some(&symbols),
+        )
+        .await
+        .unwrap();
+        assert_eq!(total, 0);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
     }
 }
