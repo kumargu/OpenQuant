@@ -15,6 +15,7 @@ engine/target/
 
 # Data — all regenerated locally, never committed
 data/bar_cache*/
+data/cache/
 data/journal/
 data/metrics/
 data/paper_trades/

@@ -14,7 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, Mutex};
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
+use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
 use crate::broker::{BrokerAccount, BrokerExecutionMode, BrokerOrder, SessionCloseFillContract};
@@ -807,25 +807,8 @@ impl KiteClient {
         tokens: Vec<u32>,
         tx: &mpsc::Sender<StreamBar>,
     ) -> Result<(), String> {
-        let access_token = self.access_token()?;
-        let url = format!(
-            "{}?api_key={}&access_token={}&uid={}",
-            self.ws_url,
-            self.api_key,
-            access_token,
-            Utc::now().timestamp_millis()
-        );
-        let mut request = url
-            .into_client_request()
-            .map_err(|e| format!("Kite WebSocket request build failed: {e}"))?;
-        request
-            .headers_mut()
-            .insert("X-Kite-Version", HeaderValue::from_static(KITE_VERSION));
-        request.headers_mut().insert(
-            "User-Agent",
-            HeaderValue::from_static("openquant-runner/0.1"),
-        );
-        let (ws_stream, _) = tokio_tungstenite::connect_async(request)
+        let url = self.websocket_url()?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
             .await
             .map_err(|e| format!("Kite WebSocket connect failed: {e}"))?;
         let (mut write, mut read) = ws_stream.split();
@@ -937,6 +920,18 @@ impl KiteClient {
             .as_deref()
             .filter(|token| !token.trim().is_empty())
             .ok_or_else(|| "KITE_ACCESS_TOKEN missing; run kite-login or update .env.india".into())
+    }
+
+    fn websocket_url(&self) -> Result<String, String> {
+        let url = reqwest::Url::parse_with_params(
+            &self.ws_url,
+            [
+                ("api_key", self.api_key.as_str()),
+                ("access_token", self.access_token()?),
+            ],
+        )
+        .map_err(|e| format!("Kite WebSocket URL build failed: {e}"))?;
+        Ok(url.to_string())
     }
 
     fn order_tag(&self) -> Option<String> {
@@ -1707,6 +1702,44 @@ mod tests {
             token_to_symbol.get(&123).map(String::as_str),
             Some("TESTEQ")
         );
+    }
+
+    #[test]
+    fn websocket_url_uses_encoded_query_credentials_without_custom_headers() {
+        let client = KiteClient::new(
+            "key with space".into(),
+            "secret".into(),
+            Some("token/with+symbols".into()),
+        );
+        let url = client.websocket_url().unwrap();
+        assert!(url.starts_with("wss://ws.kite.trade/?"));
+        assert!(url.contains("api_key=key+with+space"));
+        assert!(url.contains("access_token=token%2Fwith%2Bsymbols"));
+        assert!(!url.contains("uid="));
+    }
+
+    #[tokio::test]
+    #[ignore = "live Kite read-only integration; requires .env.india and only opens/closes WebSocket"]
+    async fn live_kite_websocket_handshake_smoke() {
+        if std::env::var("KITE_RUN_LIVE_INTEGRATION").ok().as_deref() != Some("1") {
+            eprintln!("set KITE_RUN_LIVE_INTEGRATION=1 to run live Kite WebSocket smoke test");
+            return;
+        }
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("repo root");
+        let client = KiteClient::from_env(&repo_root.join(".env.india")).unwrap();
+        let url = client.websocket_url().unwrap();
+        let connection = tokio::time::timeout(
+            tokio::time::Duration::from_secs(8),
+            tokio_tungstenite::connect_async(url),
+        )
+        .await
+        .expect("Kite WebSocket connect timed out")
+        .expect("Kite WebSocket handshake failed");
+        let (mut ws, _) = connection;
+        ws.close(None).await.expect("close Kite WebSocket");
     }
 
     #[test]
