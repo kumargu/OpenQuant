@@ -92,9 +92,10 @@ openquant-runner live \
 - Verified India baskets and overlay sectors.
 - Exchange holiday calendar support for NSE/BSE. Current India profile uses weekday-only trading days as a placeholder.
 - Symbol normalization layer between research symbols and broker tradingsymbols.
-- Protective stop-loss orders are not wired into the basket broker trait yet.
-  Kite supports `SL` and `SL-M` order types, but the basket runtime currently
-  submits market/AMO orders and controls exits through basket state.
+- Kite has a stop-market helper for explicit broker-native emergency orders,
+  but protective stops are not wired into the basket broker trait yet. The
+  basket runtime currently submits market/AMO rebalance orders and controls
+  exits through basket state.
 
 ## Recommended next steps
 

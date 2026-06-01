@@ -34,6 +34,8 @@ pub struct KiteOrderConfig {
     pub order_variety: String,
     pub order_type: String,
     pub validity: String,
+    pub historical_open: String,
+    pub historical_close: String,
     pub market_protection: Option<String>,
     pub autoslice: bool,
     pub include_holdings: bool,
@@ -48,6 +50,8 @@ impl Default for KiteOrderConfig {
             order_variety: "regular".to_string(),
             order_type: "MARKET".to_string(),
             validity: "DAY".to_string(),
+            historical_open: "09:15".to_string(),
+            historical_close: "15:30".to_string(),
             market_protection: Some("-1".to_string()),
             autoslice: true,
             include_holdings: false,
@@ -359,25 +363,61 @@ impl KiteClient {
             "sell" => "SELL",
             other => return Err(format!("unknown side for Kite order: {other}")),
         };
-        let url = format!("{}/orders/{}", self.api_base_url, self.order.order_variety);
-        let quantity_s = quantity.to_string();
-        let mut form = vec![
-            ("tradingsymbol", symbol.to_string()),
-            ("exchange", self.order.exchange.clone()),
-            ("transaction_type", transaction_type.to_string()),
-            ("order_type", self.order.order_type.clone()),
-            ("quantity", quantity_s),
-            ("product", self.order.product.clone()),
-            ("validity", self.order.validity.clone()),
-            ("autoslice", self.order.autoslice.to_string()),
-        ];
-        if let Some(market_protection) = self.order.market_protection.as_ref() {
-            form.push(("market_protection", market_protection.clone()));
-        }
-        if let Some(tag) = self.order_tag() {
-            form.push(("tag", tag));
-        }
+        let form = self.build_order_form(symbol, quantity, transaction_type, None, None);
+        self.submit_order(symbol, side, quantity, form).await
+    }
 
+    #[allow(dead_code)]
+    pub async fn place_stop_market_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        trigger_price: f64,
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String> {
+        if !trigger_price.is_finite() || trigger_price <= 0.0 {
+            return Err(format!(
+                "Kite stop-market trigger must be positive for {symbol}: {trigger_price}"
+            ));
+        }
+        if execution != BrokerExecutionMode::Live {
+            return Err("Kite has no paper endpoint; use live or basket noop mode".into());
+        }
+        if !qty.is_finite() || qty <= 0.0 {
+            return Err(format!("non-positive qty for {symbol}: {qty}"));
+        }
+        let quantity = qty.round();
+        if (quantity - qty).abs() > 1e-6 {
+            return Err(format!("Kite equity quantity must be whole shares: {qty}"));
+        }
+        let quantity = quantity as u32;
+        if quantity == 0 {
+            return Err(format!("zero rounded qty for {symbol}: {qty}"));
+        }
+        let transaction_type = match side {
+            "buy" => "BUY",
+            "sell" => "SELL",
+            other => return Err(format!("unknown side for Kite order: {other}")),
+        };
+        let form = self.build_order_form(
+            symbol,
+            quantity,
+            transaction_type,
+            Some("SL-M"),
+            Some(trigger_price),
+        );
+        self.submit_order(symbol, side, quantity, form).await
+    }
+
+    async fn submit_order(
+        &self,
+        symbol: &str,
+        side: &str,
+        quantity: u32,
+        form: Vec<(&'static str, String)>,
+    ) -> Result<BrokerOrder, String> {
+        let url = format!("{}/orders/{}", self.api_base_url, self.order.order_variety);
         info!(
             symbol,
             quantity,
@@ -404,6 +444,41 @@ impl KiteClient {
             side: side.to_string(),
             qty: quantity.to_string(),
         })
+    }
+
+    fn build_order_form(
+        &self,
+        symbol: &str,
+        quantity: u32,
+        transaction_type: &str,
+        order_type_override: Option<&str>,
+        trigger_price: Option<f64>,
+    ) -> Vec<(&'static str, String)> {
+        let mut form = vec![
+            ("tradingsymbol", symbol.to_string()),
+            ("exchange", self.order.exchange.clone()),
+            ("transaction_type", transaction_type.to_string()),
+            (
+                "order_type",
+                order_type_override
+                    .unwrap_or(&self.order.order_type)
+                    .to_string(),
+            ),
+            ("quantity", quantity.to_string()),
+            ("product", self.order.product.clone()),
+            ("validity", self.order.validity.clone()),
+            ("autoslice", self.order.autoslice.to_string()),
+        ];
+        if let Some(trigger_price) = trigger_price {
+            form.push(("trigger_price", format!("{trigger_price:.2}")));
+        }
+        if let Some(market_protection) = self.order.market_protection.as_ref() {
+            form.push(("market_protection", market_protection.clone()));
+        }
+        if let Some(tag) = self.order_tag() {
+            form.push(("tag", tag));
+        }
+        form
     }
 
     pub async fn get_positions(
@@ -500,9 +575,12 @@ impl KiteClient {
                 .ok_or_else(|| format!("instrument token not found for {symbol}"))?;
             let mut rows_by_ts: BTreeMap<String, RefreshBar> = BTreeMap::new();
             for (chunk_start, chunk_end_exclusive) in historical_chunks(start_date, end_date) {
-                let chunk_to = chunk_end_exclusive - chrono::Duration::days(1);
-                let from = format!("{} 09:15:00", chunk_start.format("%Y-%m-%d"));
-                let to = format!("{} 15:30:00", chunk_to.format("%Y-%m-%d"));
+                let (from, to) = historical_request_window(
+                    chunk_start,
+                    chunk_end_exclusive,
+                    &self.order.historical_open,
+                    &self.order.historical_close,
+                );
                 let url = format!(
                     "{}/instruments/historical/{token}/minute?from={from}&to={to}&oi=0",
                     self.api_base_url
@@ -558,8 +636,16 @@ impl KiteClient {
             loop {
                 info!(reconnect_count, "connecting to Kite stream");
                 match client.run_stream_once(&symbols, &tx).await {
-                    Ok(()) => warn!("Kite stream closed — reconnecting in 5s"),
-                    Err(e) => error!("Kite stream error: {e} — reconnecting in 5s"),
+                    Ok(()) => {
+                        metrics::counter!("kite.stream.reconnect", "reason" => "closed")
+                            .increment(1);
+                        warn!("Kite stream closed; reconnecting in 5s");
+                    }
+                    Err(e) => {
+                        metrics::counter!("kite.stream.reconnect", "reason" => "error")
+                            .increment(1);
+                        error!("Kite stream error: {e}; reconnecting in 5s");
+                    }
                 }
                 reconnect_count += 1;
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -682,7 +768,15 @@ impl KiteClient {
                         .reset(tokio::time::Instant::now() + read_timeout);
                     match msg {
                         Message::Binary(bytes) => {
-                            for tick in parse_kite_binary_frame(&bytes)? {
+                            let ticks = match parse_kite_binary_frame(&bytes) {
+                                Ok(ticks) => ticks,
+                                Err(e) => {
+                                    metrics::counter!("bug", "component" => "kite_stream", "kind" => "bad_binary_frame").increment(1);
+                                    warn!(error = %e, bytes = bytes.len(), "dropping malformed Kite binary frame");
+                                    continue;
+                                }
+                            };
+                            for tick in ticks {
                                 ticks_total += 1;
                                 let Some(symbol) = token_to_symbol.get(&tick.instrument_token) else {
                                     continue;
@@ -697,7 +791,11 @@ impl KiteClient {
                         Message::Ping(data) => {
                             let _ = write.send(Message::Pong(data)).await;
                         }
-                        Message::Close(_) => return Ok(()),
+                        Message::Close(_) => {
+                            metrics::counter!("kite.stream.disconnect", "reason" => "broker_close").increment(1);
+                            warn!("Kite stream sent close frame");
+                            return Ok(());
+                        }
                         _ => {}
                     }
                 }
@@ -717,6 +815,7 @@ impl KiteClient {
                     );
                 }
                 _ = &mut idle_deadline => {
+                    metrics::counter!("kite.stream.disconnect", "reason" => "read_timeout").increment(1);
                     return Err(format!("Kite stream read timeout ({}s)", last_message_at.elapsed().as_secs()));
                 }
             }
@@ -767,6 +866,12 @@ impl KiteOrderConfig {
         if let Some(value) = env_value(env, "KITE_VALIDITY") {
             cfg.validity = value;
         }
+        if let Some(value) = env_value(env, "KITE_HISTORICAL_OPEN") {
+            cfg.historical_open = value;
+        }
+        if let Some(value) = env_value(env, "KITE_HISTORICAL_CLOSE") {
+            cfg.historical_close = value;
+        }
         if let Some(value) = env_value(env, "KITE_MARKET_PROTECTION") {
             cfg.market_protection = Some(value);
         }
@@ -788,6 +893,8 @@ impl KiteOrderConfig {
         self.order_variety = explicit.order_variety;
         self.order_type = explicit.order_type;
         self.validity = explicit.validity;
+        self.historical_open = explicit.historical_open;
+        self.historical_close = explicit.historical_close;
         self.market_protection = explicit.market_protection;
         self.autoslice = explicit.autoslice;
         self.include_holdings = explicit.include_holdings;
@@ -839,7 +946,7 @@ pub fn wait_for_local_request_token(
 }
 
 fn parse_kite_binary_frame(bytes: &[u8]) -> Result<Vec<KiteTick>, String> {
-    if bytes.len() <= 1 {
+    if bytes.len() == 1 {
         return Ok(Vec::new());
     }
     if bytes.len() < 2 {
@@ -908,6 +1015,19 @@ fn historical_chunks(start: NaiveDate, end_exclusive: NaiveDate) -> Vec<(NaiveDa
     out
 }
 
+fn historical_request_window(
+    chunk_start: NaiveDate,
+    chunk_end_exclusive: NaiveDate,
+    market_open: &str,
+    market_close: &str,
+) -> (String, String) {
+    let chunk_to = chunk_end_exclusive - chrono::Duration::days(1);
+    (
+        format!("{} {market_open}:00", chunk_start.format("%Y-%m-%d")),
+        format!("{} {market_close}:00", chunk_to.format("%Y-%m-%d")),
+    )
+}
+
 fn resolve_tokens_from_csv(
     csv: &str,
     symbols: &[String],
@@ -920,6 +1040,9 @@ fn resolve_tokens_from_csv(
         .from_reader(csv.as_bytes());
     for row in reader.deserialize::<KiteInstrumentRow>() {
         let row = row.map_err(|e| format!("kite instruments CSV parse failed: {e}"))?;
+        // Kite's instruments dump includes BSE rows and index pseudo-instruments
+        // with the same tradingsymbols. Keep only cash-equity rows for the
+        // configured exchange so live/replay symbols resolve deterministically.
         if row.exchange != exchange || row.segment != exchange || row.instrument_type != "EQ" {
             continue;
         }
@@ -1129,6 +1252,15 @@ mod tests {
     }
 
     #[test]
+    fn historical_request_window_uses_market_session_config() {
+        let start = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2025, 3, 2).unwrap();
+        let (from, to) = historical_request_window(start, end, "09:15", "15:30");
+        assert_eq!(from, "2025-01-01 09:15:00");
+        assert_eq!(to, "2025-03-01 15:30:00");
+    }
+
+    #[test]
     fn parses_kite_full_binary_packet() {
         let ts = Utc
             .with_ymd_and_hms(2026, 1, 2, 3, 45, 0)
@@ -1150,6 +1282,12 @@ mod tests {
         assert_eq!(ticks[0].last_price, 100.25);
         assert_eq!(ticks[0].day_volume, 900.0);
         assert_eq!(ticks[0].exchange_timestamp_ms, ts as i64 * 1000);
+    }
+
+    #[test]
+    fn binary_parser_accepts_heartbeat_and_rejects_empty_frame() {
+        assert!(parse_kite_binary_frame(&[0]).unwrap().is_empty());
+        assert!(parse_kite_binary_frame(&[]).is_err());
     }
 
     #[test]
@@ -1204,6 +1342,19 @@ mod tests {
     }
 
     #[test]
+    fn stop_market_order_form_includes_trigger_without_changing_default_order_type() {
+        let client = KiteClient::new("key".into(), "secret".into(), Some("token".into()));
+        let form = client.build_order_form("TESTEQ", 3, "SELL", Some("SL-M"), Some(98.25));
+        let values: HashMap<&str, String> = form.into_iter().collect();
+        assert_eq!(values.get("order_type").map(String::as_str), Some("SL-M"));
+        assert_eq!(
+            values.get("trigger_price").map(String::as_str),
+            Some("98.25")
+        );
+        assert_eq!(client.order.order_type, "MARKET");
+    }
+
+    #[test]
     fn amo_orders_reconcile_at_next_open() {
         let mut client = KiteClient::new("key".into(), "secret".into(), Some("token".into()));
         client.order.order_variety = "amo".into();
@@ -1250,6 +1401,15 @@ mod tests {
         let csv = "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange\n1,1,TESTEQ,TESTEQ,0,,0,0.05,1,EQ,NSE,NSE\n2,2,TESTEQ,TESTEQ,0,,0,0.05,1,EQ,BSE,BSE\n3,3,INDEXEQ,INDEXEQ,0,,0,0.05,1,EQ,INDICES,NSE\n";
         let map = resolve_tokens_from_csv(csv, &["TESTEQ".to_string()], "NSE").unwrap();
         assert_eq!(map.get("TESTEQ").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn merge_position_weighted_average_handles_holdings_and_net_positions() {
+        let mut map = HashMap::new();
+        merge_position(&mut map, "TESTEQ".to_string(), 10.0, 100.0);
+        merge_position(&mut map, "TESTEQ".to_string(), 5.0, 112.0);
+        assert_eq!(map.get("TESTEQ").map(|(qty, _)| *qty), Some(15.0));
+        assert_eq!(map.get("TESTEQ").map(|(_, avg)| *avg), Some(104.0));
     }
 
     fn write_i32(packet: &mut [u8], offset: usize, value: i32) {

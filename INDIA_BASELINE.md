@@ -96,6 +96,9 @@ check. Kite does not provide a paper endpoint, and the adapter fails closed for
 ## Current Gaps
 
 - NSE/BSE holiday calendar is still weekday-only.
-- Basket-level protective stop-loss orders are not wired into the broker trait.
+- Kite has a stop-market order helper for explicit broker-native emergency
+  orders, but basket-level protective stops are not wired into the broker trait
+  or basket state machine yet. Do not turn normal basket rebalances into `SL-M`
+  orders by changing the TOML default order type.
 - India basket membership is still a template and should be promoted only after
   repeated replay and live-smoke evidence.

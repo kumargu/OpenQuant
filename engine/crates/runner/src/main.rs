@@ -282,6 +282,12 @@ fn kite_order_config(cfg: &RunnerConfig) -> KiteOrderConfig {
     {
         order.validity = value.to_string();
     }
+    if let Some(value) = cfg.market.open.as_deref().filter(|v| !v.trim().is_empty()) {
+        order.historical_open = value.to_string();
+    }
+    if let Some(value) = cfg.market.close.as_deref().filter(|v| !v.trim().is_empty()) {
+        order.historical_close = value.to_string();
+    }
     if let Some(value) = cfg
         .kite
         .market_protection
@@ -3392,10 +3398,14 @@ mod tests {
         cfg.kite.autoslice = Some(false);
         cfg.kite.include_holdings = Some(true);
         cfg.kite.tag_prefix = Some("oqindia".to_string());
+        cfg.market.open = Some("09:15".to_string());
+        cfg.market.close = Some("15:30".to_string());
 
         let order = kite_order_config(&cfg);
         assert_eq!(order.product, "MIS");
         assert_eq!(order.order_variety, "amo");
+        assert_eq!(order.historical_open, "09:15");
+        assert_eq!(order.historical_close, "15:30");
         assert_eq!(order.market_protection.as_deref(), Some("-1"));
         assert!(!order.autoslice);
         assert!(order.include_holdings);
