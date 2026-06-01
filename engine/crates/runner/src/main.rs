@@ -966,6 +966,10 @@ struct KiteOrderArgs {
     #[arg(long)]
     stop_trigger_price: Option<f64>,
 
+    /// Optional Kite order variety override. Use `regular` during market hours; India basket live keeps AMO in TOML.
+    #[arg(long)]
+    order_variety: Option<String>,
+
     /// Required safety flag for real-money Kite order placement.
     #[arg(long, default_value_t = false)]
     confirm_real_order: bool,
@@ -2271,13 +2275,26 @@ async fn run_kite_order(args: KiteOrderArgs) {
         error!("--side must be buy or sell");
         std::process::exit(1);
     }
-    let (_, _, kite) = match load_kite_client_for_runner(args.runner_config.as_path()) {
+    let (_, _, mut kite) = match load_kite_client_for_runner(args.runner_config.as_path()) {
         Ok(v) => v,
         Err(e) => {
             error!("{e}");
             std::process::exit(1);
         }
     };
+    if let Some(order_variety) = args
+        .order_variety
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        let normalized = order_variety.to_ascii_lowercase();
+        if normalized != "regular" && normalized != "amo" {
+            error!("--order-variety must be regular or amo");
+            std::process::exit(1);
+        }
+        kite.order.order_variety = normalized;
+    }
     let result = if let Some(trigger_price) = args.stop_trigger_price {
         kite.place_stop_market_order(
             &args.symbol,
