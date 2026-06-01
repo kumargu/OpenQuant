@@ -424,6 +424,10 @@ enum Command {
     RefreshData(RefreshDataArgs),
     /// Exchange a Kite request_token for an access token and optionally persist it.
     KiteLogin(KiteLoginArgs),
+    /// Validate Kite account access without placing orders.
+    KiteAccount(KiteAccountArgs),
+    /// Place one explicit Kite order. Requires an explicit real-money confirmation flag.
+    KiteOrder(KiteOrderArgs),
     /// Build a frozen basket fit artifact from the current universe and parquet history.
     FreezeBasketFits(BasketFitArgs),
 }
@@ -925,6 +929,46 @@ struct KiteLoginArgs {
     /// Do not persist the exchanged access token back into the configured env file.
     #[arg(long, default_value_t = false)]
     no_persist_env: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct KiteAccountArgs {
+    /// Runner config TOML. Uses the India profile by default.
+    #[arg(long, default_value = "config/runner.india.toml")]
+    runner_config: PathBuf,
+
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct KiteOrderArgs {
+    /// Runner config TOML. Uses the India profile by default.
+    #[arg(long, default_value = "config/runner.india.toml")]
+    runner_config: PathBuf,
+
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+
+    /// NSE trading symbol, for example INFY.
+    #[arg(long)]
+    symbol: String,
+
+    /// buy or sell.
+    #[arg(long)]
+    side: String,
+
+    /// Whole-share quantity.
+    #[arg(long)]
+    qty: f64,
+
+    /// Optional trigger price for a Kite SL-M stop-market order.
+    #[arg(long)]
+    stop_trigger_price: Option<f64>,
+
+    /// Required safety flag for real-money Kite order placement.
+    #[arg(long, default_value_t = false)]
+    confirm_real_order: bool,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
@@ -1555,6 +1599,8 @@ async fn main() {
         Command::Replay(a) => &a.data_dir,
         Command::RefreshData(a) => &a.data_dir,
         Command::KiteLogin(a) => &a.data_dir,
+        Command::KiteAccount(a) => &a.data_dir,
+        Command::KiteOrder(a) => &a.data_dir,
         Command::FreezeBasketFits(a) => &a.data_dir,
     };
 
@@ -1598,6 +1644,18 @@ async fn main() {
         return;
     }
 
+    if let Command::KiteAccount(a) = &cli.command {
+        run_kite_account(a.clone()).await;
+        openquant_metrics::shutdown().await;
+        return;
+    }
+
+    if let Command::KiteOrder(a) = &cli.command {
+        run_kite_order(a.clone()).await;
+        openquant_metrics::shutdown().await;
+        return;
+    }
+
     // Convert CLI command → (config, trading_dir, data_dir, candidates, pipeline, run_mode)
     let runner_config = match &cli.command {
         Command::Live(a) => a.runner_config.clone(),
@@ -1605,6 +1663,8 @@ async fn main() {
         Command::Replay(a) => a.runner_config.clone(),
         Command::RefreshData(a) => a.runner_config.clone(),
         Command::KiteLogin(a) => Some(a.runner_config.clone()),
+        Command::KiteAccount(a) => Some(a.runner_config.clone()),
+        Command::KiteOrder(a) => Some(a.runner_config.clone()),
         Command::FreezeBasketFits(a) => a.runner_config.clone(),
     };
 
@@ -1657,6 +1717,8 @@ async fn main() {
         }
         Command::RefreshData(_) => unreachable!("handled before run-mode dispatch"),
         Command::KiteLogin(_) => unreachable!("handled before run-mode dispatch"),
+        Command::KiteAccount(_) => unreachable!("handled before run-mode dispatch"),
+        Command::KiteOrder(_) => unreachable!("handled before run-mode dispatch"),
         Command::FreezeBasketFits(_) => unreachable!("handled before run-mode dispatch"),
     };
 
@@ -2148,6 +2210,103 @@ async fn run_kite_login(args: KiteLoginArgs) {
         );
     } else {
         info!("Kite access token exchanged; persistence disabled");
+    }
+}
+
+fn load_kite_client_for_runner(
+    runner_config: &Path,
+) -> Result<(PathBuf, PathBuf, KiteClient), String> {
+    let (runner_cfg, runner_cfg_path) = resolve_runner_config(Some(runner_config))?;
+    apply_runner_config_env(&runner_cfg);
+    let broker_env_path = resolve_broker_env_file(&runner_cfg);
+    let kite = KiteClient::from_values(
+        runner_cfg.kite.api_key.as_deref(),
+        runner_cfg.kite.api_secret.as_deref(),
+        runner_cfg.kite.access_token.as_deref(),
+        runner_cfg.kite.redirect_url.as_deref(),
+        kite_order_config(&runner_cfg),
+        Some(&broker_env_path),
+    )?;
+    Ok((runner_cfg_path, broker_env_path, kite))
+}
+
+async fn run_kite_account(args: KiteAccountArgs) {
+    let (runner_cfg_path, broker_env_path, kite) =
+        match load_kite_client_for_runner(args.runner_config.as_path()) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(1);
+            }
+        };
+    match kite.get_account(BrokerExecutionMode::Live).await {
+        Ok(account) => {
+            println!(
+                "runner_config={}\nenv_file={}\nstatus={}\nequity={}\nbuying_power={}\ntrading_blocked={}\naccount_blocked={}",
+                runner_cfg_path.display(),
+                broker_env_path.display(),
+                account.status,
+                account.equity,
+                account.buying_power,
+                account.trading_blocked,
+                account.account_blocked
+            );
+        }
+        Err(e) => {
+            error!(error = %e, "Kite account check failed");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run_kite_order(args: KiteOrderArgs) {
+    if !args.confirm_real_order {
+        error!(
+            "refusing to place Kite order without --confirm-real-order; this command sends real-money orders"
+        );
+        std::process::exit(1);
+    }
+    let side = args.side.trim().to_ascii_lowercase();
+    if side != "buy" && side != "sell" {
+        error!("--side must be buy or sell");
+        std::process::exit(1);
+    }
+    let (_, _, kite) = match load_kite_client_for_runner(args.runner_config.as_path()) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let result = if let Some(trigger_price) = args.stop_trigger_price {
+        kite.place_stop_market_order(
+            &args.symbol,
+            args.qty,
+            side.as_str(),
+            trigger_price,
+            BrokerExecutionMode::Live,
+        )
+        .await
+    } else {
+        kite.place_order(
+            &args.symbol,
+            args.qty,
+            side.as_str(),
+            BrokerExecutionMode::Live,
+        )
+        .await
+    };
+    match result {
+        Ok(order) => {
+            println!(
+                "order_id={}\nstatus={}\nsymbol={}\nside={}\nqty={}",
+                order.id, order.status, order.symbol, order.side, order.qty
+            );
+        }
+        Err(e) => {
+            error!(error = %e, "Kite order placement failed");
+            std::process::exit(1);
+        }
     }
 }
 
