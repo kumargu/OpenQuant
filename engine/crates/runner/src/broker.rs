@@ -155,4 +155,12 @@ impl Broker for KiteClient {
     async fn get_account(&self, execution: BrokerExecutionMode) -> Result<BrokerAccount, String> {
         KiteClient::get_account(self, execution).await
     }
+
+    fn session_close_fill_contract(&self) -> SessionCloseFillContract {
+        KiteClient::session_close_fill_contract(self)
+    }
+
+    fn supports_persisted_pending_open_reconcile(&self) -> bool {
+        KiteClient::supports_persisted_pending_open_reconcile(self)
+    }
 }

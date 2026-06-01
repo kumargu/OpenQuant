@@ -43,9 +43,8 @@ impl BarSource for AlpacaBarSource {
     }
 }
 
-/// Placeholder bar source for future Kite streaming support.
+/// Kite WebSocket source. The client aggregates Kite ticks into minute bars.
 pub struct KiteBarSource {
-    #[allow(dead_code)]
     client: KiteClient,
 }
 
@@ -56,9 +55,7 @@ impl KiteBarSource {
 }
 
 impl BarSource for KiteBarSource {
-    async fn start(&self, _symbols: &[String]) -> mpsc::Receiver<StreamBar> {
-        let (_tx, rx) = mpsc::channel(1);
-        tracing::warn!("Kite bar stream is not implemented yet; returning inert stream");
-        rx
+    async fn start(&self, symbols: &[String]) -> mpsc::Receiver<StreamBar> {
+        self.client.start_bar_stream(symbols).await
     }
 }

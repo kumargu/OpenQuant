@@ -51,7 +51,7 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use crate::bar_source::{AlpacaBarSource, KiteBarSource};
 use crate::broker::{Broker, BrokerExecutionMode};
-use crate::kite::KiteClient;
+use crate::kite::{KiteClient, KiteOrderConfig};
 
 macro_rules! bug {
     ($kind:literal, $($field:tt)*) => {{
@@ -97,6 +97,16 @@ struct RunnerKiteConfig {
     api_key: Option<String>,
     api_secret: Option<String>,
     access_token: Option<String>,
+    redirect_url: Option<String>,
+    exchange: Option<String>,
+    product: Option<String>,
+    order_variety: Option<String>,
+    order_type: Option<String>,
+    validity: Option<String>,
+    market_protection: Option<String>,
+    autoslice: Option<bool>,
+    include_holdings: Option<bool>,
+    tag_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -226,11 +236,75 @@ fn resolve_live_broker_client(
             cfg.kite.api_key.as_deref(),
             cfg.kite.api_secret.as_deref(),
             cfg.kite.access_token.as_deref(),
+            cfg.kite.redirect_url.as_deref(),
+            kite_order_config(cfg),
             Some(&broker_env_path),
         )
         .map(LiveBrokerClient::Kite)?,
     };
     Ok((provider, broker_env_path, client))
+}
+
+fn kite_order_config(cfg: &RunnerConfig) -> KiteOrderConfig {
+    let mut order = KiteOrderConfig::default();
+    if let Some(value) = cfg
+        .kite
+        .exchange
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.exchange = value.to_string();
+    }
+    if let Some(value) = cfg.kite.product.as_deref().filter(|v| !v.trim().is_empty()) {
+        order.product = value.to_string();
+    }
+    if let Some(value) = cfg
+        .kite
+        .order_variety
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.order_variety = value.to_string();
+    }
+    if let Some(value) = cfg
+        .kite
+        .order_type
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.order_type = value.to_string();
+    }
+    if let Some(value) = cfg
+        .kite
+        .validity
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.validity = value.to_string();
+    }
+    if let Some(value) = cfg
+        .kite
+        .market_protection
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.market_protection = Some(value.to_string());
+    }
+    if let Some(value) = cfg.kite.autoslice {
+        order.autoslice = value;
+    }
+    if let Some(value) = cfg.kite.include_holdings {
+        order.include_holdings = value;
+    }
+    if let Some(value) = cfg
+        .kite
+        .tag_prefix
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        order.tag_prefix = Some(value.to_string());
+    }
+    order
 }
 
 enum LiveBrokerClient {
@@ -333,15 +407,17 @@ struct Cli {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
-    /// Live trading — WebSocket bars, real Alpaca orders.
+    /// Live trading — WebSocket bars, real broker orders.
     Live(StreamArgs),
-    /// Paper trading — WebSocket bars, paper Alpaca orders.
+    /// Paper trading — WebSocket bars, paper broker orders when available.
     Paper(StreamArgs),
     /// Replay — historical minute bars from Alpaca REST, no orders.
     /// The engine processes bars identically to live; it doesn't know it's replaying.
     Replay(ReplayArgs),
     /// Refresh broker minute-bar parquets through the maintained refresh pipeline.
     RefreshData(RefreshDataArgs),
+    /// Exchange a Kite request_token for an access token and optionally persist it.
+    KiteLogin(KiteLoginArgs),
     /// Build a frozen basket fit artifact from the current universe and parquet history.
     FreezeBasketFits(BasketFitArgs),
 }
@@ -817,6 +893,32 @@ struct RefreshDataArgs {
     /// Optional comma-delimited symbol filter. Overrides --universe when set.
     #[arg(long, value_delimiter = ',')]
     symbols: Vec<String>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct KiteLoginArgs {
+    /// Runner config TOML. Uses the India profile by default.
+    #[arg(long, default_value = "config/runner.india.toml")]
+    runner_config: PathBuf,
+
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+
+    /// One-time request_token copied from the Kite redirect URL.
+    #[arg(long)]
+    request_token: Option<String>,
+
+    /// Wait for the local redirect URL configured in .env.india / runner TOML.
+    #[arg(long, default_value_t = false)]
+    wait_localhost: bool,
+
+    /// Wait timeout in seconds when --wait-localhost is used.
+    #[arg(long, default_value_t = 300)]
+    timeout_seconds: u64,
+
+    /// Do not persist the exchanged access token back into the configured env file.
+    #[arg(long, default_value_t = false)]
+    no_persist_env: bool,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
@@ -1446,6 +1548,7 @@ async fn main() {
         Command::Live(a) | Command::Paper(a) => &a.data_dir,
         Command::Replay(a) => &a.data_dir,
         Command::RefreshData(a) => &a.data_dir,
+        Command::KiteLogin(a) => &a.data_dir,
         Command::FreezeBasketFits(a) => &a.data_dir,
     };
 
@@ -1483,12 +1586,19 @@ async fn main() {
         return;
     }
 
+    if let Command::KiteLogin(a) = &cli.command {
+        run_kite_login(a.clone()).await;
+        openquant_metrics::shutdown().await;
+        return;
+    }
+
     // Convert CLI command → (config, trading_dir, data_dir, candidates, pipeline, run_mode)
     let runner_config = match &cli.command {
         Command::Live(a) => a.runner_config.clone(),
         Command::Paper(a) => a.runner_config.clone(),
         Command::Replay(a) => a.runner_config.clone(),
         Command::RefreshData(a) => a.runner_config.clone(),
+        Command::KiteLogin(a) => Some(a.runner_config.clone()),
         Command::FreezeBasketFits(a) => a.runner_config.clone(),
     };
 
@@ -1540,6 +1650,7 @@ async fn main() {
             )
         }
         Command::RefreshData(_) => unreachable!("handled before run-mode dispatch"),
+        Command::KiteLogin(_) => unreachable!("handled before run-mode dispatch"),
         Command::FreezeBasketFits(_) => unreachable!("handled before run-mode dispatch"),
     };
 
@@ -1956,6 +2067,81 @@ async fn run_refresh_data(args: RefreshDataArgs) {
             error!(error = e.as_str(), "data refresh failed");
             std::process::exit(1);
         }
+    }
+}
+
+async fn run_kite_login(args: KiteLoginArgs) {
+    let (runner_cfg, runner_cfg_path) =
+        match resolve_runner_config(Some(args.runner_config.as_path())) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(1);
+            }
+        };
+    apply_runner_config_env(&runner_cfg);
+    let broker_env_path = resolve_broker_env_file(&runner_cfg);
+    let mut kite = match KiteClient::from_values(
+        runner_cfg.kite.api_key.as_deref(),
+        runner_cfg.kite.api_secret.as_deref(),
+        runner_cfg.kite.access_token.as_deref(),
+        runner_cfg.kite.redirect_url.as_deref(),
+        kite_order_config(&runner_cfg),
+        Some(&broker_env_path),
+    ) {
+        Ok(client) => client,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    let request_token = match args.request_token {
+        Some(token) => token,
+        None if args.wait_localhost => {
+            let login_url = kite.login_url();
+            println!("Open this Kite login URL:\n{login_url}");
+            match crate::kite::wait_for_local_request_token(
+                &kite.redirect_url,
+                std::time::Duration::from_secs(args.timeout_seconds),
+            ) {
+                Ok(token) => token,
+                Err(e) => {
+                    error!(error = %e, "failed to capture Kite request token");
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            let login_url = kite.login_url();
+            println!("Open this Kite login URL:\n{login_url}");
+            println!(
+                "Then rerun with --request-token <token>, or use --wait-localhost if the registered redirect URL is {}",
+                kite.redirect_url
+            );
+            return;
+        }
+    };
+
+    let access_token = match kite.exchange_request_token(&request_token).await {
+        Ok(token) => token,
+        Err(e) => {
+            error!(error = %e, "Kite token exchange failed");
+            std::process::exit(1);
+        }
+    };
+    if !args.no_persist_env {
+        if let Err(e) = kite.persist_access_token(&broker_env_path, &access_token) {
+            error!(error = %e, "failed to persist Kite access token");
+            std::process::exit(1);
+        }
+        info!(
+            runner_config = %runner_cfg_path.display(),
+            env_file = %broker_env_path.display(),
+            "Kite access token exchanged and persisted"
+        );
+    } else {
+        info!("Kite access token exchanged; persistence disabled");
     }
 }
 
@@ -3195,5 +3381,24 @@ mod tests {
                 "data/state/basket_universe_buildout.fits.state.gate-rssv1-l60-m40-e1p00-f1-emz.json"
             )
         );
+    }
+
+    #[test]
+    fn kite_order_config_respects_toml_without_erasing_defaults() {
+        let mut cfg = RunnerConfig::default();
+        cfg.kite.product = Some("MIS".to_string());
+        cfg.kite.order_variety = Some("amo".to_string());
+        cfg.kite.market_protection = Some("".to_string());
+        cfg.kite.autoslice = Some(false);
+        cfg.kite.include_holdings = Some(true);
+        cfg.kite.tag_prefix = Some("oqindia".to_string());
+
+        let order = kite_order_config(&cfg);
+        assert_eq!(order.product, "MIS");
+        assert_eq!(order.order_variety, "amo");
+        assert_eq!(order.market_protection.as_deref(), Some("-1"));
+        assert!(!order.autoslice);
+        assert!(order.include_holdings);
+        assert_eq!(order.tag_prefix.as_deref(), Some("oqindia"));
     }
 }

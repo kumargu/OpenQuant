@@ -569,10 +569,11 @@ pub async fn refresh_symbol_from(
         refresh_bars_to_columns(&bars);
 
     // Dedupe-merge: only today's existing bars can collide.
-    let existing_set: HashSet<i64> = ts.iter().cloned().collect();
+    let mut existing_set: HashSet<i64> = ts.iter().cloned().collect();
     let mut added = 0;
     for i in 0..new_ts.len() {
         if !existing_set.contains(&new_ts[i]) {
+            existing_set.insert(new_ts[i]);
             ts.push(new_ts[i]);
             o.push(new_o[i]);
             h.push(new_h[i]);
@@ -766,6 +767,32 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    struct DuplicateBarClient;
+
+    impl HistoricalBarClient for DuplicateBarClient {
+        async fn fetch_minute_bars_raw(
+            &self,
+            symbols: &[String],
+            _start: &str,
+            _end: &str,
+        ) -> Result<HashMap<String, Vec<RefreshBar>>, String> {
+            let bar = RefreshBar {
+                t: "2026-01-01T09:15:00+0530".to_string(),
+                o: 100.0,
+                h: 101.0,
+                l: 99.0,
+                c: 100.5,
+                v: 1000.0,
+                n: None,
+                vw: Some(100.5),
+            };
+            Ok(HashMap::from([(
+                symbols[0].clone(),
+                vec![bar.clone(), bar],
+            )]))
+        }
+    }
+
     fn write_test_parquet(path: &Path, bars: &[(i64, f64)]) {
         let ts: Vec<i64> = bars.iter().map(|(t, _)| *t).collect();
         let close: Vec<f64> = bars.iter().map(|(_, c)| *c).collect();
@@ -931,5 +958,26 @@ mod tests {
         assert_eq!(ts.len(), 1);
         assert_eq!(c[0], 100.5);
         assert_eq!(v[0], 1000);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_symbol_dedupes_duplicate_new_rows() {
+        let dir = TempDir::new().unwrap();
+        let mut fulfilled = Fulfilled::default();
+        let added = refresh_symbol_from(
+            dir.path(),
+            "TESTEQ",
+            "2026-01-02",
+            Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+            Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+            &DuplicateBarClient,
+            &mut fulfilled,
+        )
+        .await
+        .unwrap();
+        assert_eq!(added, 1);
+        let (ts, _, _, _, _, _, _, _) =
+            read_full_parquet(&dir.path().join("TESTEQ.parquet")).unwrap();
+        assert_eq!(ts.len(), 1);
     }
 }

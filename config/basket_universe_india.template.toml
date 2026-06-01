@@ -71,7 +71,7 @@ traded_targets = ["TITAN", "VOLTAS", "WHIRLPOOL", "DIXON"]
 decision_offset_minutes_before_close = 0
 
 [runner.portfolio]
-capital = 500000
+capital = 10000
 n_active_baskets = 5
 
 [runner.leadership_overlay]

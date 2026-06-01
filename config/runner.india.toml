@@ -11,6 +11,16 @@ data_url = ""
 api_key = ""
 api_secret = ""
 access_token = ""
+redirect_url = "http://localhost:8080/kite/callback"
+exchange = "NSE"
+product = "MIS"
+order_variety = "amo"
+order_type = "MARKET"
+validity = "DAY"
+market_protection = "-1"
+autoslice = true
+include_holdings = false
+tag_prefix = "oqindia"
 
 [market]
 profile = "india"
