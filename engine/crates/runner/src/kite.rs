@@ -1178,17 +1178,23 @@ fn extract_request_token(request: &str, expected_path: &str) -> Option<String> {
     let request_line = request.lines().next()?;
     let target = request_line.split_whitespace().nth(1)?;
     let (path, query) = target.split_once('?')?;
-    if path != expected_path {
+    if path != expected_path && path != "/" {
         return None;
     }
-    query.split('&').find_map(|pair| {
+    let mut token = None;
+    let mut success = false;
+    for pair in query.split('&') {
         let (key, value) = pair.split_once('=')?;
-        if key == "request_token" {
-            Some(value.to_string())
-        } else {
-            None
+        match key {
+            "request_token" => token = Some(value.to_string()),
+            "status" if value == "success" => success = true,
+            _ => {}
         }
-    })
+    }
+    if path == "/" && !success {
+        return None;
+    }
+    token
 }
 
 fn env_value(env: &HashMap<String, String>, key: &str) -> Option<String> {
@@ -1394,6 +1400,22 @@ mod tests {
             extract_request_token(request, "/kite/callback").as_deref(),
             Some("abc123")
         );
+    }
+
+    #[test]
+    fn extracts_request_token_from_kite_root_redirect() {
+        let request =
+            "GET /?type=login&status=success&request_token=abc123&action=login HTTP/1.1\r\n\r\n";
+        assert_eq!(
+            extract_request_token(request, "/kite/callback").as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn rejects_root_redirect_without_success_status() {
+        let request = "GET /?type=login&status=error&request_token=abc123 HTTP/1.1\r\n\r\n";
+        assert_eq!(extract_request_token(request, "/kite/callback"), None);
     }
 
     #[test]
