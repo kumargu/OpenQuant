@@ -1,13 +1,35 @@
 //! Broker abstraction for order placement and account queries.
-//!
-//! [`AlpacaClient`] is the production implementation. The replay-side
-//! `SimulatedBroker` in `simulated_broker.rs` is the other.
 
 use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
-use crate::alpaca::{AlpacaAccount, AlpacaClient, AlpacaOrder, ExecutionMode};
+use crate::alpaca::AlpacaClient;
+use crate::kite::KiteClient;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrokerExecutionMode {
+    Paper,
+    Live,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BrokerOrder {
+    pub id: String,
+    pub status: String,
+    pub symbol: String,
+    pub side: String,
+    pub qty: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BrokerAccount {
+    pub status: String,
+    pub buying_power: String,
+    pub equity: String,
+    pub trading_blocked: bool,
+    pub account_blocked: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionCloseFillContract {
@@ -27,17 +49,17 @@ pub trait Broker: Send + Sync {
         symbol: &str,
         qty: f64,
         side: &str,
-        execution: ExecutionMode,
-    ) -> Result<AlpacaOrder, String>;
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String>;
 
     /// Fetch open positions as `symbol → (qty, avg_entry_price)`.
     async fn get_positions(
         &self,
-        execution: ExecutionMode,
+        execution: BrokerExecutionMode,
     ) -> Result<HashMap<String, (f64, f64)>, String>;
 
     /// Fetch the account snapshot (status, buying power, equity, gate flags).
-    async fn get_account(&self, execution: ExecutionMode) -> Result<AlpacaAccount, String>;
+    async fn get_account(&self, execution: BrokerExecutionMode) -> Result<BrokerAccount, String>;
 
     /// Optional end-of-day equity snapshot hook. Called by `basket_live`
     /// after `process_session_close` finishes for a trading day. The
@@ -77,19 +99,19 @@ impl Broker for AlpacaClient {
         symbol: &str,
         qty: f64,
         side: &str,
-        execution: ExecutionMode,
-    ) -> Result<AlpacaOrder, String> {
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String> {
         AlpacaClient::place_order(self, symbol, qty, side, execution).await
     }
 
     async fn get_positions(
         &self,
-        execution: ExecutionMode,
+        execution: BrokerExecutionMode,
     ) -> Result<HashMap<String, (f64, f64)>, String> {
         AlpacaClient::get_positions(self, execution).await
     }
 
-    async fn get_account(&self, execution: ExecutionMode) -> Result<AlpacaAccount, String> {
+    async fn get_account(&self, execution: BrokerExecutionMode) -> Result<BrokerAccount, String> {
         AlpacaClient::get_account(self, execution).await
     }
 
@@ -109,5 +131,28 @@ impl Broker for AlpacaClient {
 
     fn supports_persisted_pending_open_reconcile(&self) -> bool {
         true
+    }
+}
+
+impl Broker for KiteClient {
+    async fn place_order(
+        &self,
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String> {
+        KiteClient::place_order(self, symbol, qty, side, execution).await
+    }
+
+    async fn get_positions(
+        &self,
+        execution: BrokerExecutionMode,
+    ) -> Result<HashMap<String, (f64, f64)>, String> {
+        KiteClient::get_positions(self, execution).await
+    }
+
+    async fn get_account(&self, execution: BrokerExecutionMode) -> Result<BrokerAccount, String> {
+        KiteClient::get_account(self, execution).await
     }
 }

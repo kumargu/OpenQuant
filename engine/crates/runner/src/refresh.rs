@@ -3,14 +3,14 @@
 //! Called at runner startup before warmup. Per symbol, the rule is dead simple:
 //!
 //! 1. Find the latest fulfilled date `F` from `fulfilled.json`.
-//! 2. Fetch `[F+1, today+1)` from Alpaca in one call.
+//! 2. Fetch `[F+1, today+1)` from the configured broker in one call.
 //! 3. Drop any existing parquet rows in `[F+1, today)` — they're partial/stale.
-//! 4. Append Alpaca's bars (deduped against today's existing bars from the
+//! 4. Append broker bars (deduped against today's existing bars from the
 //!    websocket).
 //! 5. Mark every weekday in `[F+1, today)` fulfilled. Today is never marked
 //!    (session may still be in progress); it'll be marked tomorrow.
 //!
-//! Zero-bar weekdays inside the range still get marked fulfilled — Alpaca was
+//! Zero-bar weekdays inside the range still get marked fulfilled — the broker was
 //! asked, returned nothing, that's authoritative (holiday).
 //!
 //! State lives in `<bars_dir>/fulfilled.json`. On first run (empty file), the
@@ -41,7 +41,8 @@ type BarColumns = (
     Vec<f64>,
 );
 
-use crate::alpaca::{AlpacaBar, AlpacaClient};
+use crate::alpaca::AlpacaClient;
+use crate::kite::KiteClient;
 use crate::market_session;
 
 /// Number of trading days to check for fulfillment.
@@ -49,6 +50,69 @@ const LOOKBACK_DAYS: i64 = 90;
 
 /// Filename for the fulfilled-dates cache at the bars_dir root.
 const FULFILLED_FILE: &str = "fulfilled.json";
+
+#[derive(Debug, Clone)]
+pub struct RefreshBar {
+    pub t: String,
+    pub o: f64,
+    pub h: f64,
+    pub l: f64,
+    pub c: f64,
+    pub v: f64,
+    pub n: Option<i64>,
+    pub vw: Option<f64>,
+}
+
+pub trait HistoricalBarClient: Send + Sync {
+    async fn fetch_minute_bars_raw(
+        &self,
+        symbols: &[String],
+        start: &str,
+        end: &str,
+    ) -> Result<HashMap<String, Vec<RefreshBar>>, String>;
+}
+
+impl HistoricalBarClient for AlpacaClient {
+    async fn fetch_minute_bars_raw(
+        &self,
+        symbols: &[String],
+        start: &str,
+        end: &str,
+    ) -> Result<HashMap<String, Vec<RefreshBar>>, String> {
+        let raw = AlpacaClient::fetch_minute_bars_raw(self, symbols, start, end).await?;
+        Ok(raw
+            .into_iter()
+            .map(|(sym, bars)| {
+                (
+                    sym,
+                    bars.into_iter()
+                        .map(|b| RefreshBar {
+                            t: b.t,
+                            o: b.o,
+                            h: b.h,
+                            l: b.l,
+                            c: b.c,
+                            v: b.v,
+                            n: b.n,
+                            vw: b.vw,
+                        })
+                        .collect(),
+                )
+            })
+            .collect())
+    }
+}
+
+impl HistoricalBarClient for KiteClient {
+    async fn fetch_minute_bars_raw(
+        &self,
+        symbols: &[String],
+        start: &str,
+        end: &str,
+    ) -> Result<HashMap<String, Vec<RefreshBar>>, String> {
+        KiteClient::fetch_minute_bars_raw(self, symbols, start, end).await
+    }
+}
 
 /// Schema matching build_foundation_dataset.py output.
 fn bar_schema() -> Schema {
@@ -97,6 +161,32 @@ fn load_fulfilled(bars_dir: &Path) -> Fulfilled {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => Fulfilled::default(),
     }
+}
+
+pub fn symbols_needing_refresh(
+    bars_dir: &Path,
+    symbols: &[String],
+    target_date: NaiveDate,
+) -> Vec<String> {
+    let fulfilled = load_fulfilled(bars_dir);
+    let mut expected = target_date;
+    while !is_weekday(expected) {
+        expected -= chrono::Duration::days(1);
+    }
+    let expected = expected.format("%Y-%m-%d").to_string();
+
+    symbols
+        .iter()
+        .filter(|sym| {
+            let parquet_exists = bars_dir.join(format!("{sym}.parquet")).exists();
+            let has_expected = fulfilled
+                .get(sym)
+                .map(|dates| dates.contains(&expected))
+                .unwrap_or(false);
+            !parquet_exists || !has_expected
+        })
+        .cloned()
+        .collect()
 }
 
 /// Persist fulfilled-date state to bars_dir/fulfilled.json. Atomic via tmp+rename.
@@ -322,9 +412,15 @@ fn latest_fulfilled(symbol: &str, fulfilled: &Fulfilled) -> Option<NaiveDate> {
         .max()
 }
 
-/// Convert Alpaca bars to column vectors. Silently skips bars with
+fn parse_bar_timestamp(raw: &str) -> Result<chrono::DateTime<chrono::FixedOffset>, String> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .or_else(|_| chrono::DateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%z"))
+        .map_err(|e| e.to_string())
+}
+
+/// Convert refresh bars to column vectors. Silently skips bars with
 /// unparseable timestamps (logged as warning).
-fn alpaca_bars_to_columns(bars: &[AlpacaBar]) -> BarColumns {
+fn refresh_bars_to_columns(bars: &[RefreshBar]) -> BarColumns {
     let mut ts = Vec::with_capacity(bars.len());
     let mut open = Vec::with_capacity(bars.len());
     let mut high = Vec::with_capacity(bars.len());
@@ -335,7 +431,7 @@ fn alpaca_bars_to_columns(bars: &[AlpacaBar]) -> BarColumns {
     let mut vwap = Vec::with_capacity(bars.len());
 
     for bar in bars {
-        match chrono::DateTime::parse_from_rfc3339(&bar.t) {
+        match parse_bar_timestamp(&bar.t) {
             Ok(dt) => {
                 ts.push(dt.timestamp_millis() * 1000);
                 open.push(bar.o);
@@ -356,36 +452,76 @@ fn alpaca_bars_to_columns(bars: &[AlpacaBar]) -> BarColumns {
 }
 
 /// Refresh one symbol's parquet to today using the simple latest-fulfilled rule:
-/// fetch `[F+1, today+1)` from Alpaca, replace any existing rows in `[F+1, today)`
-/// with Alpaca's copy, dedupe-merge today's bars (websocket may have written
+/// fetch `[F+1, today+1)` from the configured broker, replace any existing rows in `[F+1, today)`
+/// with the broker's copy, dedupe-merge today's bars (websocket may have written
 /// some), then mark every weekday in `[F+1, today)` fulfilled.
 pub async fn refresh_symbol(
     bars_dir: &Path,
     symbol: &str,
     target_date: &str,
-    client: &AlpacaClient,
+    bootstrap_start_date: Option<NaiveDate>,
+    client: &impl HistoricalBarClient,
+    fulfilled: &mut Fulfilled,
+) -> Result<usize, String> {
+    refresh_symbol_from(
+        bars_dir,
+        symbol,
+        target_date,
+        bootstrap_start_date,
+        None,
+        client,
+        fulfilled,
+    )
+    .await
+}
+
+/// Refresh one symbol, optionally forcing the fetch floor earlier than the
+/// latest fulfilled date. The forced floor is used for historical backfills
+/// where existing parquets start too late but should stay on the maintained
+/// refresh path.
+pub async fn refresh_symbol_from(
+    bars_dir: &Path,
+    symbol: &str,
+    target_date: &str,
+    bootstrap_start_date: Option<NaiveDate>,
+    refresh_from: Option<NaiveDate>,
+    client: &impl HistoricalBarClient,
     fulfilled: &mut Fulfilled,
 ) -> Result<usize, String> {
     let path = bars_dir.join(format!("{symbol}.parquet"));
-    if !path.exists() {
-        return Err(format!("{symbol}.parquet not found"));
-    }
     let today = NaiveDate::parse_from_str(target_date, "%Y-%m-%d")
         .map_err(|e| format!("target_date: {e}"))?;
 
-    let (mut ts, mut o, mut h, mut l, mut c, mut v, mut tc, mut vw) = read_full_parquet(&path)?;
-    if ts.is_empty() {
-        return Err(format!("{symbol}: empty parquet"));
-    }
+    let (mut ts, mut o, mut h, mut l, mut c, mut v, mut tc, mut vw) = if path.exists() {
+        read_full_parquet(&path)?
+    } else {
+        (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    };
 
     // Bootstrap on first run: trust existing parquet data.
-    bootstrap_fulfilled(symbol, &ts, fulfilled, today);
+    if !ts.is_empty() {
+        bootstrap_fulfilled(symbol, &ts, fulfilled, today);
+    }
 
     // F = latest fulfilled date. Fall back to a 90-day-ago floor if none exists
     // (fresh symbol with no parquet history we trust).
-    let f = latest_fulfilled(symbol, fulfilled)
-        .unwrap_or(today - chrono::Duration::days(LOOKBACK_DAYS));
-    let fetch_from = f + chrono::Duration::days(1);
+    let f = latest_fulfilled(symbol, fulfilled).unwrap_or_else(|| {
+        bootstrap_start_date.unwrap_or(today - chrono::Duration::days(LOOKBACK_DAYS))
+            - chrono::Duration::days(1)
+    });
+    let incremental_fetch_from = f + chrono::Duration::days(1);
+    let fetch_from = refresh_from
+        .map(|from| from.min(incremental_fetch_from))
+        .unwrap_or(incremental_fetch_from);
 
     if fetch_from > today {
         info!(symbol, latest_fulfilled = %f, "already up to date");
@@ -424,12 +560,13 @@ pub async fn refresh_symbol(
         vw = keep_idx.iter().map(|&i| vw[i]).collect();
     }
 
-    // Fetch [fetch_from, today+1) from Alpaca in one call.
+    // Fetch [fetch_from, today+1) through the configured broker history client.
     let raw = client
         .fetch_minute_bars_raw(&[symbol.to_string()], &fetch_from_str, &fetch_to_str)
         .await?;
     let bars = raw.get(symbol).cloned().unwrap_or_default();
-    let (new_ts, new_o, new_h, new_l, new_c, new_v, new_tc, new_vw) = alpaca_bars_to_columns(&bars);
+    let (new_ts, new_o, new_h, new_l, new_c, new_v, new_tc, new_vw) =
+        refresh_bars_to_columns(&bars);
 
     // Dedupe-merge: only today's existing bars can collide.
     let existing_set: HashSet<i64> = ts.iter().cloned().collect();
@@ -503,7 +640,29 @@ pub async fn refresh_symbol(
 pub async fn refresh_all(
     bars_dir: &Path,
     target_date: &str,
-    client: &AlpacaClient,
+    bootstrap_start_date: Option<NaiveDate>,
+    client: &impl HistoricalBarClient,
+    filter: Option<&[String]>,
+) -> Result<usize, String> {
+    refresh_all_from(
+        bars_dir,
+        target_date,
+        bootstrap_start_date,
+        None,
+        client,
+        filter,
+    )
+    .await
+}
+
+/// Refresh symbols in bars_dir to target_date, optionally forcing an earlier
+/// fetch floor for historical backfills.
+pub async fn refresh_all_from(
+    bars_dir: &Path,
+    target_date: &str,
+    bootstrap_start_date: Option<NaiveDate>,
+    refresh_from: Option<NaiveDate>,
+    client: &impl HistoricalBarClient,
     filter: Option<&[String]>,
 ) -> Result<usize, String> {
     let mut available: Vec<String> = Vec::new();
@@ -521,10 +680,18 @@ pub async fn refresh_all(
     let symbols: Vec<String> = match filter {
         Some(wanted) => {
             let want: std::collections::HashSet<&str> = wanted.iter().map(String::as_str).collect();
-            available
+            let mut out = available
                 .into_iter()
                 .filter(|s| want.contains(s.as_str()))
-                .collect()
+                .collect::<Vec<_>>();
+            for sym in wanted {
+                if !out.iter().any(|s| s == sym) {
+                    out.push(sym.clone());
+                }
+            }
+            out.sort();
+            out.dedup();
+            out
         }
         None => available,
     };
@@ -541,7 +708,17 @@ pub async fn refresh_all(
     let mut errors = 0;
 
     for (i, sym) in symbols.iter().enumerate() {
-        match refresh_symbol(bars_dir, sym, target_date, client, &mut fulfilled).await {
+        match refresh_symbol_from(
+            bars_dir,
+            sym,
+            target_date,
+            bootstrap_start_date,
+            refresh_from,
+            client,
+            &mut fulfilled,
+        )
+        .await
+        {
             Ok(0) => {}
             Ok(n) => {
                 total += n;
@@ -721,8 +898,8 @@ mod tests {
     }
 
     #[test]
-    fn test_alpaca_bars_to_columns() {
-        let bars = vec![AlpacaBar {
+    fn test_refresh_bars_to_columns_rfc3339() {
+        let bars = vec![RefreshBar {
             t: "2026-04-07T13:30:00Z".to_string(),
             o: 100.0,
             h: 101.0,
@@ -732,7 +909,25 @@ mod tests {
             n: Some(50),
             vw: Some(100.3),
         }];
-        let (ts, _, _, _, c, v, _, _) = alpaca_bars_to_columns(&bars);
+        let (ts, _, _, _, c, v, _, _) = refresh_bars_to_columns(&bars);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(c[0], 100.5);
+        assert_eq!(v[0], 1000);
+    }
+
+    #[test]
+    fn test_refresh_bars_to_columns_kite_offset_without_colon() {
+        let bars = vec![RefreshBar {
+            t: "2026-01-01T09:15:00+0530".to_string(),
+            o: 100.0,
+            h: 101.0,
+            l: 99.0,
+            c: 100.5,
+            v: 1000.0,
+            n: None,
+            vw: Some(100.5),
+        }];
+        let (ts, _, _, _, c, v, _, _) = refresh_bars_to_columns(&bars);
         assert_eq!(ts.len(), 1);
         assert_eq!(c[0], 100.5);
         assert_eq!(v[0], 1000);

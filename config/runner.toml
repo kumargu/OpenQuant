@@ -1,0 +1,22 @@
+[broker]
+provider = "alpaca"
+env_file = ".env"
+
+[alpaca]
+api_key = ""
+secret_key = ""
+data_url = ""
+
+[kite]
+api_key = ""
+api_secret = ""
+access_token = ""
+
+[market]
+profile = "us"
+tz = "America/New_York"
+open = "09:30"
+close = "16:00"
+calendar = "nyse"
+
+[data]

@@ -199,27 +199,27 @@ impl FeatureState {
         regime_config: RegimeConfig,
         warmup: usize,
     ) -> Self {
-        Self::build(garch_config, regime_config, warmup, -5)
+        Self::build(garch_config, regime_config, warmup, -300)
     }
 
     pub fn with_config(garch_config: GarchConfig, regime_config: RegimeConfig) -> Self {
-        Self::build(garch_config, regime_config, 64, -5)
+        Self::build(garch_config, regime_config, 64, -300)
     }
 
     pub fn with_full_config(
         garch_config: GarchConfig,
         regime_config: RegimeConfig,
         warmup: usize,
-        timezone_offset_hours: i32,
+        timezone_offset_minutes: i32,
     ) -> Self {
-        Self::build(garch_config, regime_config, warmup, timezone_offset_hours)
+        Self::build(garch_config, regime_config, warmup, timezone_offset_minutes)
     }
 
     fn build(
         garch_config: GarchConfig,
         regime_config: RegimeConfig,
         warmup: usize,
-        timezone_offset_hours: i32,
+        timezone_offset_minutes: i32,
     ) -> Self {
         // Minimum warmup: must cover the longest rolling window (32 bars).
         // For 1-min bars, 64 covers Sma<64>. For wider bars, caller
@@ -243,7 +243,7 @@ impl FeatureState {
 
             close_stats: RollingStats::new(32),
 
-            vwap: VwapState::new(timezone_offset_hours),
+            vwap: VwapState::new(timezone_offset_minutes),
 
             donchian: Donchian::new(),
             bandwidth_pct: BandwidthPercentile::new(),

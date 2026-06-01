@@ -1,0 +1,24 @@
+[broker]
+provider = "kite"
+env_file = ".env.india"
+
+[alpaca]
+api_key = ""
+secret_key = ""
+data_url = ""
+
+[kite]
+api_key = ""
+api_secret = ""
+access_token = ""
+
+[market]
+profile = "india"
+tz = "Asia/Kolkata"
+open = "09:15"
+close = "15:30"
+calendar = "weekdays"
+
+[data]
+bars_dir = "~/quant-data/india/bars/2026_phase1_1min"
+bootstrap_start_date = "2025-01-01"

@@ -7,6 +7,7 @@
 
 use tokio::sync::mpsc;
 
+use crate::kite::KiteClient;
 use crate::stream::{self, StreamBar};
 
 /// Abstraction over the bar feed.
@@ -39,5 +40,25 @@ impl AlpacaBarSource {
 impl BarSource for AlpacaBarSource {
     async fn start(&self, symbols: &[String]) -> mpsc::Receiver<StreamBar> {
         stream::start_bar_stream(&self.api_key, &self.api_secret, symbols).await
+    }
+}
+
+/// Placeholder bar source for future Kite streaming support.
+pub struct KiteBarSource {
+    #[allow(dead_code)]
+    client: KiteClient,
+}
+
+impl KiteBarSource {
+    pub fn new(client: KiteClient) -> Self {
+        Self { client }
+    }
+}
+
+impl BarSource for KiteBarSource {
+    async fn start(&self, _symbols: &[String]) -> mpsc::Receiver<StreamBar> {
+        let (_tx, rx) = mpsc::channel(1);
+        tracing::warn!("Kite bar stream is not implemented yet; returning inert stream");
+        rx
     }
 }
