@@ -33,6 +33,8 @@ mod replay_report;
 mod session_trigger;
 mod simulated_broker;
 mod stream;
+#[path = "../../../../vested/mod.rs"]
+mod vested;
 
 use alpaca::ExecutionMode;
 use basket_engine::{AdmissionScoreKind, GatePolicyKind, RollingEntryMode, RollingSScoreV1Config};
@@ -287,6 +289,36 @@ struct StreamArgs {
     /// Defaults to the universe TOML runner profile.
     #[arg(long)]
     leadership_long_only_leverage: Option<f64>,
+
+    /// Basket paper/noop experiment: project target notionals to
+    /// Vested-compatible long-only targets before emitting Alpaca paper orders.
+    #[arg(long, default_value_t = false)]
+    vested_long_only: bool,
+
+    /// Basket paper/noop experiment: Vested projection method.
+    #[arg(long, value_enum)]
+    vested_projection: Option<VestedProjectionArg>,
+
+    /// Basket paper/noop experiment: scale Vested exposure to cash in weak regimes.
+    #[arg(long, default_value_t = false)]
+    vested_regime_gate: bool,
+
+    /// Basket paper/noop experiment: write daily Vested-compatible picks/weights TSV.
+    #[arg(long)]
+    vested_picks_tsv: Option<PathBuf>,
+
+    /// Preset for Alpaca paper validation of the Vested-compatible model.
+    /// Applies buildout universe, 5 active baskets, overlay sleeve 1.25,
+    /// Vested long-only projection, and data/paper/vested_model paths.
+    #[arg(long, default_value_t = false)]
+    paper_vested: bool,
+
+    /// Preset for live-market Vested staging. Uses Alpaca market data but
+    /// forces noop execution so no Alpaca live orders are placed.
+    /// Applies buildout universe, 5 active baskets, overlay sleeve 1.25,
+    /// Vested long-only projection, and data/live/vested_model paths.
+    #[arg(long, default_value_t = false)]
+    live_vested: bool,
 }
 
 /// Args for replay (adds date range).
@@ -424,6 +456,29 @@ struct ReplayArgs {
     #[arg(long)]
     basket_journal_path: Option<PathBuf>,
 
+    /// Basket replay experiment: project target notionals to Vested-compatible
+    /// long-only targets by removing negative target notionals before orders.
+    #[arg(long, default_value_t = false)]
+    vested_long_only: bool,
+
+    /// Basket replay experiment: Vested projection method.
+    #[arg(long, value_enum)]
+    vested_projection: Option<VestedProjectionArg>,
+
+    /// Basket replay experiment: scale Vested exposure to cash in weak regimes.
+    #[arg(long, default_value_t = false)]
+    vested_regime_gate: bool,
+
+    /// Basket replay experiment: write daily Vested-compatible picks/weights TSV.
+    #[arg(long)]
+    vested_picks_tsv: Option<PathBuf>,
+
+    /// Preset for replaying the current Vested-compatible model.
+    /// Applies buildout universe, 5 active baskets, overlay sleeve 1.25,
+    /// Vested long-only projection, and data/replay/vested_model paths.
+    #[arg(long, default_value_t = false)]
+    replay_vested: bool,
+
     /// Ignore leadership overlay defaults from the universe TOML for this run.
     #[arg(long, default_value_t = false)]
     disable_leadership_overlay: bool,
@@ -521,6 +576,23 @@ enum LeadershipModeArg {
 enum LeadershipPickerArg {
     Fixed,
     RuleV1,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum VestedProjectionArg {
+    DropShorts,
+    PeerMirror,
+    ShortPenalty,
+}
+
+impl From<VestedProjectionArg> for vested::ProjectionKind {
+    fn from(value: VestedProjectionArg) -> Self {
+        match value {
+            VestedProjectionArg::DropShorts => Self::DropShorts,
+            VestedProjectionArg::PeerMirror => Self::PeerMirror,
+            VestedProjectionArg::ShortPenalty => Self::ShortPenalty,
+        }
+    }
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -671,6 +743,91 @@ fn resolve_stream_execution(
             std::process::exit(1);
         }
     }
+}
+
+fn resolve_stream_vested_preset(
+    args: &StreamArgs,
+    is_live_command: bool,
+) -> Option<vested::Preset> {
+    if args.paper_vested && args.live_vested {
+        error!("choose only one of --paper-vested or --live-vested");
+        std::process::exit(1);
+    }
+    if args.paper_vested {
+        if is_live_command {
+            error!("--paper-vested is only valid on the paper command");
+            std::process::exit(1);
+        }
+        return Some(vested::preset(vested::PresetKind::Paper));
+    }
+    if args.live_vested {
+        if !is_live_command {
+            error!("--live-vested is only valid on the live command");
+            std::process::exit(1);
+        }
+        if let Some(mode) = args.execution.as_deref() {
+            if mode != "noop" {
+                error!(
+                    requested = %mode,
+                    "--live-vested uses live market data but must keep Alpaca execution at noop"
+                );
+                std::process::exit(1);
+            }
+        }
+        return Some(vested::preset(vested::PresetKind::Live));
+    }
+    None
+}
+
+fn resolve_replay_vested_preset(args: &ReplayArgs) -> Option<vested::Preset> {
+    args.replay_vested
+        .then(|| vested::preset(vested::PresetKind::Replay))
+}
+
+fn resolve_vested_projection_config(
+    projection: Option<VestedProjectionArg>,
+) -> vested::ProjectionConfig {
+    let mut config = vested::ProjectionConfig::default();
+    config.kind = projection.map(Into::into).unwrap_or(config.kind);
+    config
+}
+
+fn explicit_vested_mode_requested(
+    vested_long_only: bool,
+    vested_projection: Option<VestedProjectionArg>,
+    vested_regime_gate: bool,
+    vested_picks_tsv: &Option<PathBuf>,
+) -> bool {
+    vested_long_only
+        || vested_projection.is_some()
+        || vested_regime_gate
+        || vested_picks_tsv.is_some()
+}
+
+fn resolve_vested_regime_gate_config(
+    enabled: bool,
+    preset: Option<vested::RegimeGateConfig>,
+) -> Option<vested::RegimeGateConfig> {
+    if enabled {
+        Some(vested::default_regime_gate_config())
+    } else {
+        preset
+    }
+}
+
+fn resolve_vested_mode(
+    enabled: bool,
+    projection: vested::ProjectionConfig,
+    regime_gate: Option<vested::RegimeGateConfig>,
+    picks_tsv: Option<PathBuf>,
+) -> Option<vested::VestedMode> {
+    enabled.then(|| {
+        vested::VestedMode::new(vested::ModeConfig {
+            projection,
+            regime_gate,
+            picks_tsv,
+        })
+    })
 }
 
 fn rule_v1_picker_config_from_universe(
@@ -1233,9 +1390,40 @@ async fn main() {
 // ── Basket live/paper dispatch ──────────────────────────────────────
 
 async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
+    let vested_preset = resolve_stream_vested_preset(&args, is_live_command);
+    let vested_enabled = explicit_vested_mode_requested(
+        args.vested_long_only,
+        args.vested_projection,
+        args.vested_regime_gate,
+        &args.vested_picks_tsv,
+    ) || vested_preset
+        .as_ref()
+        .map(|p| p.vested_long_only)
+        .unwrap_or(false);
+    let vested_projection = args
+        .vested_projection
+        .map(|projection| resolve_vested_projection_config(Some(projection)))
+        .or_else(|| vested_preset.as_ref().map(|p| p.vested_projection))
+        .unwrap_or_default();
+    let vested_regime_gate = resolve_vested_regime_gate_config(
+        args.vested_regime_gate,
+        vested_preset.as_ref().and_then(|p| p.vested_regime_gate),
+    );
+    let vested_picks_tsv = args
+        .vested_picks_tsv
+        .clone()
+        .or_else(|| vested_preset.as_ref().map(|p| p.picks_tsv.clone()));
+    let vested_mode = resolve_vested_mode(
+        vested_enabled,
+        vested_projection,
+        vested_regime_gate,
+        vested_picks_tsv,
+    );
+
     let universe_path = args
         .universe
         .clone()
+        .or_else(|| vested_preset.as_ref().map(|p| p.universe.clone()))
         .or_else(|| default_stream_universe_path(args.engine, is_live_command).map(PathBuf::from))
         .unwrap_or_else(|| {
             error!("--universe is required when --engine basket");
@@ -1255,7 +1443,11 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         .clone()
         .unwrap_or_else(|| basket_fits::default_fit_artifact_path(&universe_path));
 
-    let execution = resolve_stream_execution(args.execution.as_deref(), is_live_command);
+    let execution_request = match vested_preset.as_ref().map(|p| p.kind) {
+        Some(vested::PresetKind::Live) => Some("noop"),
+        _ => args.execution.as_deref(),
+    };
+    let execution = resolve_stream_execution(execution_request, is_live_command);
     let universe = match basket_picker::load_universe(&universe_path) {
         Ok(u) => u,
         Err(e) => {
@@ -1266,8 +1458,12 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     let runtime = resolve_basket_runtime(
         &universe,
         BasketRuntimeOverrides {
-            capital: args.capital,
-            n_active_baskets: args.n_active_baskets,
+            capital: args
+                .capital
+                .or_else(|| vested_preset.as_ref().map(|p| p.capital)),
+            n_active_baskets: args
+                .n_active_baskets
+                .or_else(|| vested_preset.as_ref().map(|p| p.n_active_baskets)),
             basket_admission_score: args.basket_admission_score,
             disable_leadership_overlay: args.disable_leadership_overlay,
             leadership_overlay_sectors: &args.leadership_overlay_sectors,
@@ -1279,7 +1475,11 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             leadership_min_hold_days: args.leadership_min_hold_days,
             leadership_mode: args.leadership_mode,
             leadership_picker: args.leadership_picker,
-            leadership_long_only_leverage: args.leadership_long_only_leverage,
+            leadership_long_only_leverage: args.leadership_long_only_leverage.or_else(|| {
+                vested_preset
+                    .as_ref()
+                    .map(|p| p.leadership_long_only_leverage)
+            }),
         },
     );
     let portfolio_config = runtime.portfolio_config;
@@ -1291,6 +1491,12 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     if leadership_overlay.is_some() && matches!(execution, basket_live::BasketExecution::Live) {
         error!(
             "leadership overlay is not enabled for real-money live execution; use paper/noop until explicitly promoted"
+        );
+        std::process::exit(1);
+    }
+    if vested_mode.is_some() && matches!(execution, basket_live::BasketExecution::Live) {
+        error!(
+            "Vested adapter mode is not enabled for Alpaca live execution; use paper/noop for validation and Vested UI for real execution"
         );
         std::process::exit(1);
     }
@@ -1357,12 +1563,16 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
         Some(fp) => path_with_suffix(&default_state_base, fp),
         None => default_state_base,
     };
-    let state_path = match (&args.state_path, overlay_fingerprint.as_deref()) {
+    let requested_state_path = args
+        .state_path
+        .clone()
+        .or_else(|| vested_preset.as_ref().map(|p| p.state_path.clone()));
+    let state_path = match (&requested_state_path, overlay_fingerprint.as_deref()) {
         (Some(path), _) => path.clone(),
         (None, Some(fp)) => path_with_suffix(&state_base, fp),
         (None, None) => state_base,
     };
-    if args.state_path.is_none() {
+    if requested_state_path.is_none() {
         let legacy_gate_base = match gate_fingerprint.as_deref() {
             Some(fp) => path_with_suffix(&legacy_state_base, fp),
             None => legacy_state_base,
@@ -1429,11 +1639,16 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     let clock = clock::SystemClock;
     let mut session_trigger = session_trigger::IntervalSessionTrigger::new(clock::SystemClock, 2);
     let basket_journal_path = args.basket_journal_path.clone().unwrap_or_else(|| {
-        let base = args.data_dir.join("journal").join("basket_live.sqlite3");
-        match overlay_fingerprint.as_deref() {
-            Some(fp) => path_with_suffix(&base, fp),
-            None => base,
-        }
+        vested_preset
+            .as_ref()
+            .and_then(|p| p.journal_path.clone())
+            .unwrap_or_else(|| {
+                let base = args.data_dir.join("journal").join("basket_live.sqlite3");
+                match overlay_fingerprint.as_deref() {
+                    Some(fp) => path_with_suffix(&base, fp),
+                    None => base,
+                }
+            })
     });
     if let Err(e) = basket_live::run_basket_live(
         &alpaca,
@@ -1454,6 +1669,7 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
+            vested_mode,
         },
     )
     .await
@@ -2124,9 +2340,44 @@ fn log_intent(intent: &openquant_core::pairs::PairOrderIntent, side: &str) {
 // entirely at the call site.
 
 async fn run_basket_replay_live_path(args: ReplayArgs) {
+    let vested_preset = resolve_replay_vested_preset(&args);
+    let vested_enabled = explicit_vested_mode_requested(
+        args.vested_long_only,
+        args.vested_projection,
+        args.vested_regime_gate,
+        &args.vested_picks_tsv,
+    ) || vested_preset
+        .as_ref()
+        .map(|p| p.vested_long_only)
+        .unwrap_or(false);
+    let vested_projection = args
+        .vested_projection
+        .map(|projection| resolve_vested_projection_config(Some(projection)))
+        .or_else(|| vested_preset.as_ref().map(|p| p.vested_projection))
+        .unwrap_or_default();
+    let vested_regime_gate = resolve_vested_regime_gate_config(
+        args.vested_regime_gate,
+        vested_preset.as_ref().and_then(|p| p.vested_regime_gate),
+    );
+    let vested_picks_tsv = args
+        .vested_picks_tsv
+        .clone()
+        .or_else(|| vested_preset.as_ref().map(|p| p.picks_tsv.clone()));
+    let vested_mode = resolve_vested_mode(
+        vested_enabled,
+        vested_projection,
+        vested_regime_gate,
+        vested_picks_tsv,
+    );
+    let report_tsv = args
+        .report_tsv
+        .clone()
+        .or_else(|| vested_preset.as_ref().and_then(|p| p.report_tsv.clone()));
+
     let universe_path = args
         .universe
         .clone()
+        .or_else(|| vested_preset.as_ref().map(|p| p.universe.clone()))
         .or_else(|| args.engine.universe_path().map(PathBuf::from))
         .unwrap_or_else(|| {
             error!("--universe is required when --engine basket");
@@ -2174,20 +2425,24 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     };
 
     // Replay state isolation: never touch the live default state path.
-    let state_path = args.state_path.clone().unwrap_or_else(|| {
-        let stem = universe_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("basket_universe");
-        let base = args
-            .data_dir
-            .join("replay")
-            .join(format!("{stem}.state.json"));
-        match gate_policy_fingerprint(&gate_policy).as_deref() {
-            Some(fp) => path_with_suffix(&base, fp),
-            None => base,
-        }
-    });
+    let state_path = args
+        .state_path
+        .clone()
+        .or_else(|| vested_preset.as_ref().map(|p| p.state_path.clone()))
+        .unwrap_or_else(|| {
+            let stem = universe_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("basket_universe");
+            let base = args
+                .data_dir
+                .join("replay")
+                .join(format!("{stem}.state.json"));
+            match gate_policy_fingerprint(&gate_policy).as_deref() {
+                Some(fp) => path_with_suffix(&base, fp),
+                None => base,
+            }
+        });
     if let Some(parent) = state_path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             error!(
@@ -2237,8 +2492,12 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
     let runtime = resolve_basket_runtime(
         &universe,
         BasketRuntimeOverrides {
-            capital: args.capital,
-            n_active_baskets: args.n_active_baskets,
+            capital: args
+                .capital
+                .or_else(|| vested_preset.as_ref().map(|p| p.capital)),
+            n_active_baskets: args
+                .n_active_baskets
+                .or_else(|| vested_preset.as_ref().map(|p| p.n_active_baskets)),
             basket_admission_score: args.basket_admission_score,
             disable_leadership_overlay: args.disable_leadership_overlay,
             leadership_overlay_sectors: &args.leadership_overlay_sectors,
@@ -2250,7 +2509,11 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             leadership_min_hold_days: args.leadership_min_hold_days,
             leadership_mode: args.leadership_mode,
             leadership_picker: args.leadership_picker,
-            leadership_long_only_leverage: args.leadership_long_only_leverage,
+            leadership_long_only_leverage: args.leadership_long_only_leverage.or_else(|| {
+                vested_preset
+                    .as_ref()
+                    .map(|p| p.leadership_long_only_leverage)
+            }),
         },
     );
     let portfolio_config = runtime.portfolio_config;
@@ -2353,6 +2616,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             rule_v1_config: runtime.rule_v1_config,
             gate_policy,
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
+            vested_mode,
         },
     )
     .await;
@@ -2399,7 +2663,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             "REPLAY PORTFOLIO STATS"
         );
 
-        if let Some(tsv_path) = args.report_tsv.as_ref() {
+        if let Some(tsv_path) = report_tsv.as_ref() {
             if let Some(parent) = tsv_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -2408,7 +2672,7 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
                 Err(e) => error!(error = %e, "failed to write replay report TSV"),
             }
         }
-    } else if args.report_tsv.is_some() {
+    } else if report_tsv.is_some() {
         warn!(
             n_days = daily_equity.len(),
             "fewer than 2 daily-equity points — skipping replay report TSV"

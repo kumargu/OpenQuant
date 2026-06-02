@@ -54,6 +54,10 @@ use crate::clock::Clock;
 use crate::market_session;
 use crate::session_trigger::SessionTrigger;
 use crate::stream;
+use crate::vested::{
+    ProjectionInput as VestedProjectionInput, StrategyFeatures as VestedStrategyFeatures,
+};
+use crate::vested::{VestedMode, VestedTargetAdapter};
 
 macro_rules! bug {
     ($kind:literal, $($field:tt)*) => {{
@@ -124,6 +128,7 @@ pub struct BasketRunOptions {
     pub rule_v1_config: Option<crate::basket_overlay_picker::RuleV1OverlayPickerConfig>,
     pub gate_policy: GatePolicyKind,
     pub supported_reallocation_band_config: SupportedReallocationBandConfig,
+    pub vested_mode: Option<VestedMode>,
 }
 
 impl Default for BasketRunOptions {
@@ -136,6 +141,7 @@ impl Default for BasketRunOptions {
             rule_v1_config: None,
             gate_policy: GatePolicyKind::BertramFrozen,
             supported_reallocation_band_config: SupportedReallocationBandConfig::default(),
+            vested_mode: None,
         }
     }
 }
@@ -613,6 +619,7 @@ fn leadership_picker_features(
         leadership_short_conflict_ratio: 0.0,
         strategy_return_20d: equity_features.return_20d,
         strategy_drawdown_20d: equity_features.drawdown_20d,
+        strategy_equity_observations: equity_features.observations,
         basket_only_scale_if_sleeve: 1.0,
     }
 }
@@ -686,6 +693,7 @@ fn engine_flatten_baskets_for_plan(
 struct StrategyEquityFeatures {
     return_20d: f64,
     drawdown_20d: f64,
+    observations: usize,
 }
 
 fn strategy_equity_features(equity_history: &VecDeque<f64>) -> StrategyEquityFeatures {
@@ -709,6 +717,7 @@ fn strategy_equity_features(equity_history: &VecDeque<f64>) -> StrategyEquityFea
         } else {
             0.0
         },
+        observations: values.len(),
     }
 }
 
@@ -2465,6 +2474,7 @@ pub async fn run_basket_live(
             &mut overlay_picker,
             options.leadership_overlay.as_ref(),
             options.supported_reallocation_band_config,
+            options.vested_mode.as_ref(),
             pending_open_reconcile_enabled,
             &pending_open_reconcile_path,
             &mut pending_open_reconcile,
@@ -2761,6 +2771,7 @@ pub async fn run_basket_live(
                         &mut overlay_picker,
                         options.leadership_overlay.as_ref(),
                         options.supported_reallocation_band_config,
+                        options.vested_mode.as_ref(),
                         pending_open_reconcile_enabled,
                         &pending_open_reconcile_path,
                         &mut pending_open_reconcile,
@@ -3128,6 +3139,7 @@ async fn process_session_close(
     overlay_picker: &mut impl BasketOverlayPicker,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
     supported_reallocation_band_config: SupportedReallocationBandConfig,
+    vested_mode: Option<&VestedMode>,
     pending_open_reconcile_enabled: bool,
     pending_open_reconcile_path: &Path,
     pending_open_reconcile_state: &mut Option<PendingOpenReconcileState>,
@@ -3180,6 +3192,11 @@ async fn process_session_close(
     let mut effective_portfolio_config = portfolio_config.clone();
     effective_portfolio_config.capital =
         effective_execution_capital(portfolio_config.capital, execution_account_equity);
+    let vested_strategy_features = VestedStrategyFeatures {
+        return_20d: picker_features.strategy_return_20d,
+        drawdown_20d: picker_features.strategy_drawdown_20d,
+        observations: picker_features.strategy_equity_observations,
+    };
 
     // Portfolio layer: apply active-basket admission first, then convert
     // admitted target notionals to target shares. Suppression is planned on
@@ -3266,7 +3283,7 @@ async fn process_session_close(
         matches!(picker_decision.mode, BasketOverlayMode::AddCappedLongSleeve)
             && !leadership_long_symbols.is_empty();
     let basket_only_target_notionals = plan.symbol_notionals.clone();
-    let target_notionals = if using_long_replacement {
+    let mut target_notionals = if using_long_replacement {
         leadership_long_only_notionals(
             closes,
             leadership_long_symbols,
@@ -3307,6 +3324,74 @@ async fn process_session_close(
     } else {
         plan.symbol_notionals.clone()
     };
+    if let Some(vested) = vested_mode {
+        let projection_uses_selected_basket_legs =
+            !using_long_replacement && !using_capped_long_sleeve;
+        let mut projection_context_notionals = target_notionals.clone();
+        if !projection_uses_selected_basket_legs {
+            warn!(
+                date = %date,
+                overlay_mode = picker_decision.mode.as_str(),
+                "vested adapter received already-transformed leadership overlay targets"
+            );
+        }
+        if !projection_uses_selected_basket_legs {
+            projection_context_notionals
+                .retain(|_, notional| notional.is_finite() && *notional > 0.0);
+        }
+        let decision = vested.project_targets(VestedProjectionInput {
+            engine,
+            selected_baskets: &plan.selected_baskets,
+            target_notionals: &projection_context_notionals,
+            notional_per_basket: effective_portfolio_config.notional_per_basket(),
+            cash_account_cap: effective_portfolio_config.capital.max(0.0),
+            strategy: vested_strategy_features,
+            selected_basket_projection_allowed: projection_uses_selected_basket_legs,
+        });
+        let projection = &decision.projection;
+        if let Some(peer_mirror) = projection.peer_mirror.as_ref() {
+            info!(
+                date = %date,
+                selected_baskets = plan.selected_baskets.len(),
+                mirrored_baskets = peer_mirror.mirrored_baskets,
+                skipped_baskets = peer_mirror.skipped_baskets,
+                original_short_targets = projection.suppressed_short_targets,
+                original_short_gross = %format!("{:.0}", projection.suppressed_short_gross),
+                mirrored_short_gross = %format!("{:.0}", peer_mirror.mirrored_short_gross),
+                retained_positive_gross = %format!("{:.0}", peer_mirror.retained_positive_gross),
+                "vested peer-mirror projection redirected short budget into positive basket legs"
+            );
+        }
+        target_notionals = decision.target_notionals;
+        if let Some(regime_decision) = decision.regime_decision {
+            info!(
+                date = %date,
+                risk_on = regime_decision.risk_on,
+                reason = regime_decision.reason,
+                exposure_scale = %format!("{:.4}", regime_decision.exposure_scale),
+                observations = vested_strategy_features.observations,
+                return_20d = %format!("{:.4}", vested_strategy_features.return_20d),
+                drawdown_20d = %format!("{:.4}", vested_strategy_features.drawdown_20d),
+                "vested regime gate selected exposure scale"
+            );
+        }
+        info!(
+            date = %date,
+            projection = ?decision.projection_config.kind,
+            kept_long_targets = projection.kept_long_targets,
+            suppressed_short_targets = projection.suppressed_short_targets,
+            suppressed_short_gross = %format!("{:.0}", projection.suppressed_short_gross),
+            pre_scale_long_gross = %format!("{:.0}", projection.pre_scale_long_gross),
+            cash_account_cap = %format!("{:.0}", effective_portfolio_config.capital.max(0.0)),
+            long_scale = %format!("{:.4}", projection.long_scale),
+            short_penalty = %format!("{:.4}", decision.projection_config.short_penalty),
+            min_long_purity = %format!("{:.4}", decision.projection_config.min_long_purity),
+            min_basket_signal = %format!("{:.4}", decision.projection_config.min_basket_signal),
+            skipped_low_signal_baskets = projection.skipped_low_signal_baskets,
+            skipped_low_purity_symbols = projection.skipped_low_purity_symbols,
+            "vested long-only projection produced cash-account target notionals"
+        );
+    }
     if using_long_replacement || using_capped_long_sleeve {
         let (basket_only_gross_long, basket_only_gross_short, basket_only_max_abs, _) =
             summarize_notionals(&basket_only_target_notionals);
@@ -3403,6 +3488,16 @@ async fn process_session_close(
         }
     }
     let executable_target_notionals = notionals_from_target_shares(&target_shares, closes);
+    if let Some(path) = vested_mode.and_then(|adapter| adapter.picks_tsv()) {
+        crate::vested::record_picks_tsv(
+            path,
+            date,
+            true,
+            &target_shares,
+            &executable_target_notionals,
+            closes,
+        )?;
+    }
 
     // Summary of the notional plan before we diff — this is where yesterday's
     // $340K-on-$100K problem was invisible. Emit gross long, gross short,
