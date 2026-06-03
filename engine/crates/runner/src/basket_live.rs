@@ -730,6 +730,25 @@ fn push_equity_history(equity_history: &mut VecDeque<f64>, equity: f64) {
     }
 }
 
+fn share_book_market_value(shares: &HashMap<String, f64>, closes: &HashMap<String, f64>) -> f64 {
+    shares
+        .iter()
+        .filter_map(|(symbol, qty)| {
+            let close = closes.get(symbol)?;
+            let value = *qty * *close;
+            value.is_finite().then_some(value)
+        })
+        .sum()
+}
+
+fn mark_to_market_equity(
+    cash: f64,
+    shares: &HashMap<String, f64>,
+    closes: &HashMap<String, f64>,
+) -> f64 {
+    cash + share_book_market_value(shares, closes)
+}
+
 pub fn leadership_classifier_state_path(engine_state_path: &Path) -> PathBuf {
     let mut name = engine_state_path
         .file_name()
@@ -2226,6 +2245,7 @@ pub async fn run_basket_live(
     };
     let mut equity_history = VecDeque::new();
     push_equity_history(&mut equity_history, portfolio_config.capital);
+    let mut noop_shadow_cash = portfolio_config.capital;
 
     let (mut engine, mut last_processed_trading_day, startup_state_source) =
         initialize_engine_state(
@@ -2482,6 +2502,8 @@ pub async fn run_basket_live(
             symbols = catchup_closes.len(),
             "startup is after close grace on an unprocessed trading day — running one catch-up close cycle"
         );
+        let noop_marked_equity = (execution == BasketExecution::Noop)
+            .then(|| mark_to_market_equity(noop_shadow_cash, &current_shares, &catchup_closes));
         process_session_close(
             &mut engine,
             broker,
@@ -2514,6 +2536,9 @@ pub async fn run_basket_live(
         broker.record_eod(today).await;
         if let Some(mode) = execution.broker_mode() {
             let equity = parse_equity(&broker.get_account(mode).await?)?;
+            push_equity_history(&mut equity_history, equity);
+        } else if let Some(equity) = noop_marked_equity {
+            noop_shadow_cash = equity - share_book_market_value(&current_shares, &catchup_closes);
             push_equity_history(&mut equity_history, equity);
         }
         last_processed_trading_day = Some(today);
@@ -2801,6 +2826,9 @@ pub async fn run_basket_live(
                         ));
                     }
                     processed_sessions.insert(today);
+                    let noop_marked_equity = (execution == BasketExecution::Noop).then(|| {
+                        mark_to_market_equity(noop_shadow_cash, &current_shares, &closes_for_day)
+                    });
                     process_session_close(
                         &mut engine,
                         broker,
@@ -2834,6 +2862,10 @@ pub async fn run_basket_live(
                     broker.record_eod(today).await;
                     if let Some(mode) = execution.broker_mode() {
                         let equity = parse_equity(&broker.get_account(mode).await?)?;
+                        push_equity_history(&mut equity_history, equity);
+                    } else if let Some(equity) = noop_marked_equity {
+                        noop_shadow_cash =
+                            equity - share_book_market_value(&current_shares, &closes_for_day);
                         push_equity_history(&mut equity_history, equity);
                     }
                     last_processed_trading_day = Some(today);
@@ -5741,6 +5773,26 @@ mod tests {
         };
         let err = parse_equity(&account).unwrap_err();
         assert!(err.contains("not positive"));
+    }
+
+    #[test]
+    fn test_noop_shadow_equity_marks_prior_book_before_rebalance() {
+        let mut shadow_cash = 10_000.0;
+        let prior_shares = HashMap::from([("AMD".to_string(), 10.0)]);
+        let closes = HashMap::from([("AMD".to_string(), 110.0), ("NVDA".to_string(), 50.0)]);
+
+        let equity = mark_to_market_equity(shadow_cash, &prior_shares, &closes);
+        assert_eq!(equity, 11_100.0);
+
+        let rebalanced_shares =
+            HashMap::from([("AMD".to_string(), 5.0), ("NVDA".to_string(), 20.0)]);
+        shadow_cash = equity - share_book_market_value(&rebalanced_shares, &closes);
+
+        let next_closes = HashMap::from([("AMD".to_string(), 120.0), ("NVDA".to_string(), 40.0)]);
+        assert_eq!(
+            mark_to_market_equity(shadow_cash, &rebalanced_shares, &next_closes),
+            10_950.0
+        );
     }
 
     #[test]
