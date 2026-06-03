@@ -12,7 +12,7 @@ use openquant_core::pairs::{PairConfig, PairPosition, PairState, PairsTradingCon
 fn parse_pairs_config(toml: &str) -> PairsTradingConfig {
     let cfg: ConfigFile = toml::from_str(toml).unwrap();
     let mut ptc = cfg.pairs_trading.clone();
-    ptc.tz_offset_hours = cfg.data.timezone_offset_hours;
+    ptc.tz_offset_hours = cfg.data.timezone_offset_minutes() / 60;
     ptc
 }
 

@@ -105,8 +105,8 @@ pub struct SingleEngineConfig {
     /// For wider bars: 5-min → 32, 15-min → 32.
     /// Minimum 32 (covers the longest default rolling window).
     pub warmup_bars: usize,
-    /// Timezone offset in hours (e.g., -5 for US Eastern). Used for VWAP session reset.
-    pub timezone_offset_hours: i32,
+    /// Timezone offset in minutes (e.g., -300 for US Eastern, +330 for IST).
+    pub timezone_offset_minutes: i32,
 }
 
 /// The core engine. Maintains all state, processes bars, emits order intents.
@@ -131,7 +131,7 @@ pub struct SingleEngine {
     garch_config: crate::features::GarchConfig,
     regime_config: crate::features::RegimeConfig,
     warmup_bars: usize,
-    timezone_offset_hours: i32,
+    timezone_offset_minutes: i32,
 }
 
 impl SingleEngine {
@@ -274,7 +274,7 @@ impl SingleEngine {
             garch_config: config.garch,
             regime_config: config.regime,
             warmup_bars: config.warmup_bars,
-            timezone_offset_hours: config.timezone_offset_hours,
+            timezone_offset_minutes: config.timezone_offset_minutes,
         }
     }
 
@@ -346,7 +346,7 @@ impl SingleEngine {
                 self.garch_config.clone(),
                 self.regime_config.clone(),
                 warmup,
-                self.timezone_offset_hours,
+                self.timezone_offset_minutes,
             )
         });
 
@@ -518,7 +518,7 @@ impl SingleEngine {
                 self.garch_config.clone(),
                 self.regime_config.clone(),
                 warmup,
-                self.timezone_offset_hours,
+                self.timezone_offset_minutes,
             )
         });
 

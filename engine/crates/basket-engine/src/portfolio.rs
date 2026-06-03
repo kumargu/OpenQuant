@@ -353,6 +353,7 @@ mod tests {
             adf_statistic: None,
             adf_pvalue: None,
             dominance_score: None,
+            dominance_contributions: Vec::new(),
             reject_reason: None,
         };
         let mut fit2 = fit.clone();

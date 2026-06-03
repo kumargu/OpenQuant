@@ -39,7 +39,6 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
-use crate::alpaca::ExecutionMode;
 use crate::bar_source::BarSource;
 use crate::basket_journal::{
     serialize_shares_map, serialize_string_vec, BasketJournal, BasketOrderEvent,
@@ -49,7 +48,8 @@ use crate::basket_overlay_picker::{
     BasketOverlayMode, BasketOverlayPicker, BasketOverlayPickerFeatures, BasketOverlayPickerHandle,
     BasketOverlayPickerKind,
 };
-use crate::broker::{Broker, SessionCloseFillContract};
+use crate::broker::{Broker, BrokerAccount, BrokerExecutionMode, SessionCloseFillContract};
+
 use crate::clock::Clock;
 use crate::market_session;
 use crate::session_trigger::SessionTrigger;
@@ -68,7 +68,7 @@ macro_rules! bug {
 
 /// Execution mode for basket live/paper.
 ///
-/// Distinct from [`ExecutionMode`] because basket adds a `Noop` shadow mode.
+/// Distinct from [`BrokerExecutionMode`] because basket adds a `Noop` shadow mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BasketExecution {
     /// Log intents only; no Alpaca order placed.
@@ -80,12 +80,12 @@ pub enum BasketExecution {
 }
 
 impl BasketExecution {
-    /// Map to the Alpaca adapter's [`ExecutionMode`]. Noop returns None.
-    fn alpaca_mode(self) -> Option<ExecutionMode> {
+    /// Map to the Alpaca adapter's [`BrokerExecutionMode`]. Noop returns None.
+    fn broker_mode(self) -> Option<BrokerExecutionMode> {
         match self {
             Self::Noop => None,
-            Self::Paper => Some(ExecutionMode::Paper),
-            Self::Live => Some(ExecutionMode::Live),
+            Self::Paper => Some(BrokerExecutionMode::Paper),
+            Self::Live => Some(BrokerExecutionMode::Live),
         }
     }
 
@@ -129,6 +129,7 @@ pub struct BasketRunOptions {
     pub gate_policy: GatePolicyKind,
     pub supported_reallocation_band_config: SupportedReallocationBandConfig,
     pub vested_mode: Option<VestedMode>,
+    pub close_grace_min: u32,
 }
 
 impl Default for BasketRunOptions {
@@ -142,6 +143,7 @@ impl Default for BasketRunOptions {
             gate_policy: GatePolicyKind::BertramFrozen,
             supported_reallocation_band_config: SupportedReallocationBandConfig::default(),
             vested_mode: None,
+            close_grace_min: DEFAULT_CLOSE_GRACE_MIN,
         }
     }
 }
@@ -224,13 +226,10 @@ impl Default for SupportedReallocationBandConfig {
     }
 }
 
-// Grace period after session close before firing the engine. Lets
-// late-arriving final-RTH-minute bars land in the buffer.
-//
-// The `clock` and `session_trigger` parameters MUST agree on this value:
-// `IntervalSessionTrigger` is constructed with the same constant in
-// `main.rs`. If they diverge, replay/live cadence drifts.
-const CLOSE_GRACE_MIN: u32 = 2;
+// Default grace period after session close before firing the engine. Lets
+// late-arriving final-RTH-minute bars land in the buffer. Runner profiles may
+// override this for broker-specific order windows, e.g. NSE equity AMO.
+pub const DEFAULT_CLOSE_GRACE_MIN: u32 = 2;
 const BROKER_QTY_EPSILON: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -881,7 +880,7 @@ fn merge_notionals(lhs: &HashMap<String, f64>, rhs: &HashMap<String, f64>) -> Ha
     merged
 }
 
-fn parse_equity(account: &crate::alpaca::AlpacaAccount) -> Result<f64, String> {
+fn parse_equity(account: &BrokerAccount) -> Result<f64, String> {
     let equity = account
         .equity
         .parse::<f64>()
@@ -926,7 +925,10 @@ fn effective_execution_capital(config_capital: f64, account_equity: Option<f64>)
     }
 }
 
-async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> Result<(), String> {
+async fn preflight_account_check(
+    broker: &impl Broker,
+    mode: BrokerExecutionMode,
+) -> Result<(), String> {
     let account = broker.get_account(mode).await?;
     let buying_power = parse_buying_power(&account)?;
     let equity = parse_equity(&account)?;
@@ -952,7 +954,7 @@ async fn preflight_account_check(broker: &impl Broker, mode: ExecutionMode) -> R
     Ok(())
 }
 
-fn parse_buying_power(account: &crate::alpaca::AlpacaAccount) -> Result<f64, String> {
+fn parse_buying_power(account: &BrokerAccount) -> Result<f64, String> {
     let buying_power = account.buying_power.parse::<f64>().map_err(|e| {
         format!(
             "invalid Alpaca buying_power '{}': {e}",
@@ -970,7 +972,7 @@ fn parse_buying_power(account: &crate::alpaca::AlpacaAccount) -> Result<f64, Str
 
 async fn check_order_set_affordability(
     broker: &impl Broker,
-    mode: ExecutionMode,
+    mode: BrokerExecutionMode,
     date: NaiveDate,
     current_shares: &HashMap<String, f64>,
     target_shares: &HashMap<String, f64>,
@@ -1229,6 +1231,21 @@ struct SubmittedOrderBatch {
     next_seq: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrderSubmissionPurpose {
+    SessionClose,
+    PendingOpenReconcile,
+}
+
+impl OrderSubmissionPurpose {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SessionClose => "session_close",
+            Self::PendingOpenReconcile => "pending_open_reconcile",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct SymbolDriftSample {
     symbol: String,
@@ -1326,14 +1343,14 @@ fn summarize_position_drift(
 
 async fn reconcile_post_submission_positions(
     broker: &impl Broker,
-    mode: ExecutionMode,
+    mode: BrokerExecutionMode,
     allowed_symbols: &[String],
     target_shares: &HashMap<String, f64>,
     closes: &HashMap<String, f64>,
     accepted_unfilled_orders: usize,
     fill_contract: SessionCloseFillContract,
 ) -> Result<PostSubmitReconciliation, String> {
-    let actual_shares = seed_current_shares_from_alpaca(broker, mode, allowed_symbols).await?;
+    let actual_shares = seed_current_shares_from_broker(broker, mode, allowed_symbols).await?;
     let actual_gross = gross_notional(&actual_shares, closes);
     let target_gross = gross_notional(target_shares, closes);
     let divergence_pct = if target_gross > 0.0 {
@@ -1358,8 +1375,9 @@ async fn reconcile_post_submission_positions(
 #[allow(clippy::too_many_arguments)]
 async fn submit_order_batch(
     broker: &impl Broker,
-    mode: ExecutionMode,
+    mode: BrokerExecutionMode,
     execution: BasketExecution,
+    purpose: OrderSubmissionPurpose,
     orders: &[OrderIntent],
     run_id: &str,
     trading_day: NaiveDate,
@@ -1379,10 +1397,24 @@ async fn submit_order_batch(
             Side::Sell => "sell",
         };
         let (reason, basket_id) = order_reason_fields(&order.reason);
-        match broker
-            .place_order(&order.symbol, order.qty as f64, side_str, mode)
-            .await
-        {
+        let order_result = match purpose {
+            OrderSubmissionPurpose::SessionClose => {
+                broker
+                    .place_order(&order.symbol, order.qty as f64, side_str, mode)
+                    .await
+            }
+            OrderSubmissionPurpose::PendingOpenReconcile => {
+                broker
+                    .place_session_open_reconcile_order(
+                        &order.symbol,
+                        order.qty as f64,
+                        side_str,
+                        mode,
+                    )
+                    .await
+            }
+        };
+        match order_result {
             Ok(o) => {
                 info!(
                     symbol = order.symbol.as_str(),
@@ -1390,6 +1422,7 @@ async fn submit_order_batch(
                     side = side_str,
                     reason,
                     basket_id,
+                    submission_purpose = purpose.label(),
                     order_id = o.id.as_str(),
                     status = o.status.as_str(),
                     "ORDER PLACED"
@@ -1427,6 +1460,7 @@ async fn submit_order_batch(
                     side = side_str,
                     reason,
                     basket_id,
+                    submission_purpose = purpose.label(),
                     error = e.as_str(),
                     "ORDER FAILED"
                 );
@@ -1465,14 +1499,10 @@ async fn submit_order_batch(
 fn pending_open_reconcile_due(
     pending: &PendingOpenReconcileState,
     dt: DateTime<Utc>,
-    ready_symbols_for_day: usize,
-    expected_symbols: usize,
     fill_ready_minute_from_open: u32,
 ) -> bool {
     let today = market_session::trading_day_utc(dt);
     pending.trading_day < today
-        && expected_symbols > 0
-        && ready_symbols_for_day >= expected_symbols
         && market_session::minutes_from_open_utc(dt)
             .is_some_and(|minutes| minutes >= fill_ready_minute_from_open)
         && pending.attempted_reconcile_day != Some(today)
@@ -1481,12 +1511,11 @@ fn pending_open_reconcile_due(
 #[allow(clippy::too_many_arguments)]
 async fn maybe_run_pending_open_reconcile(
     broker: &impl Broker,
-    mode: ExecutionMode,
+    mode: BrokerExecutionMode,
     execution: BasketExecution,
     dt: DateTime<Utc>,
     current_shares: &mut HashMap<String, f64>,
     universe_symbols: &[String],
-    ready_symbols_for_day: usize,
     pending_path: &Path,
     pending_state: &mut Option<PendingOpenReconcileState>,
     journal: Option<&BasketJournal>,
@@ -1496,13 +1525,7 @@ async fn maybe_run_pending_open_reconcile(
         return Ok(());
     };
     let fill_ready_minute_from_open = broker.next_session_open_fill_ready_minute();
-    if !pending_open_reconcile_due(
-        &pending,
-        dt,
-        ready_symbols_for_day,
-        universe_symbols.len(),
-        fill_ready_minute_from_open,
-    ) {
+    if !pending_open_reconcile_due(&pending, dt, fill_ready_minute_from_open) {
         return Ok(());
     }
 
@@ -1515,7 +1538,7 @@ async fn maybe_run_pending_open_reconcile(
         "running pending open reconcile against broker positions after session open"
     );
 
-    let actual_before = seed_current_shares_from_alpaca(broker, mode, universe_symbols).await?;
+    let actual_before = seed_current_shares_from_broker(broker, mode, universe_symbols).await?;
     *current_shares = actual_before.clone();
     let staged_orders = staged_diff_to_orders(&actual_before, &pending.target_shares);
     let orders = staged_orders.all_orders();
@@ -1557,6 +1580,7 @@ async fn maybe_run_pending_open_reconcile(
         broker,
         mode,
         execution,
+        OrderSubmissionPurpose::PendingOpenReconcile,
         &staged_orders.reducing,
         run_id,
         today,
@@ -1575,7 +1599,7 @@ async fn maybe_run_pending_open_reconcile(
         if reconciliation_delay_secs > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs)).await;
         }
-        match seed_current_shares_from_alpaca(broker, mode, universe_symbols).await {
+        match seed_current_shares_from_broker(broker, mode, universe_symbols).await {
             Ok(actual_shares) => {
                 shares_after_reducing = actual_shares;
                 phase_one_reconciliation_confirmed = true;
@@ -1631,6 +1655,7 @@ async fn maybe_run_pending_open_reconcile(
                     broker,
                     mode,
                     execution,
+                    OrderSubmissionPurpose::PendingOpenReconcile,
                     &phase_two_orders,
                     run_id,
                     today,
@@ -1649,7 +1674,7 @@ async fn maybe_run_pending_open_reconcile(
     if reconciliation_delay_secs > 0 {
         tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs)).await;
     }
-    let actual_after = seed_current_shares_from_alpaca(broker, mode, universe_symbols).await?;
+    let actual_after = seed_current_shares_from_broker(broker, mode, universe_symbols).await?;
     *current_shares = actual_after.clone();
     let remaining_orders =
         staged_diff_to_orders(&actual_after, &pending.target_shares).all_orders();
@@ -2130,7 +2155,7 @@ pub async fn run_basket_live(
     if execution == BasketExecution::Live {
         warn!("LIVE MODE — real-money orders will be placed on every EOD signal");
     }
-    if let Some(mode) = execution.alpaca_mode() {
+    if let Some(mode) = execution.broker_mode() {
         preflight_account_check(broker, mode).await?;
     }
 
@@ -2192,12 +2217,12 @@ pub async fn run_basket_live(
     //    already-open broker positions, potentially double-sizing every leg.
     let now = clock.now();
     let today = market_session::trading_day_utc(now);
-    let mut current_shares = match execution.alpaca_mode() {
+    let mut current_shares = match execution.broker_mode() {
         None => {
             info!("noop mode — skipping startup position reconciliation");
             HashMap::new()
         }
-        Some(mode) => seed_current_shares_from_alpaca(broker, mode, &symbols).await?,
+        Some(mode) => seed_current_shares_from_broker(broker, mode, &symbols).await?,
     };
     let mut equity_history = VecDeque::new();
     push_equity_history(&mut equity_history, portfolio_config.capital);
@@ -2207,14 +2232,14 @@ pub async fn run_basket_live(
             fits,
             state_path,
             &current_shares,
-            execution.alpaca_mode().is_some(),
+            execution.broker_mode().is_some(),
             options.gate_policy.clone(),
         )?;
     info!(gate_policy = ?engine.gate_policy(), "basket signal gate policy initialized");
     let leadership_state_path = leadership_classifier_state_path(state_path);
     let pending_open_reconcile_path = pending_open_reconcile_state_path(state_path);
     let pending_open_reconcile_enabled =
-        execution.alpaca_mode().is_some() && broker.supports_persisted_pending_open_reconcile();
+        execution.broker_mode().is_some() && broker.supports_persisted_pending_open_reconcile();
     let can_load_sidecar_state = matches!(startup_state_source, StartupStateSource::Snapshot);
     if !can_load_sidecar_state {
         move_sidecar_state_aside_if_present(
@@ -2366,7 +2391,8 @@ pub async fn run_basket_live(
             Err(e) => return Err(e),
         };
 
-    let startup_phase = classify_startup_phase(now, last_processed_trading_day, CLOSE_GRACE_MIN);
+    let close_grace_min = options.close_grace_min;
+    let startup_phase = classify_startup_phase(now, last_processed_trading_day, close_grace_min);
     let journal = match options.journal_path.as_deref() {
         Some(path) => Some(BasketJournal::open(path)?),
         None => None,
@@ -2389,7 +2415,7 @@ pub async fn run_basket_live(
         broker_positions = current_shares.len(),
         "basket startup phase evaluated"
     );
-    if let Some(mode) = execution.alpaca_mode() {
+    if let Some(mode) = execution.broker_mode() {
         let account = broker.get_account(mode).await?;
         let account_equity = parse_equity(&account)?;
         let effective_capital =
@@ -2441,14 +2467,13 @@ pub async fn run_basket_live(
     //    arrival) so that no single symbol becoming a data source-of-failure can
     //    silently skip an entire session.
     let mut day_closes: HashMap<NaiveDate, HashMap<String, f64>> = HashMap::new();
-    let mut open_reconcile_ready_symbols: HashMap<NaiveDate, HashSet<String>> = HashMap::new();
     let mut processed_sessions: std::collections::HashSet<NaiveDate> = Default::default();
     if last_processed_trading_day == Some(today) {
         processed_sessions.insert(today);
     }
 
     if market_session::is_trading_day(today)
-        && market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN)
+        && market_session::is_after_close_grace_utc(now, close_grace_min)
         && last_processed_trading_day != Some(today)
     {
         let catchup_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
@@ -2487,7 +2512,7 @@ pub async fn run_basket_live(
         }
         // Hook for replay's daily-equity time series. Noop on AlpacaClient.
         broker.record_eod(today).await;
-        if let Some(mode) = execution.alpaca_mode() {
+        if let Some(mode) = execution.broker_mode() {
             let equity = parse_equity(&broker.get_account(mode).await?)?;
             push_equity_history(&mut equity_history, equity);
         }
@@ -2592,21 +2617,9 @@ pub async fn run_basket_live(
                     );
                 }
                 if pending_open_reconcile_enabled {
-                    let Some(mode) = execution.alpaca_mode() else {
-                        unreachable!("pending open reconcile requires alpaca execution mode");
+                    let Some(mode) = execution.broker_mode() else {
+                        unreachable!("pending open reconcile requires broker execution mode");
                     };
-                    if market_session::minutes_from_open_utc(dt)
-                        .is_some_and(|minutes| minutes >= broker.next_session_open_fill_ready_minute())
-                    {
-                        open_reconcile_ready_symbols
-                            .entry(date)
-                            .or_default()
-                            .insert(bar.symbol.clone());
-                    }
-                    let ready_symbols_for_day = open_reconcile_ready_symbols
-                        .get(&date)
-                        .map(|symbols| symbols.len())
-                        .unwrap_or(0);
                     maybe_run_pending_open_reconcile(
                         broker,
                         mode,
@@ -2614,7 +2627,6 @@ pub async fn run_basket_live(
                         dt,
                         &mut current_shares,
                         &symbols,
-                        ready_symbols_for_day,
                         &pending_open_reconcile_path,
                         &mut pending_open_reconcile,
                         journal.as_ref(),
@@ -2632,7 +2644,7 @@ pub async fn run_basket_live(
                 let now = clock.now();
                 let today = market_session::trading_day_utc(now);
                 let in_rth = market_session::is_rth_utc(now);
-                let past_close = market_session::is_after_close_grace_utc(now, CLOSE_GRACE_MIN);
+                let past_close = market_session::is_after_close_grace_utc(now, close_grace_min);
                 let buffered_today = day_closes.get(&today).map(|m| m.len()).unwrap_or(0);
                 let last_bar_age_s = if last_bar_rx_ts_ms == 0 {
                     -1i64
@@ -2652,6 +2664,24 @@ pub async fn run_basket_live(
                     "BAR_LOOP heartbeat"
                 );
                 bars_processed_window = 0;
+                if pending_open_reconcile_enabled {
+                    let Some(mode) = execution.broker_mode() else {
+                        unreachable!("pending open reconcile requires broker execution mode");
+                    };
+                    maybe_run_pending_open_reconcile(
+                        broker,
+                        mode,
+                        execution,
+                        now,
+                        &mut current_shares,
+                        &symbols,
+                        &pending_open_reconcile_path,
+                        &mut pending_open_reconcile,
+                        journal.as_ref(),
+                        run_id.as_str(),
+                    )
+                    .await?;
+                }
             }
             session_event = session_trigger.next() => {
                 // Session-close trigger: the trigger has determined that
@@ -2698,17 +2728,34 @@ pub async fn run_basket_live(
                         );
                         break 'session;
                     }
-                    let closes_for_day = day_closes.remove(&today).unwrap_or_default();
-                    open_reconcile_ready_symbols.remove(&today);
-                    if closes_for_day.is_empty() {
-                        if !market_session::is_trading_day(today) {
+                    let mut closes_for_day = day_closes.remove(&today).unwrap_or_default();
+                    if !market_session::is_trading_day(today) && closes_for_day.is_empty() {
+                        info!(
+                            date = %today,
+                            "session close grace elapsed on non-trading day with zero buffered closes — marking processed"
+                        );
+                        processed_sessions.insert(today);
+                        break 'session;
+                    }
+                    if closes_for_day.len() < symbols_expected {
+                        let parquet_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
+                        let before = closes_for_day.len();
+                        for (symbol, close) in parquet_closes {
+                            closes_for_day.entry(symbol).or_insert(close);
+                        }
+                        let added = closes_for_day.len().saturating_sub(before);
+                        if added > 0 {
                             info!(
                                 date = %today,
-                                "session close grace elapsed on non-trading day with zero buffered closes — marking processed"
+                                buffered_before = before,
+                                added_from_parquet = added,
+                                closes_after = closes_for_day.len(),
+                                symbols_expected,
+                                "filled session close snapshot from refreshed parquet"
                             );
-                            processed_sessions.insert(today);
-                            break 'session;
                         }
+                    }
+                    if closes_for_day.is_empty() {
                         bug!(
                             "zero_buffered_closes_on_trading_day",
                             date = %today,
@@ -2785,7 +2832,7 @@ pub async fn run_basket_live(
                     // Hook for replay's daily-equity time series.
                     // Noop on AlpacaClient.
                     broker.record_eod(today).await;
-                    if let Some(mode) = execution.alpaca_mode() {
+                    if let Some(mode) = execution.broker_mode() {
                         let equity = parse_equity(&broker.get_account(mode).await?)?;
                         push_equity_history(&mut equity_history, equity);
                     }
@@ -3038,9 +3085,9 @@ fn move_sidecar_state_aside_if_present(
 
 /// paper/live execution (trading from an empty share map would double-size
 /// every already-open leg on the first session).
-async fn seed_current_shares_from_alpaca(
+async fn seed_current_shares_from_broker(
     broker: &impl Broker,
-    mode: ExecutionMode,
+    mode: BrokerExecutionMode,
     allowed_symbols: &[String],
 ) -> Result<HashMap<String, f64>, String> {
     let positions = broker.get_positions(mode).await.map_err(|e| {
@@ -3176,8 +3223,8 @@ async fn process_session_close(
     }
 
     let allowed_symbols: Vec<String> = closes.keys().cloned().collect();
-    if let Some(mode) = execution.alpaca_mode() {
-        *current_shares = seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await?;
+    if let Some(mode) = execution.broker_mode() {
+        *current_shares = seed_current_shares_from_broker(broker, mode, &allowed_symbols).await?;
         info!(
             date = %date,
             current_positions = current_shares.len(),
@@ -3185,7 +3232,7 @@ async fn process_session_close(
         );
     }
     let current_shares_before = current_shares.clone();
-    let execution_account_equity = match execution.alpaca_mode() {
+    let execution_account_equity = match execution.broker_mode() {
         Some(mode) => Some(parse_equity(&broker.get_account(mode).await?)?),
         None => None,
     };
@@ -3742,7 +3789,7 @@ async fn process_session_close(
         "emitting orders"
     );
 
-    match execution.alpaca_mode() {
+    match execution.broker_mode() {
         None => {
             // Noop — log only, then advance the simulated share state directly
             // to the target so shadow mode stays deterministic across sessions.
@@ -3879,6 +3926,7 @@ async fn process_session_close(
                 broker,
                 mode,
                 execution,
+                OrderSubmissionPurpose::SessionClose,
                 &staged_orders.reducing,
                 run_id,
                 date,
@@ -3914,7 +3962,7 @@ async fn process_session_close(
                         ))
                         .await;
                     }
-                    match seed_current_shares_from_alpaca(broker, mode, &allowed_symbols).await {
+                    match seed_current_shares_from_broker(broker, mode, &allowed_symbols).await {
                         Ok(actual_shares) => {
                             shares_after_reducing = actual_shares;
                             phase_one_reconciliation_confirmed = true;
@@ -3980,6 +4028,7 @@ async fn process_session_close(
                                 broker,
                                 mode,
                                 execution,
+                                OrderSubmissionPurpose::SessionClose,
                                 &phase_two_orders,
                                 run_id,
                                 date,
@@ -4477,10 +4526,10 @@ pub(crate) fn align_basket_history(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alpaca::AlpacaAccount;
     use basket_picker::{BasketCandidate, BasketFit, BertramResult, OuFit};
     use chrono::{TimeZone, Timelike};
     use tempfile::tempdir;
+    use BrokerAccount;
 
     fn make_test_fit(target: &str, peers: &[&str], sector: &str) -> BasketFit {
         let candidate = BasketCandidate {
@@ -4615,14 +4664,14 @@ mod tests {
         );
 
         let order = broker
-            .place_order("AMD", 10.0, "buy", crate::alpaca::ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         assert_eq!(order.status, "partially_filled");
 
         let reconciliation = reconcile_post_submission_positions(
             &broker,
-            crate::alpaca::ExecutionMode::Paper,
+            BrokerExecutionMode::Paper,
             &["AMD".to_string()],
             &HashMap::from([("AMD".to_string(), 10.0)]),
             &HashMap::from([("AMD".to_string(), 100.0)]),
@@ -4637,6 +4686,111 @@ mod tests {
         assert!(!reconciliation.settlement_pending);
         assert!(reconciliation.drift.median_gross_bps > 0.0);
         assert_eq!(reconciliation.current_positions_after, 1);
+    }
+
+    #[derive(Default)]
+    struct RoutingTestBroker {
+        session_close_orders: std::sync::atomic::AtomicUsize,
+        session_open_reconcile_orders: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Broker for RoutingTestBroker {
+        async fn place_order(
+            &self,
+            symbol: &str,
+            qty: f64,
+            side: &str,
+            _execution: BrokerExecutionMode,
+        ) -> Result<crate::broker::BrokerOrder, String> {
+            self.session_close_orders
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::broker::BrokerOrder {
+                id: format!("close-{symbol}"),
+                status: "filled".to_string(),
+                symbol: symbol.to_string(),
+                side: side.to_string(),
+                qty: qty.to_string(),
+            })
+        }
+
+        async fn place_session_open_reconcile_order(
+            &self,
+            symbol: &str,
+            qty: f64,
+            side: &str,
+            _execution: BrokerExecutionMode,
+        ) -> Result<crate::broker::BrokerOrder, String> {
+            self.session_open_reconcile_orders
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::broker::BrokerOrder {
+                id: format!("open-{symbol}"),
+                status: "filled".to_string(),
+                symbol: symbol.to_string(),
+                side: side.to_string(),
+                qty: qty.to_string(),
+            })
+        }
+
+        async fn get_positions(
+            &self,
+            _execution: BrokerExecutionMode,
+        ) -> Result<HashMap<String, (f64, f64)>, String> {
+            Ok(HashMap::new())
+        }
+
+        async fn get_account(
+            &self,
+            _execution: BrokerExecutionMode,
+        ) -> Result<BrokerAccount, String> {
+            Ok(BrokerAccount {
+                status: "ACTIVE".to_string(),
+                buying_power: "10000".to_string(),
+                equity: "10000".to_string(),
+                trading_blocked: false,
+                account_blocked: false,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_order_batch_routes_pending_open_reconcile_orders_to_broker_hook() {
+        let broker = RoutingTestBroker::default();
+        let orders = vec![OrderIntent {
+            symbol: "AMD".to_string(),
+            qty: 3,
+            side: Side::Buy,
+            reason: basket_engine::OrderReason::Aggregated,
+        }];
+        let closes = HashMap::from([("AMD".to_string(), 100.0)]);
+        let day = NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
+
+        submit_order_batch(
+            &broker,
+            BrokerExecutionMode::Paper,
+            BasketExecution::Paper,
+            OrderSubmissionPurpose::PendingOpenReconcile,
+            &orders,
+            "test-run",
+            day,
+            &closes,
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            broker
+                .session_close_orders
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(
+            broker
+                .session_open_reconcile_orders
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 
     #[test]
@@ -4884,14 +5038,14 @@ mod tests {
 
     #[test]
     fn test_basket_execution_alpaca_mode_mapping() {
-        assert!(BasketExecution::Noop.alpaca_mode().is_none());
+        assert!(BasketExecution::Noop.broker_mode().is_none());
         assert_eq!(
-            BasketExecution::Paper.alpaca_mode(),
-            Some(ExecutionMode::Paper)
+            BasketExecution::Paper.broker_mode(),
+            Some(BrokerExecutionMode::Paper)
         );
         assert_eq!(
-            BasketExecution::Live.alpaca_mode(),
-            Some(ExecutionMode::Live)
+            BasketExecution::Live.broker_mode(),
+            Some(BrokerExecutionMode::Live)
         );
     }
 
@@ -5565,7 +5719,7 @@ mod tests {
 
     #[test]
     fn test_parse_buying_power_rejects_nonpositive_values() {
-        let account = AlpacaAccount {
+        let account = BrokerAccount {
             status: "ACTIVE".to_string(),
             buying_power: "0".to_string(),
             equity: "100000".to_string(),
@@ -5578,7 +5732,7 @@ mod tests {
 
     #[test]
     fn test_parse_equity_rejects_nonpositive_values() {
-        let account = AlpacaAccount {
+        let account = BrokerAccount {
             status: "ACTIVE".to_string(),
             buying_power: "100000".to_string(),
             equity: "0".to_string(),
@@ -5783,20 +5937,11 @@ mod tests {
         let at_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 30, 0).unwrap();
         let one_minute_after_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 31, 0).unwrap();
 
-        assert!(pending_open_reconcile_due(&pending, at_open, 68, 68, 0));
-        assert!(!pending_open_reconcile_due(&pending, at_open, 68, 68, 1));
-        assert!(!pending_open_reconcile_due(
-            &pending,
-            one_minute_after_open,
-            67,
-            68,
-            1
-        ));
+        assert!(pending_open_reconcile_due(&pending, at_open, 0));
+        assert!(!pending_open_reconcile_due(&pending, at_open, 1));
         assert!(pending_open_reconcile_due(
             &pending,
             one_minute_after_open,
-            68,
-            68,
             1
         ));
 
@@ -5805,8 +5950,6 @@ mod tests {
         assert!(!pending_open_reconcile_due(
             &attempted,
             one_minute_after_open,
-            68,
-            68,
             1
         ));
     }

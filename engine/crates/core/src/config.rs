@@ -89,9 +89,12 @@ impl Default for MetricsConfig {
 pub struct DataConfig {
     /// Maximum bar age in seconds (0 = disabled).
     pub max_bar_age_seconds: i64,
-    /// UTC offset for the trading timezone in hours (e.g., -5 for US Eastern EST, -4 for EDT).
-    /// Used for VWAP session reset and day boundary detection.
+    /// Legacy whole-hour UTC offset for the trading timezone.
+    /// Kept for backward compatibility with existing US-market configs.
     pub timezone_offset_hours: i32,
+    /// Preferred UTC offset for the trading timezone in minutes.
+    /// Supports half-hour markets such as India Standard Time (+330).
+    pub timezone_offset_minutes: Option<i32>,
     /// Market open time as "HH:MM" in local timezone. Bars before this are filtered.
     pub market_open: String,
     /// Market close time as "HH:MM" in local timezone. Bars at or after this are filtered.
@@ -103,6 +106,7 @@ impl Default for DataConfig {
         Self {
             max_bar_age_seconds: 0,
             timezone_offset_hours: -5,
+            timezone_offset_minutes: None,
             market_open: "09:30".into(),
             market_close: "16:00".into(),
         }
@@ -122,7 +126,13 @@ impl DataConfig {
 
     /// Timezone offset in milliseconds.
     pub fn tz_offset_ms(&self) -> i64 {
-        self.timezone_offset_hours as i64 * 3600 * 1000
+        self.timezone_offset_minutes() as i64 * 60 * 1000
+    }
+
+    /// Timezone offset in minutes, preferring the newer minute-precision field.
+    pub fn timezone_offset_minutes(&self) -> i32 {
+        self.timezone_offset_minutes
+            .unwrap_or(self.timezone_offset_hours * 60)
     }
 }
 
@@ -175,7 +185,7 @@ impl ConfigFile {
             max_bar_age_ms: self.data.max_bar_age_seconds * 1000,
             metrics_enabled: self.metrics.enabled,
             warmup_bars: 64, // default for 1-min bars; override via Engine kwargs
-            timezone_offset_hours: self.data.timezone_offset_hours,
+            timezone_offset_minutes: self.data.timezone_offset_minutes(),
         }
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Implements [`crate::broker::Broker`] without touching Alpaca. Holds
 //! its own positions / cash / latest-close state. Returns synthetic
-//! [`AlpacaOrder`] records shaped like a successful fill so the
+//! [`BrokerOrder`] records shaped like a successful fill so the
 //! basket-live code path runs unchanged.
 //!
 //! Replay fill contract:
@@ -49,8 +49,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use crate::alpaca::{AlpacaAccount, AlpacaOrder, ExecutionMode};
-use crate::broker::{Broker, SessionCloseFillContract};
+use crate::broker::{
+    Broker, BrokerAccount, BrokerExecutionMode, BrokerOrder, SessionCloseFillContract,
+};
 
 /// Shared close-price snapshot. Written by
 /// [`crate::parquet_bar_source::ParquetBarSource`] as bars are emitted,
@@ -309,8 +310,8 @@ impl Broker for SimulatedBroker {
         symbol: &str,
         qty: f64,
         side: &str,
-        _execution: ExecutionMode,
-    ) -> Result<AlpacaOrder, String> {
+        _execution: BrokerExecutionMode,
+    ) -> Result<BrokerOrder, String> {
         if !qty.is_finite() || qty <= 0.0 {
             return Err(format!("non-positive qty for {symbol}: {qty}"));
         }
@@ -332,7 +333,12 @@ impl Broker for SimulatedBroker {
                 && rng.gen::<f64>() < cfg.partial_fill_rate
             {
                 let frac: f64 = rng.gen_range(0.6..0.9);
-                Some((qty * frac).floor().max(1.0))
+                let partial_qty = (qty * frac).floor().max(1.0);
+                if partial_qty < qty {
+                    Some(partial_qty)
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -428,7 +434,7 @@ impl Broker for SimulatedBroker {
             .state
             .next_order_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(AlpacaOrder {
+        Ok(BrokerOrder {
             id: format!("sim-{id:08}"),
             status: status.to_string(),
             symbol: symbol.to_string(),
@@ -439,7 +445,7 @@ impl Broker for SimulatedBroker {
 
     async fn get_positions(
         &self,
-        _execution: ExecutionMode,
+        _execution: BrokerExecutionMode,
     ) -> Result<HashMap<String, (f64, f64)>, String> {
         let current = self.state.positions.read().unwrap().clone();
         // Stale-position injection: with probability `stale_position_rate`,
@@ -463,7 +469,7 @@ impl Broker for SimulatedBroker {
         Ok(served)
     }
 
-    async fn get_account(&self, _execution: ExecutionMode) -> Result<AlpacaAccount, String> {
+    async fn get_account(&self, _execution: BrokerExecutionMode) -> Result<BrokerAccount, String> {
         let positions = self.state.positions.read().unwrap();
         let cash = *self.state.cash.read().unwrap();
         let equity = self.equity_unlocked(&positions, cash);
@@ -476,7 +482,7 @@ impl Broker for SimulatedBroker {
             })
             .sum();
         let buying_power = (equity * self.state.leverage - current_gross).max(0.0);
-        Ok(AlpacaAccount {
+        Ok(BrokerAccount {
             status: "ACTIVE".to_string(),
             buying_power: format!("{buying_power:.2}"),
             equity: format!("{equity:.2}"),
@@ -570,11 +576,14 @@ mod tests {
         let closes = shared_closes(&[("AMD", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
         let order = broker
-            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         assert_eq!(order.status, "filled");
-        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let positions = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert_eq!(
             positions.get("AMD").map(|(q, p)| (*q, *p)),
             Some((10.0, 100.0))
@@ -589,7 +598,7 @@ mod tests {
         let closes = shared_closes(&[("AMD", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 10.0);
         let _ = broker
-            .place_order("AMD", 1.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 1.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         let snap = broker.final_snapshot();
@@ -601,7 +610,7 @@ mod tests {
         let closes = shared_closes(&[("AMD", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
         let err = broker
-            .place_order("AMD", 1000.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 1000.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap_err();
         assert!(err.contains("buying power exceeded"), "got: {err}");
@@ -612,15 +621,15 @@ mod tests {
         let closes = shared_closes(&[("EXPENSIVE", 1000.0), ("CHEAP", 10.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
         broker
-            .place_order("EXPENSIVE", 30.0, "buy", ExecutionMode::Paper)
+            .place_order("EXPENSIVE", 30.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         broker
-            .place_order("CHEAP", 20.0, "buy", ExecutionMode::Paper)
+            .place_order("CHEAP", 20.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         let err = broker
-            .place_order("CHEAP", 2000.0, "buy", ExecutionMode::Paper)
+            .place_order("CHEAP", 2000.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap_err();
         assert!(err.contains("buying power exceeded"), "got: {err}");
@@ -631,10 +640,13 @@ mod tests {
         let closes = shared_closes(&[("AMD", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
         broker
-            .place_order("AMD", 100.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 100.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
-        let account = broker.get_account(ExecutionMode::Paper).await.unwrap();
+        let account = broker
+            .get_account(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         let buying_power: f64 = account.buying_power.parse().unwrap();
         assert!((buying_power - 30_000.0).abs() < 1e-6, "got {buying_power}");
     }
@@ -644,14 +656,17 @@ mod tests {
         let closes = shared_closes(&[("AMD", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
         broker
-            .place_order("AMD", 100.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 100.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         broker
-            .place_order("AMD", 50.0, "sell", ExecutionMode::Paper)
+            .place_order("AMD", 50.0, "sell", BrokerExecutionMode::Paper)
             .await
             .unwrap();
-        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let positions = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert_eq!(positions.get("AMD").map(|(q, _)| *q), Some(50.0));
     }
 
@@ -660,24 +675,30 @@ mod tests {
         let closes = shared_closes(&[("A", 100.0), ("B", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
         broker
-            .place_order("A", 200.0, "buy", ExecutionMode::Paper)
+            .place_order("A", 200.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         broker
-            .place_order("B", 200.0, "buy", ExecutionMode::Paper)
+            .place_order("B", 200.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
 
-        let positions_before = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let positions_before = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert_eq!(positions_before.get("A").map(|(q, _)| *q), Some(200.0));
         assert_eq!(positions_before.get("B").map(|(q, _)| *q), Some(200.0));
 
         broker
-            .place_order("A", 10.0, "sell", ExecutionMode::Paper)
+            .place_order("A", 10.0, "sell", BrokerExecutionMode::Paper)
             .await
             .unwrap();
 
-        let positions_after = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let positions_after = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert_eq!(positions_after.get("A").map(|(q, _)| *q), Some(190.0));
     }
 
@@ -686,16 +707,16 @@ mod tests {
         let closes = shared_closes(&[("A", 100.0), ("B", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
         broker
-            .place_order("A", 200.0, "buy", ExecutionMode::Paper)
+            .place_order("A", 200.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         broker
-            .place_order("B", 200.0, "buy", ExecutionMode::Paper)
+            .place_order("B", 200.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
 
         let err = broker
-            .place_order("A", 10.0, "buy", ExecutionMode::Paper)
+            .place_order("A", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap_err();
         assert!(err.contains("buying power exceeded"), "got: {err}");
@@ -706,7 +727,7 @@ mod tests {
         let closes = shared_closes(&[]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes, 0.0);
         let err = broker
-            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap_err();
         assert!(err.contains("no close price"), "got: {err}");
@@ -717,12 +738,12 @@ mod tests {
         let closes = shared_closes(&[("AMD", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes.clone(), 0.0);
         broker
-            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         closes.write().unwrap().insert("AMD".to_string(), 110.0);
         broker
-            .place_order("AMD", 10.0, "sell", ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "sell", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         let snap = broker.final_snapshot();
@@ -749,12 +770,12 @@ mod tests {
             )
             .unwrap();
         let order = broker
-            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         assert_eq!(order.status, "accepted");
         assert!(broker
-            .get_positions(ExecutionMode::Paper)
+            .get_positions(BrokerExecutionMode::Paper)
             .await
             .unwrap()
             .is_empty());
@@ -767,7 +788,10 @@ mod tests {
             )
             .unwrap();
 
-        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let positions = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert_eq!(
             positions.get("AMD").map(|(q, p)| (*q, *p)),
             Some((10.0, 102.0))
@@ -794,7 +818,7 @@ mod tests {
             )
             .unwrap();
         broker
-            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
 
@@ -806,7 +830,7 @@ mod tests {
             )
             .unwrap();
         assert!(broker
-            .get_positions(ExecutionMode::Paper)
+            .get_positions(BrokerExecutionMode::Paper)
             .await
             .unwrap()
             .is_empty());
@@ -818,7 +842,10 @@ mod tests {
                 103.0,
             )
             .unwrap();
-        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let positions = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert_eq!(
             positions.get("AMD").map(|(q, p)| (*q, *p)),
             Some((10.0, 103.0))
@@ -841,14 +868,17 @@ mod tests {
             },
         );
         let err = broker
-            .place_order("AMD", 1.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 1.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap_err();
         assert!(
             err.contains("buying power exceeded"),
             "rejection should be shaped like Alpaca's, got: {err}"
         );
-        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let positions = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert!(positions.is_empty(), "rejected order must not fill");
     }
 
@@ -866,18 +896,21 @@ mod tests {
             },
         );
         let order = broker
-            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         assert_eq!(order.status, "partially_filled");
-        let filled: f64 = order.qty.parse().unwrap();
+        assert_eq!(order.qty.parse::<f64>().unwrap(), 10.0);
+        let positions = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
+        let filled = positions.get("AMD").map(|(q, _)| *q).unwrap_or(0.0);
         assert!(
             (1.0..=9.0).contains(&filled),
             "partial fill {filled} not in expected band [floor(0.6*10)=6, floor(0.9*10)=9]; \
              actually accept anything ≥1 and < requested 10"
         );
-        // Position reflects partial qty.
-        let positions = broker.get_positions(ExecutionMode::Paper).await.unwrap();
         assert_eq!(positions.get("AMD").map(|(q, _)| *q), Some(filled));
     }
 
@@ -895,16 +928,22 @@ mod tests {
             },
         );
         // Prime: first call returns current (no prior snapshot exists).
-        let snap1 = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let snap1 = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert!(snap1.is_empty());
         // Place an order; the position now has 5 shares of AMD.
         broker
-            .place_order("AMD", 5.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 5.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         // With stale_position_rate=1.0, the second call serves the
         // prior (empty) snapshot, NOT the current 5-share state.
-        let snap2 = broker.get_positions(ExecutionMode::Paper).await.unwrap();
+        let snap2 = broker
+            .get_positions(BrokerExecutionMode::Paper)
+            .await
+            .unwrap();
         assert!(
             snap2.is_empty(),
             "stale-position injection should serve the prior empty snapshot, got {snap2:?}"
@@ -933,13 +972,13 @@ mod tests {
         let mut rejects_a = 0;
         let mut rejects_b = 0;
         for _ in 0..50 {
-            if a.place_order("AMD", 1.0, "buy", ExecutionMode::Paper)
+            if a.place_order("AMD", 1.0, "buy", BrokerExecutionMode::Paper)
                 .await
                 .is_err()
             {
                 rejects_a += 1;
             }
-            if b.place_order("AMD", 1.0, "buy", ExecutionMode::Paper)
+            if b.place_order("AMD", 1.0, "buy", BrokerExecutionMode::Paper)
                 .await
                 .is_err()
             {
@@ -955,7 +994,7 @@ mod tests {
         let closes = shared_closes(&[("AMD", 100.0)]);
         let broker = SimulatedBroker::new(&portfolio_config(), closes.clone(), 0.0);
         broker
-            .place_order("AMD", 10.0, "buy", ExecutionMode::Paper)
+            .place_order("AMD", 10.0, "buy", BrokerExecutionMode::Paper)
             .await
             .unwrap();
         broker

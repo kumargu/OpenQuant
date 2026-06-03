@@ -1073,7 +1073,7 @@ impl PairsEngineWrapper {
                     .map_err(pyo3::exceptions::PyValueError::new_err)?;
                 let mut ptc = cfg.pairs_trading;
                 // Sync timezone from [data] config (#161)
-                ptc.tz_offset_hours = cfg.data.timezone_offset_hours;
+                ptc.tz_offset_hours = cfg.data.timezone_offset_minutes() / 60;
                 ptc
             }
             None => openquant_core::pairs::PairsTradingConfig::default(),

@@ -1,0 +1,35 @@
+[broker]
+provider = "kite"
+env_file = ".env.india"
+
+[alpaca]
+api_key = ""
+secret_key = ""
+data_url = ""
+
+[kite]
+api_key = ""
+api_secret = ""
+access_token = ""
+redirect_url = "http://localhost:8080/kite/callback"
+exchange = "NSE"
+product = "MIS"
+order_variety = "amo"
+order_type = "MARKET"
+validity = "DAY"
+market_protection = "-1"
+autoslice = false
+include_holdings = false
+tag_prefix = "oqindia"
+
+[market]
+profile = "india"
+tz = "Asia/Kolkata"
+open = "09:15"
+close = "15:30"
+calendar = "weekdays"
+close_grace_minutes = 35
+
+[data]
+bars_dir = "~/quant-data/india/bars/2026_phase1_1min"
+bootstrap_start_date = "2025-01-01"
