@@ -3068,21 +3068,40 @@ pub async fn run_basket_live(
                         break 'session;
                     }
                     if closes_for_day.len() < symbols_expected {
-                        let parquet_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
-                        let before = closes_for_day.len();
-                        for (symbol, close) in parquet_closes {
-                            closes_for_day.entry(symbol).or_insert(close);
-                        }
-                        let added = closes_for_day.len().saturating_sub(before);
-                        if added > 0 {
-                            info!(
-                                date = %today,
-                                buffered_before = before,
-                                added_from_parquet = added,
-                                closes_after = closes_for_day.len(),
-                                symbols_expected,
-                                "filled session close snapshot from refreshed parquet"
-                            );
+                        let parquet_snapshot = if options.close_decision_minutes_before_close.is_some() {
+                            load_latest_rth_snapshot_for_day(bars_dir, &symbols, today)
+                        } else {
+                            load_close_snapshot_for_day(bars_dir, &symbols, today)
+                        };
+                        match parquet_snapshot {
+                            Ok(parquet_closes) => {
+                                let before = closes_for_day.len();
+                                for (symbol, close) in parquet_closes {
+                                    closes_for_day.entry(symbol).or_insert(close);
+                                }
+                                let added = closes_for_day.len().saturating_sub(before);
+                                if added > 0 {
+                                    info!(
+                                        date = %today,
+                                        buffered_before = before,
+                                        added_from_parquet = added,
+                                        closes_after = closes_for_day.len(),
+                                        symbols_expected,
+                                        pre_close_mode = options.close_decision_minutes_before_close.is_some(),
+                                        "filled session close snapshot from refreshed parquet"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    date = %today,
+                                    buffered_closes = closes_for_day.len(),
+                                    symbols_expected,
+                                    pre_close_mode = options.close_decision_minutes_before_close.is_some(),
+                                    error = e.as_str(),
+                                    "could not fill incomplete session close snapshot from parquet"
+                                );
+                            }
                         }
                     }
                     if closes_for_day.is_empty() {
@@ -3469,26 +3488,10 @@ fn load_close_snapshot_for_day(
     day: NaiveDate,
 ) -> Result<HashMap<String, f64>, String> {
     let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 10, Some(day))?;
-    let mut snapshot = HashMap::new();
-    let mut missing = Vec::new();
     let expected_last_bar_ts_us =
         (market_session::close_timestamp_utc_for_day(day) - 60_000) * 1_000;
-    for symbol in symbols {
-        match closes.get(symbol).and_then(|series| {
-            series.iter().find_map(|(d, ts_us, c)| {
-                if *d == day && *ts_us == expected_last_bar_ts_us {
-                    Some(*c)
-                } else {
-                    None
-                }
-            })
-        }) {
-            Some(close) if close.is_finite() && close > 0.0 => {
-                snapshot.insert(symbol.clone(), close);
-            }
-            _ => missing.push(symbol.clone()),
-        }
-    }
+    let (snapshot, mut missing) =
+        snapshot_for_day_from_series(symbols, day, &closes, Some(expected_last_bar_ts_us));
     if missing.is_empty() {
         info!(
             date = %day,
@@ -3506,6 +3509,64 @@ fn load_close_snapshot_for_day(
             missing.into_iter().take(10).collect::<Vec<_>>().join(", ")
         ))
     }
+}
+
+fn load_latest_rth_snapshot_for_day(
+    bars_dir: &Path,
+    symbols: &[String],
+    day: NaiveDate,
+) -> Result<HashMap<String, f64>, String> {
+    let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 10, Some(day))?;
+    let (snapshot, missing) = snapshot_for_day_from_series(symbols, day, &closes, None);
+    if missing.is_empty() {
+        info!(
+            date = %day,
+            symbols = snapshot.len(),
+            "loaded latest available RTH snapshot for trading day"
+        );
+        Ok(snapshot)
+    } else {
+        Err(format!(
+            "latest RTH snapshot incomplete for {}: missing {} symbols (sample: {})",
+            day,
+            missing.len(),
+            missing.into_iter().take(10).collect::<Vec<_>>().join(", ")
+        ))
+    }
+}
+
+fn snapshot_for_day_from_series(
+    symbols: &[String],
+    day: NaiveDate,
+    closes: &HashMap<String, Vec<(NaiveDate, i64, f64)>>,
+    required_ts_us: Option<i64>,
+) -> (HashMap<String, f64>, Vec<String>) {
+    let mut snapshot = HashMap::new();
+    let mut missing = Vec::new();
+    for symbol in symbols {
+        let close = closes.get(symbol).and_then(|series| {
+            series
+                .iter()
+                .filter(|(d, ts_us, c)| {
+                    *d == day
+                        && required_ts_us
+                            .map(|required| *ts_us == required)
+                            .unwrap_or(true)
+                        && c.is_finite()
+                        && *c > 0.0
+                })
+                .max_by_key(|(_d, ts_us, _c)| *ts_us)
+                .map(|(_d, _ts_us, c)| *c)
+        });
+        match close {
+            Some(close) => {
+                snapshot.insert(symbol.clone(), close);
+            }
+            None => missing.push(symbol.clone()),
+        }
+    }
+    missing.sort();
+    (snapshot, missing)
 }
 
 /// Run the engine for one session close and dispatch orders.
@@ -6510,6 +6571,48 @@ mod tests {
         assert_eq!(scaled.get("AMD"), Some(&500.0));
         assert_eq!(scaled.get("NVDA"), Some(&-250.0));
         assert!(scale_notionals(&targets, 0.0).is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_for_day_from_series_uses_latest_available_bar() {
+        let day = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
+        let symbols = vec!["AIG".to_string(), "USB".to_string()];
+        let closes = HashMap::from([
+            (
+                "AIG".to_string(),
+                vec![
+                    (day, 1_780_600_000_000_000, 75.0),
+                    (day, 1_780_601_000_000_000, 76.0),
+                ],
+            ),
+            ("USB".to_string(), vec![(day, 1_780_600_000_000_000, 54.0)]),
+        ]);
+
+        let (snapshot, missing) = snapshot_for_day_from_series(&symbols, day, &closes, None);
+
+        assert!(missing.is_empty());
+        assert_eq!(snapshot.get("AIG"), Some(&76.0));
+        assert_eq!(snapshot.get("USB"), Some(&54.0));
+    }
+
+    #[test]
+    fn test_snapshot_for_day_from_series_can_require_final_bar() {
+        let day = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
+        let symbols = vec!["AIG".to_string(), "USB".to_string()];
+        let final_ts = 1_780_601_000_000_000;
+        let closes = HashMap::from([
+            (
+                "AIG".to_string(),
+                vec![(day, 1_780_600_000_000_000, 75.0), (day, final_ts, 76.0)],
+            ),
+            ("USB".to_string(), vec![(day, 1_780_600_000_000_000, 54.0)]),
+        ]);
+
+        let (snapshot, missing) =
+            snapshot_for_day_from_series(&symbols, day, &closes, Some(final_ts));
+
+        assert_eq!(snapshot.get("AIG"), Some(&76.0));
+        assert_eq!(missing, vec!["USB".to_string()]);
     }
 
     #[test]
