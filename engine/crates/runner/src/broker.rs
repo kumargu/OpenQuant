@@ -20,6 +20,25 @@ pub struct BrokerOrder {
     pub symbol: String,
     pub side: String,
     pub qty: String,
+    #[serde(default)]
+    pub submitted_at: Option<String>,
+    #[serde(default)]
+    pub filled_at: Option<String>,
+    #[serde(default)]
+    pub filled_qty: Option<String>,
+    #[serde(default)]
+    pub filled_avg_price: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, PartialEq)]
+pub struct BrokerOpenOrder {
+    pub id: String,
+    pub status: String,
+    pub symbol: String,
+    pub side: String,
+    pub qty: String,
+    #[serde(default)]
+    pub filled_qty: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -71,6 +90,25 @@ pub trait Broker: Send + Sync {
         execution: BrokerExecutionMode,
     ) -> Result<HashMap<String, (f64, f64)>, String>;
 
+    /// Fetch currently open broker orders. Used to avoid duplicate corrective
+    /// orders when broker inventory has not yet reflected an accepted order.
+    async fn get_open_orders(
+        &self,
+        _execution: BrokerExecutionMode,
+    ) -> Result<Vec<BrokerOpenOrder>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Fetch a broker order by id. Brokers that do not expose durable order
+    /// lookup can return `Ok(None)`.
+    async fn get_order(
+        &self,
+        _id: &str,
+        _execution: BrokerExecutionMode,
+    ) -> Result<Option<BrokerOrder>, String> {
+        Ok(None)
+    }
+
     /// Fetch the account snapshot (status, buying power, equity, gate flags).
     async fn get_account(&self, execution: BrokerExecutionMode) -> Result<BrokerAccount, String>;
 
@@ -99,8 +137,8 @@ pub trait Broker: Send + Sync {
         1
     }
 
-    /// Whether deferred close orders can survive a process restart and
-    /// therefore need persisted next-open catch-up state.
+    /// Whether accepted-but-unfilled close orders can survive a process
+    /// restart and therefore need persisted broker-inventory catch-up state.
     fn supports_persisted_pending_open_reconcile(&self) -> bool {
         false
     }
@@ -122,6 +160,21 @@ impl Broker for AlpacaClient {
         execution: BrokerExecutionMode,
     ) -> Result<HashMap<String, (f64, f64)>, String> {
         AlpacaClient::get_positions(self, execution).await
+    }
+
+    async fn get_open_orders(
+        &self,
+        execution: BrokerExecutionMode,
+    ) -> Result<Vec<BrokerOpenOrder>, String> {
+        AlpacaClient::get_open_orders(self, execution).await
+    }
+
+    async fn get_order(
+        &self,
+        id: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<Option<BrokerOrder>, String> {
+        AlpacaClient::get_order(self, id, execution).await
     }
 
     async fn get_account(&self, execution: BrokerExecutionMode) -> Result<BrokerAccount, String> {

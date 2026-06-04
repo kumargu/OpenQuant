@@ -14,6 +14,12 @@ Use:
 ./engine/target/debug/openquant-runner paper --engine basket --paper-vested
 ```
 
+For unattended operation, start it in a persistent tmux session:
+
+```bash
+scripts/run_vested_paper_tmux.sh
+```
+
 The preset applies:
 
 - universe: `config/basket_universe_buildout.toml`
@@ -65,11 +71,15 @@ This preserves a clean separation:
 
 ## Execution
 
-`--paper-vested` submits projected long-only orders to Alpaca paper so we can observe order behavior and fills without touching live money.
+`--paper-vested` submits projected long-only orders to Alpaca paper so we can observe order behavior and fills without touching live money. The stream preset makes its daily decision 15 minutes before the U.S. close by default, using the latest regular-session bar snapshot available in that decision window rather than the official closing print. Regular Alpaca market/day orders are therefore sent while the regular session is still open instead of intentionally being queued for the next trading day.
+
+If the runner starts after the pre-close decision window, it logs the missed session and does not submit after-close orders or mark that trading day as processed. Accepted-but-unfilled orders still persist a broker-inventory reconcile target when the refreshed broker positions do not match the intended book.
 
 `--live-vested` uses live market data but keeps Alpaca execution in noop mode. Real Vested execution remains browser/manual until Vested exposes a supported API.
 
-Orders submitted after the U.S. close can remain accepted/open in Alpaca paper and fill at the next regular session open. The basket runner may wait during reconciliation before writing pending-open state; this is expected, not a strategy failure.
+Orders submitted after the U.S. close can remain accepted/open in Alpaca paper and fill at the next regular session open. That path is still supported for non-pre-close configurations, but it is not the preferred Vested paper timing.
+
+Replay validates strategy logic and target construction only. It does not model overnight queueing, off-hours price movement, or broker order lifecycle effects.
 
 ## Files
 

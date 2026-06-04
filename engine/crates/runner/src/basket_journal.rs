@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection};
 
+use crate::broker::BrokerOrder;
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS basket_runs (
     run_id TEXT PRIMARY KEY,
@@ -84,6 +86,13 @@ CREATE TABLE IF NOT EXISTS basket_order_events (
     broker_order_id TEXT,
     broker_status TEXT,
     submission_status TEXT NOT NULL,
+    submission_purpose TEXT,
+    broker_submitted_at TEXT,
+    broker_filled_at TEXT,
+    broker_filled_qty REAL,
+    broker_filled_avg_price REAL,
+    broker_final_status TEXT,
+    broker_last_status_at_utc TEXT,
     error_text TEXT,
     created_at_utc TEXT NOT NULL
 );
@@ -189,6 +198,12 @@ pub struct BasketOrderEvent<'a> {
     pub broker_order_id: Option<&'a str>,
     pub broker_status: Option<&'a str>,
     pub submission_status: &'a str,
+    pub submission_purpose: Option<&'a str>,
+    pub broker_submitted_at: Option<&'a str>,
+    pub broker_filled_at: Option<&'a str>,
+    pub broker_filled_qty: Option<f64>,
+    pub broker_filled_avg_price: Option<f64>,
+    pub broker_final_status: Option<&'a str>,
     pub error_text: Option<&'a str>,
 }
 
@@ -219,6 +234,8 @@ impl BasketJournal {
             .map_err(|e| format!("set journal pragmas: {e}"))?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| format!("init basket journal schema: {e}"))?;
+        migrate_order_events_schema(&conn)
+            .map_err(|e| format!("migrate basket order events schema: {e}"))?;
         migrate_picker_decisions_schema(&conn)
             .map_err(|e| format!("migrate basket journal schema: {e}"))?;
         let legacy_picker_scale_column =
@@ -344,8 +361,13 @@ impl BasketJournal {
             "INSERT INTO basket_order_events (
                 run_id, trading_day, seq, symbol, side, requested_qty, intended_notional,
                 reason, basket_id, broker_order_id, broker_status, submission_status,
-                error_text, created_at_utc
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                submission_purpose, broker_submitted_at, broker_filled_at,
+                broker_filled_qty, broker_filled_avg_price, broker_final_status,
+                broker_last_status_at_utc, error_text, created_at_utc
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+            )",
             params![
                 rec.run_id,
                 rec.trading_day.to_string(),
@@ -359,11 +381,46 @@ impl BasketJournal {
                 rec.broker_order_id,
                 rec.broker_status,
                 rec.submission_status,
+                rec.submission_purpose,
+                rec.broker_submitted_at,
+                rec.broker_filled_at,
+                rec.broker_filled_qty,
+                rec.broker_filled_avg_price,
+                rec.broker_final_status,
+                rec.broker_order_id.map(|_| Utc::now().to_rfc3339()),
                 rec.error_text,
                 Utc::now().to_rfc3339(),
             ],
         )
         .map_err(|e| format!("insert basket order event: {e}"))?;
+        Ok(())
+    }
+
+    pub fn record_order_execution(&self, order: &BrokerOrder) -> Result<(), String> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "basket journal mutex poisoned".to_string())?;
+        conn.execute(
+            "UPDATE basket_order_events
+                SET broker_final_status = ?2,
+                    broker_submitted_at = COALESCE(?3, broker_submitted_at),
+                    broker_filled_at = COALESCE(?4, broker_filled_at),
+                    broker_filled_qty = COALESCE(?5, broker_filled_qty),
+                    broker_filled_avg_price = COALESCE(?6, broker_filled_avg_price),
+                    broker_last_status_at_utc = ?7
+              WHERE broker_order_id = ?1",
+            params![
+                order.id,
+                order.status,
+                order.submitted_at,
+                order.filled_at,
+                parse_optional_f64(order.filled_qty.as_deref()),
+                parse_optional_f64(order.filled_avg_price.as_deref()),
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .map_err(|e| format!("update basket order execution: {e}"))?;
         Ok(())
     }
 
@@ -453,6 +510,47 @@ fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool
     Ok(false)
 }
 
+fn add_nullable_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    column_type: &str,
+) -> Result<(), rusqlite::Error> {
+    if table_has_column(conn, table, column)? {
+        return Ok(());
+    }
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {column_type}");
+    conn.execute(&sql, [])?;
+    Ok(())
+}
+
+fn migrate_order_events_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
+    add_nullable_column_if_missing(conn, "basket_order_events", "submission_purpose", "TEXT")?;
+    add_nullable_column_if_missing(conn, "basket_order_events", "broker_submitted_at", "TEXT")?;
+    add_nullable_column_if_missing(conn, "basket_order_events", "broker_filled_at", "TEXT")?;
+    add_nullable_column_if_missing(conn, "basket_order_events", "broker_filled_qty", "REAL")?;
+    add_nullable_column_if_missing(
+        conn,
+        "basket_order_events",
+        "broker_filled_avg_price",
+        "REAL",
+    )?;
+    add_nullable_column_if_missing(conn, "basket_order_events", "broker_final_status", "TEXT")?;
+    add_nullable_column_if_missing(
+        conn,
+        "basket_order_events",
+        "broker_last_status_at_utc",
+        "TEXT",
+    )?;
+    Ok(())
+}
+
+fn parse_optional_f64(value: Option<&str>) -> Option<f64> {
+    value
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+}
+
 fn migrate_picker_decisions_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
     let has_new = table_has_column(
         conn,
@@ -523,7 +621,26 @@ mod tests {
                 broker_order_id: Some("oid"),
                 broker_status: Some("accepted"),
                 submission_status: "accepted",
+                submission_purpose: Some("session_close"),
+                broker_submitted_at: Some("2026-04-28T20:00:00Z"),
+                broker_filled_at: None,
+                broker_filled_qty: None,
+                broker_filled_avg_price: None,
+                broker_final_status: Some("accepted"),
                 error_text: None,
+            })
+            .unwrap();
+        journal
+            .record_order_execution(&BrokerOrder {
+                id: "oid".to_string(),
+                status: "filled".to_string(),
+                symbol: "AAPL".to_string(),
+                side: "buy".to_string(),
+                qty: "3".to_string(),
+                submitted_at: Some("2026-04-28T20:00:00Z".to_string()),
+                filled_at: Some("2026-04-29T13:31:00Z".to_string()),
+                filled_qty: Some("3".to_string()),
+                filled_avg_price: Some("201.25".to_string()),
             })
             .unwrap();
         journal
@@ -594,6 +711,20 @@ mod tests {
         let orders: i64 = conn
             .query_row("SELECT COUNT(*) FROM basket_order_events", [], |r| r.get(0))
             .unwrap();
+        let order_status: String = conn
+            .query_row(
+                "SELECT broker_final_status FROM basket_order_events WHERE broker_order_id = 'oid'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let filled_qty: f64 = conn
+            .query_row(
+                "SELECT broker_filled_qty FROM basket_order_events WHERE broker_order_id = 'oid'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         let decisions: i64 = conn
             .query_row("SELECT COUNT(*) FROM basket_picker_decisions", [], |r| {
                 r.get(0)
@@ -602,6 +733,8 @@ mod tests {
         assert_eq!(runs, 1);
         assert_eq!(sessions, 1);
         assert_eq!(orders, 1);
+        assert_eq!(order_status, "filled");
+        assert_eq!(filled_qty, 3.0);
         assert_eq!(decisions, 1);
     }
 
@@ -685,5 +818,69 @@ CREATE TABLE basket_picker_decisions (
             )
             .unwrap();
         assert!((migrated - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn basket_journal_migrates_legacy_order_event_columns() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("legacy-orders.sqlite3");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "
+CREATE TABLE basket_order_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    trading_day TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    requested_qty REAL NOT NULL,
+    intended_notional REAL,
+    reason TEXT NOT NULL,
+    basket_id TEXT,
+    broker_order_id TEXT,
+    broker_status TEXT,
+    submission_status TEXT NOT NULL,
+    error_text TEXT,
+    created_at_utc TEXT NOT NULL
+);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let journal = BasketJournal::open(&db).unwrap();
+        journal
+            .record_order_event(&BasketOrderEvent {
+                run_id: "run-1",
+                trading_day: NaiveDate::from_ymd_opt(2026, 4, 28).unwrap(),
+                seq: 1,
+                symbol: "AAPL",
+                side: "buy",
+                requested_qty: 3.0,
+                intended_notional: Some(600.0),
+                reason: "aggregated",
+                basket_id: None,
+                broker_order_id: Some("oid"),
+                broker_status: Some("accepted"),
+                submission_status: "accepted",
+                submission_purpose: Some("pending_open_reconcile"),
+                broker_submitted_at: Some("2026-04-29T13:30:00Z"),
+                broker_filled_at: None,
+                broker_filled_qty: None,
+                broker_filled_avg_price: None,
+                broker_final_status: Some("accepted"),
+                error_text: None,
+            })
+            .unwrap();
+
+        let conn = journal.conn.lock().unwrap();
+        let purpose: String = conn
+            .query_row(
+                "SELECT submission_purpose FROM basket_order_events WHERE broker_order_id = 'oid'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(purpose, "pending_open_reconcile");
     }
 }

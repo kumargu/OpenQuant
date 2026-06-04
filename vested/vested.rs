@@ -9,6 +9,7 @@ pub const DEFAULT_UNIVERSE: &str = "config/basket_universe_buildout.toml";
 pub const DEFAULT_CAPITAL: f64 = 10_000.0;
 pub const DEFAULT_N_ACTIVE_BASKETS: usize = 5;
 pub const DEFAULT_LEADERSHIP_LONG_ONLY_LEVERAGE: f64 = 1.25;
+pub const DEFAULT_STREAM_CLOSE_DECISION_MINUTES_BEFORE_CLOSE: u32 = 15;
 pub const DEFAULT_REGIME_MIN_OBSERVATIONS: usize = 21;
 pub const DEFAULT_REGIME_MIN_RETURN_20D: f64 = 0.0;
 pub const DEFAULT_REGIME_MAX_DRAWDOWN_20D: f64 = 0.05;
@@ -200,6 +201,7 @@ pub struct Preset {
     pub picks_tsv: PathBuf,
     pub report_tsv: Option<PathBuf>,
     pub journal_path: Option<PathBuf>,
+    pub close_decision_minutes_before_close: Option<u32>,
 }
 
 pub fn preset(kind: PresetKind) -> Preset {
@@ -218,6 +220,8 @@ pub fn preset(kind: PresetKind) -> Preset {
         report_tsv: matches!(kind, PresetKind::Replay).then(|| output_root.join("report.tsv")),
         journal_path: (!matches!(kind, PresetKind::Replay))
             .then(|| output_root.join("journal.sqlite3")),
+        close_decision_minutes_before_close: matches!(kind, PresetKind::Paper | PresetKind::Live)
+            .then_some(DEFAULT_STREAM_CLOSE_DECISION_MINUTES_BEFORE_CLOSE),
         output_root,
     }
 }

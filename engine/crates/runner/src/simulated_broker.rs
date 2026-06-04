@@ -440,6 +440,10 @@ impl Broker for SimulatedBroker {
             symbol: symbol.to_string(),
             side: side.to_string(),
             qty: format!("{qty}"),
+            submitted_at: None,
+            filled_at: None,
+            filled_qty: Some(filled_qty.to_string()),
+            filled_avg_price: Some(submit_price.to_string()),
         })
     }
 

@@ -52,7 +52,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use crate::bar_source::{AlpacaBarSource, KiteBarSource};
-use crate::broker::{Broker, BrokerExecutionMode};
+use crate::broker::{Broker, BrokerExecutionMode, SessionCloseFillContract};
 use crate::kite::{KiteClient, KiteOrderConfig};
 
 macro_rules! bug {
@@ -120,6 +120,7 @@ struct RunnerMarketConfig {
     close: Option<String>,
     calendar: Option<String>,
     close_grace_minutes: Option<u32>,
+    close_decision_minutes_before_close: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -364,6 +365,27 @@ impl Broker for LiveBrokerClient {
         match self {
             Self::Alpaca(client) => client.get_positions(execution).await,
             Self::Kite(client) => client.get_positions(execution).await,
+        }
+    }
+
+    async fn get_open_orders(
+        &self,
+        execution: BrokerExecutionMode,
+    ) -> Result<Vec<broker::BrokerOpenOrder>, String> {
+        match self {
+            Self::Alpaca(client) => client.get_open_orders(execution).await,
+            Self::Kite(_) => Ok(Vec::new()),
+        }
+    }
+
+    async fn get_order(
+        &self,
+        id: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<Option<broker::BrokerOrder>, String> {
+        match self {
+            Self::Alpaca(client) => client.get_order(id, execution).await,
+            Self::Kite(_) => Ok(None),
         }
     }
 
@@ -1324,6 +1346,16 @@ fn resolve_market_close_grace_minutes(cfg: &RunnerConfig) -> u32 {
         .unwrap_or(basket_live::DEFAULT_CLOSE_GRACE_MIN)
 }
 
+fn resolve_market_close_decision_minutes_before_close(
+    cfg: &RunnerConfig,
+    vested_preset: Option<&vested::Preset>,
+) -> Option<u32> {
+    cfg.market
+        .close_decision_minutes_before_close
+        .or_else(|| vested_preset.and_then(|preset| preset.close_decision_minutes_before_close))
+        .filter(|minutes| *minutes > 0)
+}
+
 fn rule_v1_picker_config_from_universe(
     cfg: &UniverseRuleV1OverlayConfig,
 ) -> basket_overlay_picker::RuleV1OverlayPickerConfig {
@@ -2246,12 +2278,31 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
     // same post-close boundary as the trigger.
     let clock = clock::SystemClock;
     let close_grace_minutes = resolve_market_close_grace_minutes(&runner_cfg);
+    let close_decision_minutes_before_close =
+        resolve_market_close_decision_minutes_before_close(&runner_cfg, vested_preset.as_ref());
+    let session_close_fill_contract =
+        match (provider, close_decision_minutes_before_close, execution) {
+            (
+                BrokerProvider::Alpaca,
+                Some(_),
+                basket_live::BasketExecution::Paper | basket_live::BasketExecution::Live,
+            ) => Some(SessionCloseFillContract::Immediate),
+            _ => None,
+        };
     info!(
         close_grace_minutes,
-        "configured live/paper session-close grace"
+        close_decision_minutes_before_close = ?close_decision_minutes_before_close,
+        session_close_fill_contract_override = ?session_close_fill_contract,
+        "configured live/paper session timing"
     );
-    let mut session_trigger =
-        session_trigger::IntervalSessionTrigger::new(clock::SystemClock, close_grace_minutes);
+    let mut session_trigger = match close_decision_minutes_before_close {
+        Some(minutes) => {
+            session_trigger::IntervalSessionTrigger::new_before_close(clock::SystemClock, minutes)
+        }
+        None => {
+            session_trigger::IntervalSessionTrigger::new(clock::SystemClock, close_grace_minutes)
+        }
+    };
     let basket_journal_path = args.basket_journal_path.clone().unwrap_or_else(|| {
         vested_preset
             .as_ref()
@@ -2285,6 +2336,8 @@ async fn run_basket_stream(args: StreamArgs, is_live_command: bool) {
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
             vested_mode,
             close_grace_min: close_grace_minutes,
+            close_decision_minutes_before_close,
+            session_close_fill_contract,
         },
     )
     .await
@@ -3718,6 +3771,8 @@ async fn run_basket_replay_live_path(args: ReplayArgs) {
             supported_reallocation_band_config: runtime.supported_reallocation_band_config,
             vested_mode,
             close_grace_min: basket_live::DEFAULT_CLOSE_GRACE_MIN,
+            close_decision_minutes_before_close: None,
+            session_close_fill_contract: None,
         },
     )
     .await;
@@ -3917,9 +3972,31 @@ mod tests {
             resolve_market_close_grace_minutes(&cfg),
             basket_live::DEFAULT_CLOSE_GRACE_MIN
         );
+        assert_eq!(
+            resolve_market_close_decision_minutes_before_close(&cfg, None),
+            None
+        );
 
         cfg.market.close_grace_minutes = Some(35);
         assert_eq!(resolve_market_close_grace_minutes(&cfg), 35);
+
+        let preset = vested::preset(vested::PresetKind::Paper);
+        assert_eq!(
+            resolve_market_close_decision_minutes_before_close(&cfg, Some(&preset)),
+            Some(vested::DEFAULT_STREAM_CLOSE_DECISION_MINUTES_BEFORE_CLOSE)
+        );
+
+        cfg.market.close_decision_minutes_before_close = Some(20);
+        assert_eq!(
+            resolve_market_close_decision_minutes_before_close(&cfg, Some(&preset)),
+            Some(20)
+        );
+
+        cfg.market.close_decision_minutes_before_close = Some(0);
+        assert_eq!(
+            resolve_market_close_decision_minutes_before_close(&cfg, None),
+            None
+        );
     }
 
     #[test]
@@ -3943,6 +4020,10 @@ mod tests {
         assert_eq!(order.historical_close, "15:30");
         assert!(!order.autoslice);
         assert_eq!(resolve_market_close_grace_minutes(&runner_cfg), 35);
+        assert_eq!(
+            resolve_market_close_decision_minutes_before_close(&runner_cfg, None),
+            None
+        );
 
         let universe = basket_picker::load_universe(
             &repo_root.join("config/basket_universe_india.template.toml"),

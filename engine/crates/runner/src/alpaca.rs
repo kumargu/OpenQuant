@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{error, info};
 
-use crate::broker::{BrokerAccount, BrokerExecutionMode, BrokerOrder};
+use crate::broker::{BrokerAccount, BrokerExecutionMode, BrokerOpenOrder, BrokerOrder};
 use crate::market_session;
 
 const DATA_URL_DEFAULT: &str = "https://data.alpaca.markets/v2/stocks/bars";
@@ -471,6 +471,65 @@ impl AlpacaClient {
 
         info!(positions = map.len(), "fetched Alpaca positions");
         Ok(map)
+    }
+
+    pub async fn get_open_orders(
+        &self,
+        execution: BrokerExecutionMode,
+    ) -> Result<Vec<BrokerOpenOrder>, String> {
+        let url = format!("{}/orders?status=open&limit=500", execution.trading_url());
+        let response = self
+            .http
+            .get(&url)
+            .header("APCA-API-KEY-ID", &self.api_key)
+            .header("APCA-API-SECRET-KEY", &self.api_secret)
+            .send()
+            .await
+            .map_err(|e| format!("open orders request failed: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("open orders API error {status}: {body}"));
+        }
+
+        let orders: Vec<BrokerOpenOrder> = response
+            .json()
+            .await
+            .map_err(|e| format!("open orders parse failed: {e}"))?;
+        info!(open_orders = orders.len(), "fetched Alpaca open orders");
+        Ok(orders)
+    }
+
+    pub async fn get_order(
+        &self,
+        id: &str,
+        execution: BrokerExecutionMode,
+    ) -> Result<Option<BrokerOrder>, String> {
+        let url = format!("{}/orders/{id}", execution.trading_url());
+        let response = self
+            .http
+            .get(&url)
+            .header("APCA-API-KEY-ID", &self.api_key)
+            .header("APCA-API-SECRET-KEY", &self.api_secret)
+            .send()
+            .await
+            .map_err(|e| format!("order lookup failed for {id}: {e}"))?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("order lookup API error {status}: {body}"));
+        }
+
+        let order: BrokerOrder = response
+            .json()
+            .await
+            .map_err(|e| format!("order lookup parse failed for {id}: {e}"))?;
+        Ok(Some(order))
     }
 
     pub async fn get_account(

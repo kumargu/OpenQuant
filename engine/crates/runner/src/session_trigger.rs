@@ -1,7 +1,7 @@
 //! Session-close trigger abstraction for the basket live loop.
 //!
 //! [`IntervalSessionTrigger`] polls the clock on a 30s interval and yields
-//! the trading date once it crosses session close + grace. A
+//! the trading date once it crosses the configured decision point. A
 //! `BarDrivenSessionTrigger` (#294c-2) will fire when an emitted bar's
 //! timestamp crosses the same boundary, so replay drives session-close
 //! cadence off bar timestamps instead of wall-clock ticks.
@@ -47,14 +47,33 @@ pub trait SessionTrigger: Send + Sync {
     async fn ack_session_processed(&mut self) {}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntervalSessionTiming {
+    AfterCloseGrace { grace_minutes: u32 },
+    BeforeClose { minutes_before_close: u32 },
+}
+
+impl IntervalSessionTiming {
+    fn is_due(self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        match self {
+            Self::AfterCloseGrace { grace_minutes } => {
+                market_session::is_after_close_grace_utc(now, grace_minutes)
+            }
+            Self::BeforeClose {
+                minutes_before_close,
+            } => market_session::is_at_or_after_close_decision_utc(now, minutes_before_close),
+        }
+    }
+}
+
 /// Production trigger — polls the clock on a 30s wall-clock interval.
 ///
-/// Fires when the clock is past session close + grace for a date that
-/// hasn't been yielded yet. Used by live / paper.
+/// Fires when the clock is past the configured decision point for a date
+/// that hasn't been yielded yet. Used by live / paper.
 pub struct IntervalSessionTrigger<C: Clock> {
     clock: C,
     interval: tokio::time::Interval,
-    grace_minutes: u32,
+    timing: IntervalSessionTiming,
     last_yielded: Option<NaiveDate>,
 }
 
@@ -63,7 +82,18 @@ impl<C: Clock> IntervalSessionTrigger<C> {
         Self {
             clock,
             interval: tokio::time::interval(std::time::Duration::from_secs(30)),
-            grace_minutes,
+            timing: IntervalSessionTiming::AfterCloseGrace { grace_minutes },
+            last_yielded: None,
+        }
+    }
+
+    pub fn new_before_close(clock: C, minutes_before_close: u32) -> Self {
+        Self {
+            clock,
+            interval: tokio::time::interval(std::time::Duration::from_secs(30)),
+            timing: IntervalSessionTiming::BeforeClose {
+                minutes_before_close,
+            },
             last_yielded: None,
         }
     }
@@ -75,9 +105,7 @@ impl<C: Clock> SessionTrigger for IntervalSessionTrigger<C> {
             self.interval.tick().await;
             let now = self.clock.now();
             let today = market_session::trading_day_utc(now);
-            if market_session::is_after_close_grace_utc(now, self.grace_minutes)
-                && self.last_yielded != Some(today)
-            {
+            if self.timing.is_due(now) && self.last_yielded != Some(today) {
                 self.last_yielded = Some(today);
                 return Some(today);
             }
@@ -137,6 +165,33 @@ mod tests {
         assert_eq!(
             second,
             Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 27).unwrap())
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pre_close_trigger_fires_inside_decision_window() {
+        let (clock, cell) = FakeClock::new(Utc.with_ymd_and_hms(2026, 7, 1, 19, 44, 0).unwrap());
+        let mut trig = IntervalSessionTrigger::new_before_close(clock, 15);
+
+        let early = tokio::time::timeout(std::time::Duration::from_secs(60), trig.next()).await;
+        assert!(
+            early.is_err(),
+            "pre-close trigger should not fire before the decision window"
+        );
+
+        *cell.lock().unwrap() = Utc.with_ymd_and_hms(2026, 7, 1, 19, 45, 0).unwrap();
+        let fired = trig.next().await;
+        assert_eq!(
+            fired,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+        );
+
+        *cell.lock().unwrap() = Utc.with_ymd_and_hms(2026, 7, 1, 20, 1, 0).unwrap();
+        let after_close =
+            tokio::time::timeout(std::time::Duration::from_secs(60), trig.next()).await;
+        assert!(
+            after_close.is_err(),
+            "pre-close trigger should not fire after close for the same date"
         );
     }
 }
