@@ -486,6 +486,10 @@ impl KiteClient {
             symbol: symbol.to_string(),
             side: side.to_string(),
             qty: quantity.to_string(),
+            submitted_at: None,
+            filled_at: None,
+            filled_qty: None,
+            filled_avg_price: None,
         })
     }
 

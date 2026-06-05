@@ -26,6 +26,31 @@ picker_scale_expr() {
   fi
 }
 
+table_column_expr() {
+  local table="$1"
+  local column="$2"
+  local alias="${3:-$2}"
+  local cols
+  cols="$(sqlite3 "$db" "PRAGMA table_info($table);" | cut -d'|' -f2)"
+  if grep -qx "$column" <<<"$cols"; then
+    printf '%s' "$column"
+  else
+    printf '%s' "NULL AS $alias"
+  fi
+}
+
+table_column_value_expr() {
+  local table="$1"
+  local column="$2"
+  local cols
+  cols="$(sqlite3 "$db" "PRAGMA table_info($table);" | cut -d'|' -f2)"
+  if grep -qx "$column" <<<"$cols"; then
+    printf '%s' "$column"
+  else
+    printf '%s' "NULL"
+  fi
+}
+
 case "$view" in
   summary)
     sqlite3 -header -column "$db" "
@@ -60,11 +85,24 @@ case "$view" in
     "
     ;;
   orders)
+    submission_purpose_expr="$(table_column_expr basket_order_events submission_purpose)"
+    broker_submitted_at_expr="$(table_column_expr basket_order_events broker_submitted_at)"
+    broker_final_status_expr="$(table_column_expr basket_order_events broker_final_status)"
+    broker_filled_at_expr="$(table_column_expr basket_order_events broker_filled_at)"
+    broker_filled_qty_expr="$(table_column_expr basket_order_events broker_filled_qty)"
+    broker_filled_avg_price_value_expr="$(table_column_value_expr basket_order_events broker_filled_avg_price)"
     sqlite3 -header -column "$db" "
       SELECT trading_day, seq, symbol, side, requested_qty,
              ROUND(intended_notional, 2) AS intended_notional,
              reason, basket_id, broker_order_id, broker_status,
-             submission_status, error_text, created_at_utc
+             submission_status,
+             $submission_purpose_expr,
+             $broker_submitted_at_expr,
+             $broker_final_status_expr,
+             $broker_filled_at_expr,
+             $broker_filled_qty_expr,
+             ROUND($broker_filled_avg_price_value_expr, 6) AS broker_filled_avg_price,
+             error_text, created_at_utc
         FROM basket_order_events
        ORDER BY id DESC
        LIMIT 100;

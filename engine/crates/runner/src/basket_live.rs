@@ -48,12 +48,19 @@ use crate::basket_overlay_picker::{
     BasketOverlayMode, BasketOverlayPicker, BasketOverlayPickerFeatures, BasketOverlayPickerHandle,
     BasketOverlayPickerKind,
 };
-use crate::broker::{Broker, BrokerAccount, BrokerExecutionMode, SessionCloseFillContract};
+use crate::broker::{
+    Broker, BrokerAccount, BrokerExecutionMode, BrokerOpenOrder, BrokerOrder,
+    SessionCloseFillContract,
+};
 
 use crate::clock::Clock;
 use crate::market_session;
 use crate::session_trigger::SessionTrigger;
 use crate::stream;
+use crate::vested::{
+    ProjectionInput as VestedProjectionInput, StrategyFeatures as VestedStrategyFeatures,
+};
+use crate::vested::{VestedMode, VestedTargetAdapter};
 
 macro_rules! bug {
     ($kind:literal, $($field:tt)*) => {{
@@ -124,7 +131,10 @@ pub struct BasketRunOptions {
     pub rule_v1_config: Option<crate::basket_overlay_picker::RuleV1OverlayPickerConfig>,
     pub gate_policy: GatePolicyKind,
     pub supported_reallocation_band_config: SupportedReallocationBandConfig,
+    pub vested_mode: Option<VestedMode>,
     pub close_grace_min: u32,
+    pub close_decision_minutes_before_close: Option<u32>,
+    pub session_close_fill_contract: Option<SessionCloseFillContract>,
 }
 
 impl Default for BasketRunOptions {
@@ -137,7 +147,10 @@ impl Default for BasketRunOptions {
             rule_v1_config: None,
             gate_policy: GatePolicyKind::BertramFrozen,
             supported_reallocation_band_config: SupportedReallocationBandConfig::default(),
+            vested_mode: None,
             close_grace_min: DEFAULT_CLOSE_GRACE_MIN,
+            close_decision_minutes_before_close: None,
+            session_close_fill_contract: None,
         }
     }
 }
@@ -612,6 +625,7 @@ fn leadership_picker_features(
         leadership_short_conflict_ratio: 0.0,
         strategy_return_20d: equity_features.return_20d,
         strategy_drawdown_20d: equity_features.drawdown_20d,
+        strategy_equity_observations: equity_features.observations,
         basket_only_scale_if_sleeve: 1.0,
     }
 }
@@ -685,6 +699,7 @@ fn engine_flatten_baskets_for_plan(
 struct StrategyEquityFeatures {
     return_20d: f64,
     drawdown_20d: f64,
+    observations: usize,
 }
 
 fn strategy_equity_features(equity_history: &VecDeque<f64>) -> StrategyEquityFeatures {
@@ -708,6 +723,7 @@ fn strategy_equity_features(equity_history: &VecDeque<f64>) -> StrategyEquityFea
         } else {
             0.0
         },
+        observations: values.len(),
     }
 }
 
@@ -719,6 +735,25 @@ fn push_equity_history(equity_history: &mut VecDeque<f64>, equity: f64) {
     while equity_history.len() > 21 {
         equity_history.pop_front();
     }
+}
+
+fn share_book_market_value(shares: &HashMap<String, f64>, closes: &HashMap<String, f64>) -> f64 {
+    shares
+        .iter()
+        .filter_map(|(symbol, qty)| {
+            let close = closes.get(symbol)?;
+            let value = *qty * *close;
+            value.is_finite().then_some(value)
+        })
+        .sum()
+}
+
+fn mark_to_market_equity(
+    cash: f64,
+    shares: &HashMap<String, f64>,
+    closes: &HashMap<String, f64>,
+) -> f64 {
+    cash + share_book_market_value(shares, closes)
 }
 
 pub fn leadership_classifier_state_path(engine_state_path: &Path) -> PathBuf {
@@ -1215,10 +1250,17 @@ fn order_reason_fields(reason: &basket_engine::OrderReason) -> (&'static str, Op
     }
 }
 
+fn broker_order_optional_f64(value: Option<&String>) -> Option<f64> {
+    value
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+}
+
 struct SubmittedOrderBatch {
     accepted_orders: usize,
     failed_orders: usize,
     accepted_unfilled_orders: usize,
+    accepted_broker_orders: Vec<BrokerOrder>,
     next_seq: usize,
 }
 
@@ -1273,6 +1315,10 @@ struct PendingOpenReconcileState {
     target_shares: HashMap<String, f64>,
     closes: HashMap<String, f64>,
     attempted_reconcile_day: Option<NaiveDate>,
+    #[serde(default)]
+    broker_order_ids: Vec<String>,
+    #[serde(default)]
+    next_reconcile_after_utc_ms: Option<i64>,
 }
 
 fn reconciliation_exceeds_drift_thresholds(reconciliation: &PostSubmitReconciliation) -> bool {
@@ -1339,7 +1385,6 @@ async fn reconcile_post_submission_positions(
     target_shares: &HashMap<String, f64>,
     closes: &HashMap<String, f64>,
     accepted_unfilled_orders: usize,
-    fill_contract: SessionCloseFillContract,
 ) -> Result<PostSubmitReconciliation, String> {
     let actual_shares = seed_current_shares_from_broker(broker, mode, allowed_symbols).await?;
     let actual_gross = gross_notional(&actual_shares, closes);
@@ -1350,7 +1395,7 @@ async fn reconcile_post_submission_positions(
         0.0
     };
     let settlement_pending = accepted_unfilled_orders > 0
-        && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen);
+        && !broker_inventory_matches_target(&actual_shares, target_shares);
     let drift = summarize_position_drift(target_shares, &actual_shares, closes);
 
     Ok(PostSubmitReconciliation {
@@ -1379,6 +1424,7 @@ async fn submit_order_batch(
     let mut accepted_orders = 0usize;
     let mut failed_orders = 0usize;
     let mut accepted_unfilled_orders = 0usize;
+    let mut accepted_broker_orders = Vec::new();
     let mut seq = start_seq;
 
     for order in orders {
@@ -1438,9 +1484,18 @@ async fn submit_order_batch(
                         broker_order_id: Some(o.id.as_str()),
                         broker_status: Some(o.status.as_str()),
                         submission_status: "accepted",
+                        submission_purpose: Some(purpose.label()),
+                        broker_submitted_at: o.submitted_at.as_deref(),
+                        broker_filled_at: o.filled_at.as_deref(),
+                        broker_filled_qty: broker_order_optional_f64(o.filled_qty.as_ref()),
+                        broker_filled_avg_price: broker_order_optional_f64(
+                            o.filled_avg_price.as_ref(),
+                        ),
+                        broker_final_status: Some(o.status.as_str()),
                         error_text: None,
                     })?;
                 }
+                accepted_broker_orders.push(o);
             }
             Err(e) => {
                 failed_orders += 1;
@@ -1471,6 +1526,12 @@ async fn submit_order_batch(
                         broker_order_id: None,
                         broker_status: None,
                         submission_status: "failed",
+                        submission_purpose: Some(purpose.label()),
+                        broker_submitted_at: None,
+                        broker_filled_at: None,
+                        broker_filled_qty: None,
+                        broker_filled_avg_price: None,
+                        broker_final_status: None,
                         error_text: Some(e.as_str()),
                     })?;
                 }
@@ -1483,8 +1544,71 @@ async fn submit_order_batch(
         accepted_orders,
         failed_orders,
         accepted_unfilled_orders,
+        accepted_broker_orders,
         next_seq: seq,
     })
+}
+
+async fn refresh_order_execution_status_ids(
+    broker: &impl Broker,
+    mode: BrokerExecutionMode,
+    journal: Option<&BasketJournal>,
+    order_ids: &[String],
+) -> Result<(), String> {
+    let Some(journal) = journal else {
+        return Ok(());
+    };
+    for order_id in order_ids {
+        match broker.get_order(order_id.as_str(), mode).await {
+            Ok(Some(latest)) => {
+                journal.record_order_execution(&latest)?;
+                info!(
+                    order_id = latest.id.as_str(),
+                    symbol = latest.symbol.as_str(),
+                    status = latest.status.as_str(),
+                    filled_qty = ?latest.filled_qty,
+                    filled_avg_price = ?latest.filled_avg_price,
+                    "refreshed broker order execution status in journal"
+                );
+            }
+            Ok(None) => {
+                debug!(
+                    order_id = order_id.as_str(),
+                    "broker order lookup unavailable; skipping execution status refresh"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    order_id = order_id.as_str(),
+                    error = e.as_str(),
+                    "failed to refresh broker order execution status"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn refresh_order_execution_statuses(
+    broker: &impl Broker,
+    mode: BrokerExecutionMode,
+    journal: Option<&BasketJournal>,
+    orders: &[BrokerOrder],
+) -> Result<(), String> {
+    let order_ids: Vec<String> = orders.iter().map(|order| order.id.clone()).collect();
+    refresh_order_execution_status_ids(broker, mode, journal, &order_ids).await
+}
+
+fn append_pending_broker_order_ids(
+    pending: &mut PendingOpenReconcileState,
+    orders: &[BrokerOrder],
+) {
+    let mut seen: HashSet<String> = pending.broker_order_ids.iter().cloned().collect();
+    for order in orders {
+        if seen.insert(order.id.clone()) {
+            pending.broker_order_ids.push(order.id.clone());
+        }
+    }
 }
 
 fn pending_open_reconcile_due(
@@ -1493,10 +1617,29 @@ fn pending_open_reconcile_due(
     fill_ready_minute_from_open: u32,
 ) -> bool {
     let today = market_session::trading_day_utc(dt);
+    let retry_due = pending
+        .next_reconcile_after_utc_ms
+        .map(|retry_at| dt.timestamp_millis() >= retry_at)
+        .unwrap_or(true);
     pending.trading_day < today
         && market_session::minutes_from_open_utc(dt)
             .is_some_and(|minutes| minutes >= fill_ready_minute_from_open)
         && pending.attempted_reconcile_day != Some(today)
+        && retry_due
+}
+
+fn defer_pending_open_reconcile_until(
+    pending_path: &Path,
+    pending_state: &mut Option<PendingOpenReconcileState>,
+    pending: &mut PendingOpenReconcileState,
+    dt: DateTime<Utc>,
+    delay_secs: u64,
+) -> Result<(), String> {
+    let retry_at = dt + chrono::Duration::seconds(delay_secs.max(1) as i64);
+    pending.next_reconcile_after_utc_ms = Some(retry_at.timestamp_millis());
+    save_pending_open_reconcile_state(pending_path, pending)?;
+    *pending_state = Some(pending.clone());
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1519,6 +1662,9 @@ async fn maybe_run_pending_open_reconcile(
     if !pending_open_reconcile_due(&pending, dt, fill_ready_minute_from_open) {
         return Ok(());
     }
+    pending.next_reconcile_after_utc_ms = None;
+    refresh_order_execution_status_ids(broker, mode, journal, pending.broker_order_ids.as_slice())
+        .await?;
 
     let today = market_session::trading_day_utc(dt);
     info!(
@@ -1531,16 +1677,72 @@ async fn maybe_run_pending_open_reconcile(
 
     let actual_before = seed_current_shares_from_broker(broker, mode, universe_symbols).await?;
     *current_shares = actual_before.clone();
-    let staged_orders = staged_diff_to_orders(&actual_before, &pending.target_shares);
-    let orders = staged_orders.all_orders();
-    if orders.is_empty() {
-        clear_pending_open_reconcile_state(pending_path)?;
-        *pending_state = None;
-        info!(
+    let relevant_symbols: HashSet<&str> = actual_before
+        .keys()
+        .chain(pending.target_shares.keys())
+        .map(|symbol| symbol.as_str())
+        .collect();
+    let open_orders: Vec<BrokerOpenOrder> = broker
+        .get_open_orders(mode)
+        .await?
+        .into_iter()
+        .filter(|order| relevant_symbols.contains(order.symbol.as_str()))
+        .collect();
+    let projected_before = apply_open_orders_to_shares(&actual_before, &open_orders);
+    let mut staged_orders = staged_diff_to_orders(&projected_before, &pending.target_shares);
+    let open_reductions_pending = has_open_reducing_orders(&actual_before, &open_orders);
+    if open_reductions_pending && !staged_orders.expanding.is_empty() {
+        if staged_orders.reducing.is_empty() {
+            info!(
+                prior_trading_day = %pending.trading_day,
+                reconcile_day = %today,
+                open_orders = open_orders.len(),
+                deferred_expansions = staged_orders.expanding.len(),
+                "pending open reconcile is waiting for broker-side reducing orders before submitting expansions"
+            );
+            defer_pending_open_reconcile_until(
+                pending_path,
+                pending_state,
+                &mut pending,
+                dt,
+                broker.reconciliation_delay_secs().max(60),
+            )?;
+            return Ok(());
+        }
+        warn!(
             prior_trading_day = %pending.trading_day,
             reconcile_day = %today,
-            "pending open reconcile already matched broker inventory; cleared sidecar"
+            open_orders = open_orders.len(),
+            deferred_expansions = staged_orders.expanding.len(),
+            "pending open reconcile will submit remaining reductions and defer expansions while broker-side reducing orders are open"
         );
+        staged_orders.expanding.clear();
+    }
+    let orders = staged_orders.all_orders();
+    if orders.is_empty() {
+        if broker_inventory_matches_target(&actual_before, &pending.target_shares) {
+            clear_pending_open_reconcile_state(pending_path)?;
+            *pending_state = None;
+            info!(
+                prior_trading_day = %pending.trading_day,
+                reconcile_day = %today,
+                "pending open reconcile already matched broker inventory; cleared sidecar"
+            );
+        } else {
+            info!(
+                prior_trading_day = %pending.trading_day,
+                reconcile_day = %today,
+                open_orders = open_orders.len(),
+                "pending open reconcile target is covered by broker open orders; waiting for positions to settle"
+            );
+            defer_pending_open_reconcile_until(
+                pending_path,
+                pending_state,
+                &mut pending,
+                dt,
+                broker.reconciliation_delay_secs().max(60),
+            )?;
+        }
         return Ok(());
     }
 
@@ -1548,7 +1750,7 @@ async fn maybe_run_pending_open_reconcile(
         broker,
         mode,
         today,
-        &actual_before,
+        &projected_before,
         &pending.target_shares,
         &orders,
         &pending.closes,
@@ -1567,6 +1769,7 @@ async fn maybe_run_pending_open_reconcile(
 
     let mut accepted_orders = 0usize;
     let mut failed_orders = 0usize;
+    let mut accepted_broker_orders = Vec::new();
     let reducing_batch = submit_order_batch(
         broker,
         mode,
@@ -1582,8 +1785,9 @@ async fn maybe_run_pending_open_reconcile(
     .await?;
     accepted_orders += reducing_batch.accepted_orders;
     failed_orders += reducing_batch.failed_orders;
+    accepted_broker_orders.extend(reducing_batch.accepted_broker_orders.clone());
 
-    let mut shares_after_reducing = actual_before.clone();
+    let mut shares_after_reducing = projected_before.clone();
     let mut phase_one_reconciliation_confirmed = false;
     if !staged_orders.expanding.is_empty() {
         let reconciliation_delay_secs = broker.reconciliation_delay_secs();
@@ -1657,6 +1861,7 @@ async fn maybe_run_pending_open_reconcile(
                 .await?;
                 accepted_orders += expanding_batch.accepted_orders;
                 failed_orders += expanding_batch.failed_orders;
+                accepted_broker_orders.extend(expanding_batch.accepted_broker_orders);
             }
         }
     }
@@ -1665,6 +1870,9 @@ async fn maybe_run_pending_open_reconcile(
     if reconciliation_delay_secs > 0 {
         tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs)).await;
     }
+    refresh_order_execution_statuses(broker, mode, journal, accepted_broker_orders.as_slice())
+        .await?;
+    append_pending_broker_order_ids(&mut pending, accepted_broker_orders.as_slice());
     let actual_after = seed_current_shares_from_broker(broker, mode, universe_symbols).await?;
     *current_shares = actual_after.clone();
     let remaining_orders =
@@ -1684,8 +1892,13 @@ async fn maybe_run_pending_open_reconcile(
         return Ok(());
     }
 
-    pending.attempted_reconcile_day = Some(today);
-    save_pending_open_reconcile_state(pending_path, &pending)?;
+    defer_pending_open_reconcile_until(
+        pending_path,
+        pending_state,
+        &mut pending,
+        dt,
+        broker.reconciliation_delay_secs().max(60),
+    )?;
     warn!(
         prior_trading_day = %pending.trading_day,
         reconcile_day = %today,
@@ -1709,7 +1922,6 @@ async fn maybe_run_pending_open_reconcile(
             .collect::<Vec<_>>(),
         "pending open reconcile still diverges from target after corrective pass"
     );
-    *pending_state = Some(pending);
     Ok(())
 }
 
@@ -1986,6 +2198,71 @@ fn apply_orders_to_shares(
     simulated
 }
 
+fn parse_order_qty(raw: &str) -> Option<f64> {
+    raw.parse::<f64>().ok().filter(|qty| qty.is_finite())
+}
+
+fn open_order_remaining_qty(order: &BrokerOpenOrder) -> Option<f64> {
+    let qty = parse_order_qty(&order.qty)?;
+    let filled_qty = order
+        .filled_qty
+        .as_deref()
+        .and_then(parse_order_qty)
+        .unwrap_or(0.0);
+    Some((qty - filled_qty).max(0.0))
+}
+
+fn signed_order_delta(side: &str, qty: f64) -> Option<f64> {
+    match side.to_ascii_lowercase().as_str() {
+        "buy" => Some(qty),
+        "sell" => Some(-qty),
+        _ => None,
+    }
+}
+
+fn apply_open_orders_to_shares(
+    current: &HashMap<String, f64>,
+    open_orders: &[BrokerOpenOrder],
+) -> HashMap<String, f64> {
+    let mut projected = current.clone();
+    for order in open_orders {
+        let Some(qty) = open_order_remaining_qty(order) else {
+            continue;
+        };
+        if qty < 0.5 {
+            continue;
+        }
+        let Some(delta) = signed_order_delta(order.side.as_str(), qty) else {
+            continue;
+        };
+        let entry = projected.entry(order.symbol.clone()).or_insert(0.0);
+        *entry += delta;
+        if entry.abs() < 0.5 {
+            projected.remove(order.symbol.as_str());
+        }
+    }
+    projected
+}
+
+fn has_open_reducing_orders(
+    current: &HashMap<String, f64>,
+    open_orders: &[BrokerOpenOrder],
+) -> bool {
+    open_orders.iter().any(|order| {
+        let current_qty = current.get(&order.symbol).copied().unwrap_or(0.0);
+        if current_qty.abs() < 0.5 {
+            return false;
+        }
+        let Some(qty) = open_order_remaining_qty(order) else {
+            return false;
+        };
+        let Some(delta) = signed_order_delta(order.side.as_str(), qty) else {
+            return false;
+        };
+        qty >= 0.5 && delta.signum() != current_qty.signum()
+    })
+}
+
 fn subset_target_after_orders(
     current_after_phase: &HashMap<String, f64>,
     final_target: &HashMap<String, f64>,
@@ -2031,6 +2308,26 @@ fn can_submit_phase_two_order(
     let reconciled_shares = shares_after_reducing.get(symbol).copied().unwrap_or(0.0);
     let final_target_shares = final_target.get(symbol).copied().unwrap_or(0.0);
     reconciled_shares.abs() < 0.5 || reconciled_shares.signum() == final_target_shares.signum()
+}
+
+fn broker_inventory_matches_target(
+    actual_shares: &HashMap<String, f64>,
+    target_shares: &HashMap<String, f64>,
+) -> bool {
+    staged_diff_to_orders(actual_shares, target_shares)
+        .all_orders()
+        .is_empty()
+}
+
+fn should_persist_pending_reconcile(
+    pending_open_reconcile_enabled: bool,
+    accepted_unfilled_orders: usize,
+    actual_shares: &HashMap<String, f64>,
+    target_shares: &HashMap<String, f64>,
+) -> bool {
+    pending_open_reconcile_enabled
+        && accepted_unfilled_orders > 0
+        && !broker_inventory_matches_target(actual_shares, target_shares)
 }
 
 fn staged_diff_to_orders(
@@ -2217,6 +2514,7 @@ pub async fn run_basket_live(
     };
     let mut equity_history = VecDeque::new();
     push_equity_history(&mut equity_history, portfolio_config.capital);
+    let mut noop_shadow_cash = portfolio_config.capital;
 
     let (mut engine, mut last_processed_trading_day, startup_state_source) =
         initialize_engine_state(
@@ -2229,8 +2527,18 @@ pub async fn run_basket_live(
     info!(gate_policy = ?engine.gate_policy(), "basket signal gate policy initialized");
     let leadership_state_path = leadership_classifier_state_path(state_path);
     let pending_open_reconcile_path = pending_open_reconcile_state_path(state_path);
+    let session_close_fill_contract = options
+        .session_close_fill_contract
+        .unwrap_or_else(|| broker.session_close_fill_contract());
     let pending_open_reconcile_enabled =
         execution.broker_mode().is_some() && broker.supports_persisted_pending_open_reconcile();
+    info!(
+        close_decision_minutes_before_close = ?options.close_decision_minutes_before_close,
+        close_grace_min = options.close_grace_min,
+        session_close_fill_contract = ?session_close_fill_contract,
+        pending_open_reconcile_enabled,
+        "configured basket session execution timing"
+    );
     let can_load_sidecar_state = matches!(startup_state_source, StartupStateSource::Snapshot);
     if !can_load_sidecar_state {
         move_sidecar_state_aside_if_present(
@@ -2381,6 +2689,19 @@ pub async fn run_basket_live(
             }
             Err(e) => return Err(e),
         };
+    if let Some(pending) = pending_open_reconcile.as_ref() {
+        if broker_inventory_matches_target(&current_shares, &pending.target_shares) {
+            clear_pending_open_reconcile_state(&pending_open_reconcile_path)?;
+            info!(
+                state_path = %pending_open_reconcile_path.display(),
+                trading_day = %pending.trading_day,
+                target_positions = pending.target_shares.len(),
+                broker_positions = current_shares.len(),
+                "cleared stale pending open reconcile state because broker inventory already matches target"
+            );
+            pending_open_reconcile = None;
+        }
+    }
 
     let close_grace_min = options.close_grace_min;
     let startup_phase = classify_startup_phase(now, last_processed_trading_day, close_grace_min);
@@ -2465,6 +2786,7 @@ pub async fn run_basket_live(
 
     if market_session::is_trading_day(today)
         && market_session::is_after_close_grace_utc(now, close_grace_min)
+        && options.close_decision_minutes_before_close.is_none()
         && last_processed_trading_day != Some(today)
     {
         let catchup_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
@@ -2473,6 +2795,8 @@ pub async fn run_basket_live(
             symbols = catchup_closes.len(),
             "startup is after close grace on an unprocessed trading day — running one catch-up close cycle"
         );
+        let noop_marked_equity = (execution == BasketExecution::Noop)
+            .then(|| mark_to_market_equity(noop_shadow_cash, &current_shares, &catchup_closes));
         process_session_close(
             &mut engine,
             broker,
@@ -2490,6 +2814,8 @@ pub async fn run_basket_live(
             &mut overlay_picker,
             options.leadership_overlay.as_ref(),
             options.supported_reallocation_band_config,
+            options.vested_mode.as_ref(),
+            session_close_fill_contract,
             pending_open_reconcile_enabled,
             &pending_open_reconcile_path,
             &mut pending_open_reconcile,
@@ -2505,6 +2831,9 @@ pub async fn run_basket_live(
         if let Some(mode) = execution.broker_mode() {
             let equity = parse_equity(&broker.get_account(mode).await?)?;
             push_equity_history(&mut equity_history, equity);
+        } else if let Some(equity) = noop_marked_equity {
+            noop_shadow_cash = equity - share_book_market_value(&current_shares, &catchup_closes);
+            push_equity_history(&mut equity_history, equity);
         }
         last_processed_trading_day = Some(today);
         engine.save_state_with_day(state_path, last_processed_trading_day)?;
@@ -2514,6 +2843,17 @@ pub async fn run_basket_live(
             state_path = %state_path.display(),
             last_processed = ?last_processed_trading_day,
             "catch-up close cycle completed and startup state persisted"
+        );
+    } else if market_session::is_trading_day(today)
+        && market_session::is_after_close_grace_utc(now, close_grace_min)
+        && options.close_decision_minutes_before_close.is_some()
+        && last_processed_trading_day != Some(today)
+    {
+        warn!(
+            date = %today,
+            close_decision_minutes_before_close = ?options.close_decision_minutes_before_close,
+            last_processed = ?last_processed_trading_day,
+            "startup missed the configured pre-close decision window; leaving the session unprocessed and not submitting after-close orders"
         );
     }
 
@@ -2728,21 +3068,40 @@ pub async fn run_basket_live(
                         break 'session;
                     }
                     if closes_for_day.len() < symbols_expected {
-                        let parquet_closes = load_close_snapshot_for_day(bars_dir, &symbols, today)?;
-                        let before = closes_for_day.len();
-                        for (symbol, close) in parquet_closes {
-                            closes_for_day.entry(symbol).or_insert(close);
-                        }
-                        let added = closes_for_day.len().saturating_sub(before);
-                        if added > 0 {
-                            info!(
-                                date = %today,
-                                buffered_before = before,
-                                added_from_parquet = added,
-                                closes_after = closes_for_day.len(),
-                                symbols_expected,
-                                "filled session close snapshot from refreshed parquet"
-                            );
+                        let parquet_snapshot = if options.close_decision_minutes_before_close.is_some() {
+                            load_latest_rth_snapshot_for_day(bars_dir, &symbols, today)
+                        } else {
+                            load_close_snapshot_for_day(bars_dir, &symbols, today)
+                        };
+                        match parquet_snapshot {
+                            Ok(parquet_closes) => {
+                                let before = closes_for_day.len();
+                                for (symbol, close) in parquet_closes {
+                                    closes_for_day.entry(symbol).or_insert(close);
+                                }
+                                let added = closes_for_day.len().saturating_sub(before);
+                                if added > 0 {
+                                    info!(
+                                        date = %today,
+                                        buffered_before = before,
+                                        added_from_parquet = added,
+                                        closes_after = closes_for_day.len(),
+                                        symbols_expected,
+                                        pre_close_mode = options.close_decision_minutes_before_close.is_some(),
+                                        "filled session close snapshot from refreshed parquet"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    date = %today,
+                                    buffered_closes = closes_for_day.len(),
+                                    symbols_expected,
+                                    pre_close_mode = options.close_decision_minutes_before_close.is_some(),
+                                    error = e.as_str(),
+                                    "could not fill incomplete session close snapshot from parquet"
+                                );
+                            }
                         }
                     }
                     if closes_for_day.is_empty() {
@@ -2791,6 +3150,9 @@ pub async fn run_basket_live(
                         ));
                     }
                     processed_sessions.insert(today);
+                    let noop_marked_equity = (execution == BasketExecution::Noop).then(|| {
+                        mark_to_market_equity(noop_shadow_cash, &current_shares, &closes_for_day)
+                    });
                     process_session_close(
                         &mut engine,
                         broker,
@@ -2808,6 +3170,8 @@ pub async fn run_basket_live(
                         &mut overlay_picker,
                         options.leadership_overlay.as_ref(),
                         options.supported_reallocation_band_config,
+                        options.vested_mode.as_ref(),
+                        session_close_fill_contract,
                         pending_open_reconcile_enabled,
                         &pending_open_reconcile_path,
                         &mut pending_open_reconcile,
@@ -2823,6 +3187,10 @@ pub async fn run_basket_live(
                     broker.record_eod(today).await;
                     if let Some(mode) = execution.broker_mode() {
                         let equity = parse_equity(&broker.get_account(mode).await?)?;
+                        push_equity_history(&mut equity_history, equity);
+                    } else if let Some(equity) = noop_marked_equity {
+                        noop_shadow_cash =
+                            equity - share_book_market_value(&current_shares, &closes_for_day);
                         push_equity_history(&mut equity_history, equity);
                     }
                     last_processed_trading_day = Some(today);
@@ -3120,26 +3488,10 @@ fn load_close_snapshot_for_day(
     day: NaiveDate,
 ) -> Result<HashMap<String, f64>, String> {
     let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 10, Some(day))?;
-    let mut snapshot = HashMap::new();
-    let mut missing = Vec::new();
     let expected_last_bar_ts_us =
         (market_session::close_timestamp_utc_for_day(day) - 60_000) * 1_000;
-    for symbol in symbols {
-        match closes.get(symbol).and_then(|series| {
-            series.iter().find_map(|(d, ts_us, c)| {
-                if *d == day && *ts_us == expected_last_bar_ts_us {
-                    Some(*c)
-                } else {
-                    None
-                }
-            })
-        }) {
-            Some(close) if close.is_finite() && close > 0.0 => {
-                snapshot.insert(symbol.clone(), close);
-            }
-            _ => missing.push(symbol.clone()),
-        }
-    }
+    let (snapshot, mut missing) =
+        snapshot_for_day_from_series(symbols, day, &closes, Some(expected_last_bar_ts_us));
     if missing.is_empty() {
         info!(
             date = %day,
@@ -3159,6 +3511,64 @@ fn load_close_snapshot_for_day(
     }
 }
 
+fn load_latest_rth_snapshot_for_day(
+    bars_dir: &Path,
+    symbols: &[String],
+    day: NaiveDate,
+) -> Result<HashMap<String, f64>, String> {
+    let closes = load_daily_closes_with_timestamps(bars_dir, symbols, 10, Some(day))?;
+    let (snapshot, missing) = snapshot_for_day_from_series(symbols, day, &closes, None);
+    if missing.is_empty() {
+        info!(
+            date = %day,
+            symbols = snapshot.len(),
+            "loaded latest available RTH snapshot for trading day"
+        );
+        Ok(snapshot)
+    } else {
+        Err(format!(
+            "latest RTH snapshot incomplete for {}: missing {} symbols (sample: {})",
+            day,
+            missing.len(),
+            missing.into_iter().take(10).collect::<Vec<_>>().join(", ")
+        ))
+    }
+}
+
+fn snapshot_for_day_from_series(
+    symbols: &[String],
+    day: NaiveDate,
+    closes: &HashMap<String, Vec<(NaiveDate, i64, f64)>>,
+    required_ts_us: Option<i64>,
+) -> (HashMap<String, f64>, Vec<String>) {
+    let mut snapshot = HashMap::new();
+    let mut missing = Vec::new();
+    for symbol in symbols {
+        let close = closes.get(symbol).and_then(|series| {
+            series
+                .iter()
+                .filter(|(d, ts_us, c)| {
+                    *d == day
+                        && required_ts_us
+                            .map(|required| *ts_us == required)
+                            .unwrap_or(true)
+                        && c.is_finite()
+                        && *c > 0.0
+                })
+                .max_by_key(|(_d, ts_us, _c)| *ts_us)
+                .map(|(_d, _ts_us, c)| *c)
+        });
+        match close {
+            Some(close) => {
+                snapshot.insert(symbol.clone(), close);
+            }
+            None => missing.push(symbol.clone()),
+        }
+    }
+    missing.sort();
+    (snapshot, missing)
+}
+
 /// Run the engine for one session close and dispatch orders.
 #[allow(clippy::too_many_arguments)]
 async fn process_session_close(
@@ -3175,6 +3585,8 @@ async fn process_session_close(
     overlay_picker: &mut impl BasketOverlayPicker,
     leadership_overlay: Option<&LeadershipOverlayConfig>,
     supported_reallocation_band_config: SupportedReallocationBandConfig,
+    vested_mode: Option<&VestedMode>,
+    session_close_fill_contract: SessionCloseFillContract,
     pending_open_reconcile_enabled: bool,
     pending_open_reconcile_path: &Path,
     pending_open_reconcile_state: &mut Option<PendingOpenReconcileState>,
@@ -3227,6 +3639,11 @@ async fn process_session_close(
     let mut effective_portfolio_config = portfolio_config.clone();
     effective_portfolio_config.capital =
         effective_execution_capital(portfolio_config.capital, execution_account_equity);
+    let vested_strategy_features = VestedStrategyFeatures {
+        return_20d: picker_features.strategy_return_20d,
+        drawdown_20d: picker_features.strategy_drawdown_20d,
+        observations: picker_features.strategy_equity_observations,
+    };
 
     // Portfolio layer: apply active-basket admission first, then convert
     // admitted target notionals to target shares. Suppression is planned on
@@ -3313,7 +3730,7 @@ async fn process_session_close(
         matches!(picker_decision.mode, BasketOverlayMode::AddCappedLongSleeve)
             && !leadership_long_symbols.is_empty();
     let basket_only_target_notionals = plan.symbol_notionals.clone();
-    let target_notionals = if using_long_replacement {
+    let mut target_notionals = if using_long_replacement {
         leadership_long_only_notionals(
             closes,
             leadership_long_symbols,
@@ -3354,6 +3771,74 @@ async fn process_session_close(
     } else {
         plan.symbol_notionals.clone()
     };
+    if let Some(vested) = vested_mode {
+        let projection_uses_selected_basket_legs =
+            !using_long_replacement && !using_capped_long_sleeve;
+        let mut projection_context_notionals = target_notionals.clone();
+        if !projection_uses_selected_basket_legs {
+            warn!(
+                date = %date,
+                overlay_mode = picker_decision.mode.as_str(),
+                "vested adapter received already-transformed leadership overlay targets"
+            );
+        }
+        if !projection_uses_selected_basket_legs {
+            projection_context_notionals
+                .retain(|_, notional| notional.is_finite() && *notional > 0.0);
+        }
+        let decision = vested.project_targets(VestedProjectionInput {
+            engine,
+            selected_baskets: &plan.selected_baskets,
+            target_notionals: &projection_context_notionals,
+            notional_per_basket: effective_portfolio_config.notional_per_basket(),
+            cash_account_cap: effective_portfolio_config.capital.max(0.0),
+            strategy: vested_strategy_features,
+            selected_basket_projection_allowed: projection_uses_selected_basket_legs,
+        });
+        let projection = &decision.projection;
+        if let Some(peer_mirror) = projection.peer_mirror.as_ref() {
+            info!(
+                date = %date,
+                selected_baskets = plan.selected_baskets.len(),
+                mirrored_baskets = peer_mirror.mirrored_baskets,
+                skipped_baskets = peer_mirror.skipped_baskets,
+                original_short_targets = projection.suppressed_short_targets,
+                original_short_gross = %format!("{:.0}", projection.suppressed_short_gross),
+                mirrored_short_gross = %format!("{:.0}", peer_mirror.mirrored_short_gross),
+                retained_positive_gross = %format!("{:.0}", peer_mirror.retained_positive_gross),
+                "vested peer-mirror projection redirected short budget into positive basket legs"
+            );
+        }
+        target_notionals = decision.target_notionals;
+        if let Some(regime_decision) = decision.regime_decision {
+            info!(
+                date = %date,
+                risk_on = regime_decision.risk_on,
+                reason = regime_decision.reason,
+                exposure_scale = %format!("{:.4}", regime_decision.exposure_scale),
+                observations = vested_strategy_features.observations,
+                return_20d = %format!("{:.4}", vested_strategy_features.return_20d),
+                drawdown_20d = %format!("{:.4}", vested_strategy_features.drawdown_20d),
+                "vested regime gate selected exposure scale"
+            );
+        }
+        info!(
+            date = %date,
+            projection = ?decision.projection_config.kind,
+            kept_long_targets = projection.kept_long_targets,
+            suppressed_short_targets = projection.suppressed_short_targets,
+            suppressed_short_gross = %format!("{:.0}", projection.suppressed_short_gross),
+            pre_scale_long_gross = %format!("{:.0}", projection.pre_scale_long_gross),
+            cash_account_cap = %format!("{:.0}", effective_portfolio_config.capital.max(0.0)),
+            long_scale = %format!("{:.4}", projection.long_scale),
+            short_penalty = %format!("{:.4}", decision.projection_config.short_penalty),
+            min_long_purity = %format!("{:.4}", decision.projection_config.min_long_purity),
+            min_basket_signal = %format!("{:.4}", decision.projection_config.min_basket_signal),
+            skipped_low_signal_baskets = projection.skipped_low_signal_baskets,
+            skipped_low_purity_symbols = projection.skipped_low_purity_symbols,
+            "vested long-only projection produced cash-account target notionals"
+        );
+    }
     if using_long_replacement || using_capped_long_sleeve {
         let (basket_only_gross_long, basket_only_gross_short, basket_only_max_abs, _) =
             summarize_notionals(&basket_only_target_notionals);
@@ -3450,6 +3935,16 @@ async fn process_session_close(
         }
     }
     let executable_target_notionals = notionals_from_target_shares(&target_shares, closes);
+    if let Some(path) = vested_mode.and_then(|adapter| adapter.picks_tsv()) {
+        crate::vested::record_picks_tsv(
+            path,
+            date,
+            true,
+            &target_shares,
+            &executable_target_notionals,
+            closes,
+        )?;
+    }
 
     // Summary of the notional plan before we diff — this is where yesterday's
     // $340K-on-$100K problem was invisible. Emit gross long, gross short,
@@ -3720,6 +4215,12 @@ async fn process_session_close(
                         broker_order_id: None,
                         broker_status: None,
                         submission_status: "noop",
+                        submission_purpose: Some(OrderSubmissionPurpose::SessionClose.label()),
+                        broker_submitted_at: None,
+                        broker_filled_at: None,
+                        broker_filled_qty: None,
+                        broker_filled_avg_price: None,
+                        broker_final_status: None,
                         error_text: None,
                     })?;
                 }
@@ -3768,7 +4269,7 @@ async fn process_session_close(
             }
         }
         Some(mode) => {
-            let fill_contract = broker.session_close_fill_contract();
+            let fill_contract = session_close_fill_contract;
             let reducing_target_shares =
                 apply_orders_to_shares(current_shares, &staged_orders.reducing);
             if let Err(e) = check_order_set_affordability(
@@ -3826,6 +4327,7 @@ async fn process_session_close(
             let mut accepted_orders = 0usize;
             let mut failed_orders = 0usize;
             let mut accepted_unfilled_orders = 0usize;
+            let mut accepted_broker_orders = Vec::new();
             let mut seq = 0usize;
             let reducing_batch = submit_order_batch(
                 broker,
@@ -3843,13 +4345,15 @@ async fn process_session_close(
             accepted_orders += reducing_batch.accepted_orders;
             failed_orders += reducing_batch.failed_orders;
             accepted_unfilled_orders += reducing_batch.accepted_unfilled_orders;
+            accepted_broker_orders.extend(reducing_batch.accepted_broker_orders.clone());
             seq = reducing_batch.next_seq;
 
             let mut shares_after_reducing = reducing_target_shares.clone();
             let mut phase_one_reconciliation_confirmed = false;
             if !staged_orders.expanding.is_empty() {
-                let reducing_settles_next_session = !staged_orders.reducing.is_empty()
-                    && reducing_batch.accepted_unfilled_orders > 0
+                let reducing_has_unfilled_orders = !staged_orders.reducing.is_empty()
+                    && reducing_batch.accepted_unfilled_orders > 0;
+                let reducing_settles_next_session = reducing_has_unfilled_orders
                     && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen);
                 if reducing_settles_next_session {
                     info!(
@@ -3867,10 +4371,15 @@ async fn process_session_close(
                         ))
                         .await;
                     }
+                    let mut reducing_reconciled_to_target = false;
                     match seed_current_shares_from_broker(broker, mode, &allowed_symbols).await {
                         Ok(actual_shares) => {
                             shares_after_reducing = actual_shares;
                             phase_one_reconciliation_confirmed = true;
+                            reducing_reconciled_to_target = broker_inventory_matches_target(
+                                &shares_after_reducing,
+                                &reducing_target_shares,
+                            );
                         }
                         Err(e) => {
                             bug!(
@@ -3881,71 +4390,92 @@ async fn process_session_close(
                             );
                         }
                     }
-                    let expanding_target_shares = subset_target_after_orders(
-                        &shares_after_reducing,
-                        &target_shares,
-                        &staged_orders.expanding,
-                    );
-                    let mut phase_two_orders =
-                        staged_diff_to_orders(&shares_after_reducing, &expanding_target_shares)
-                            .all_orders();
-                    phase_two_orders.retain(|order| {
-                        can_submit_phase_two_order(
-                            current_shares,
+                    if reducing_has_unfilled_orders && !reducing_reconciled_to_target {
+                        warn!(
+                            date = %date,
+                            reducing_orders = staged_orders.reducing.len(),
+                            expanding_orders = staged_orders.expanding.len(),
+                            accepted_unfilled_reducing_orders = reducing_batch.accepted_unfilled_orders,
+                            "skipping phase-two expansions because reducing orders have not reconciled to broker inventory"
+                        );
+                    } else {
+                        let expanding_target_shares = subset_target_after_orders(
+                            &shares_after_reducing,
                             &target_shares,
-                            &shares_after_reducing,
-                            phase_one_reconciliation_confirmed,
-                            &order.symbol,
-                        )
-                    });
-                    if !phase_two_orders.is_empty() {
-                        if let Err(e) = check_order_set_affordability(
-                            broker,
-                            mode,
-                            date,
-                            &shares_after_reducing,
-                            &expanding_target_shares,
-                            &phase_two_orders,
-                            closes,
-                        )
-                        .await
-                        {
-                            if let Some(journal) = journal {
-                                journal.record_order_event(&BasketOrderEvent {
-                                    run_id,
-                                    trading_day: date,
-                                    seq,
-                                    symbol: "__phase2__",
-                                    side: "n/a",
-                                    requested_qty: 0.0,
-                                    intended_notional: None,
-                                    reason: "aggregated",
-                                    basket_id: None,
-                                    broker_order_id: None,
-                                    broker_status: None,
-                                    submission_status: "phase2_affordability_error",
-                                    error_text: Some(e.as_str()),
-                                })?;
-                            }
-                            failed_orders += phase_two_orders.len();
-                        } else {
-                            let expanding_batch = submit_order_batch(
+                            &staged_orders.expanding,
+                        );
+                        let mut phase_two_orders =
+                            staged_diff_to_orders(&shares_after_reducing, &expanding_target_shares)
+                                .all_orders();
+                        phase_two_orders.retain(|order| {
+                            can_submit_phase_two_order(
+                                current_shares,
+                                &target_shares,
+                                &shares_after_reducing,
+                                phase_one_reconciliation_confirmed,
+                                &order.symbol,
+                            )
+                        });
+                        if !phase_two_orders.is_empty() {
+                            if let Err(e) = check_order_set_affordability(
                                 broker,
                                 mode,
-                                execution,
-                                OrderSubmissionPurpose::SessionClose,
-                                &phase_two_orders,
-                                run_id,
                                 date,
+                                &shares_after_reducing,
+                                &expanding_target_shares,
+                                &phase_two_orders,
                                 closes,
-                                journal,
-                                seq,
                             )
-                            .await?;
-                            accepted_orders += expanding_batch.accepted_orders;
-                            failed_orders += expanding_batch.failed_orders;
-                            accepted_unfilled_orders += expanding_batch.accepted_unfilled_orders;
-                            let _ = expanding_batch.next_seq;
+                            .await
+                            {
+                                if let Some(journal) = journal {
+                                    journal.record_order_event(&BasketOrderEvent {
+                                        run_id,
+                                        trading_day: date,
+                                        seq,
+                                        symbol: "__phase2__",
+                                        side: "n/a",
+                                        requested_qty: 0.0,
+                                        intended_notional: None,
+                                        reason: "aggregated",
+                                        basket_id: None,
+                                        broker_order_id: None,
+                                        broker_status: None,
+                                        submission_status: "phase2_affordability_error",
+                                        submission_purpose: Some(
+                                            OrderSubmissionPurpose::SessionClose.label(),
+                                        ),
+                                        broker_submitted_at: None,
+                                        broker_filled_at: None,
+                                        broker_filled_qty: None,
+                                        broker_filled_avg_price: None,
+                                        broker_final_status: None,
+                                        error_text: Some(e.as_str()),
+                                    })?;
+                                }
+                                failed_orders += phase_two_orders.len();
+                            } else {
+                                let expanding_batch = submit_order_batch(
+                                    broker,
+                                    mode,
+                                    execution,
+                                    OrderSubmissionPurpose::SessionClose,
+                                    &phase_two_orders,
+                                    run_id,
+                                    date,
+                                    closes,
+                                    journal,
+                                    seq,
+                                )
+                                .await?;
+                                accepted_orders += expanding_batch.accepted_orders;
+                                failed_orders += expanding_batch.failed_orders;
+                                accepted_unfilled_orders +=
+                                    expanding_batch.accepted_unfilled_orders;
+                                accepted_broker_orders
+                                    .extend(expanding_batch.accepted_broker_orders);
+                                let _ = expanding_batch.next_seq;
+                            }
                         }
                     }
                 }
@@ -3967,6 +4497,13 @@ async fn process_session_close(
                     tokio::time::sleep(std::time::Duration::from_secs(reconciliation_delay_secs))
                         .await;
                 }
+                refresh_order_execution_statuses(
+                    broker,
+                    mode,
+                    journal,
+                    accepted_broker_orders.as_slice(),
+                )
+                .await?;
                 let mut current_shares_after_json = None;
                 let mut current_positions_after = current_shares.len();
                 let mut actual_gross = None;
@@ -3978,7 +4515,6 @@ async fn process_session_close(
                     &target_shares,
                     closes,
                     accepted_unfilled_orders,
-                    fill_contract,
                 )
                 .await
                 {
@@ -4058,23 +4594,31 @@ async fn process_session_close(
                         );
                     }
                 }
-                if pending_open_reconcile_enabled
-                    && accepted_unfilled_orders > 0
-                    && matches!(fill_contract, SessionCloseFillContract::NextSessionOpen)
-                {
+                if should_persist_pending_reconcile(
+                    pending_open_reconcile_enabled,
+                    accepted_unfilled_orders,
+                    current_shares,
+                    &target_shares,
+                ) {
                     let pending_state = PendingOpenReconcileState {
                         trading_day: date,
                         target_shares: target_shares.clone(),
                         closes: closes.clone(),
                         attempted_reconcile_day: None,
+                        broker_order_ids: accepted_broker_orders
+                            .iter()
+                            .map(|order| order.id.clone())
+                            .collect(),
+                        next_reconcile_after_utc_ms: None,
                     };
                     save_pending_open_reconcile_state(pending_open_reconcile_path, &pending_state)?;
                     *pending_open_reconcile_state = Some(pending_state);
                     info!(
                         date = %date,
                         accepted_unfilled_orders,
+                        session_close_fill_contract = ?fill_contract,
                         state_path = %pending_open_reconcile_path.display(),
-                        "persisted pending open reconcile target for next-session catch-up"
+                        "persisted pending open reconcile target for broker inventory catch-up"
                     );
                 } else {
                     clear_pending_open_reconcile_state(pending_open_reconcile_path)?;
@@ -4581,7 +5125,6 @@ mod tests {
             &HashMap::from([("AMD".to_string(), 10.0)]),
             &HashMap::from([("AMD".to_string(), 100.0)]),
             0,
-            SessionCloseFillContract::Immediate,
         )
         .await
         .unwrap();
@@ -4615,6 +5158,10 @@ mod tests {
                 symbol: symbol.to_string(),
                 side: side.to_string(),
                 qty: qty.to_string(),
+                submitted_at: None,
+                filled_at: Some(Utc::now().to_rfc3339()),
+                filled_qty: Some(qty.to_string()),
+                filled_avg_price: None,
             })
         }
 
@@ -4633,6 +5180,10 @@ mod tests {
                 symbol: symbol.to_string(),
                 side: side.to_string(),
                 qty: qty.to_string(),
+                submitted_at: None,
+                filled_at: Some(Utc::now().to_rfc3339()),
+                filled_qty: Some(qty.to_string()),
+                filled_avg_price: None,
             })
         }
 
@@ -4655,6 +5206,325 @@ mod tests {
                 account_blocked: false,
             })
         }
+    }
+
+    struct PendingReconcileTestBroker {
+        positions: std::sync::RwLock<HashMap<String, (f64, f64)>>,
+        open_orders: std::sync::RwLock<Vec<BrokerOpenOrder>>,
+        order_lookup: std::sync::RwLock<HashMap<String, BrokerOrder>>,
+        session_open_reconcile_orders: std::sync::atomic::AtomicUsize,
+    }
+
+    impl PendingReconcileTestBroker {
+        fn new(positions: HashMap<String, (f64, f64)>, open_orders: Vec<BrokerOpenOrder>) -> Self {
+            Self {
+                positions: std::sync::RwLock::new(positions),
+                open_orders: std::sync::RwLock::new(open_orders),
+                order_lookup: std::sync::RwLock::new(HashMap::new()),
+                session_open_reconcile_orders: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn with_order_lookup(self, orders: Vec<BrokerOrder>) -> Self {
+            {
+                let mut lookup = self.order_lookup.write().unwrap();
+                for order in orders {
+                    lookup.insert(order.id.clone(), order);
+                }
+            }
+            self
+        }
+    }
+
+    impl Broker for PendingReconcileTestBroker {
+        async fn place_order(
+            &self,
+            symbol: &str,
+            qty: f64,
+            side: &str,
+            execution: BrokerExecutionMode,
+        ) -> Result<crate::broker::BrokerOrder, String> {
+            self.place_session_open_reconcile_order(symbol, qty, side, execution)
+                .await
+        }
+
+        async fn place_session_open_reconcile_order(
+            &self,
+            symbol: &str,
+            qty: f64,
+            side: &str,
+            _execution: BrokerExecutionMode,
+        ) -> Result<crate::broker::BrokerOrder, String> {
+            self.session_open_reconcile_orders
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::broker::BrokerOrder {
+                id: format!("open-{symbol}"),
+                status: "filled".to_string(),
+                symbol: symbol.to_string(),
+                side: side.to_string(),
+                qty: qty.to_string(),
+                submitted_at: None,
+                filled_at: Some(Utc::now().to_rfc3339()),
+                filled_qty: Some(qty.to_string()),
+                filled_avg_price: None,
+            })
+        }
+
+        async fn get_positions(
+            &self,
+            _execution: BrokerExecutionMode,
+        ) -> Result<HashMap<String, (f64, f64)>, String> {
+            Ok(self.positions.read().unwrap().clone())
+        }
+
+        async fn get_open_orders(
+            &self,
+            _execution: BrokerExecutionMode,
+        ) -> Result<Vec<BrokerOpenOrder>, String> {
+            Ok(self.open_orders.read().unwrap().clone())
+        }
+
+        async fn get_order(
+            &self,
+            id: &str,
+            _execution: BrokerExecutionMode,
+        ) -> Result<Option<BrokerOrder>, String> {
+            Ok(self.order_lookup.read().unwrap().get(id).cloned())
+        }
+
+        async fn get_account(
+            &self,
+            _execution: BrokerExecutionMode,
+        ) -> Result<BrokerAccount, String> {
+            Ok(BrokerAccount {
+                status: "ACTIVE".to_string(),
+                buying_power: "10000".to_string(),
+                equity: "10000".to_string(),
+                trading_blocked: false,
+                account_blocked: false,
+            })
+        }
+
+        fn reconciliation_delay_secs(&self) -> u64 {
+            0
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_post_submission_positions_marks_unfilled_mismatch_pending() {
+        let broker = RoutingTestBroker::default();
+        let reconciliation = reconcile_post_submission_positions(
+            &broker,
+            BrokerExecutionMode::Paper,
+            &["AMD".to_string()],
+            &HashMap::from([("AMD".to_string(), 10.0)]),
+            &HashMap::from([("AMD".to_string(), 100.0)]),
+            1,
+        )
+        .await
+        .unwrap();
+
+        assert!(reconciliation.settlement_pending);
+        assert_eq!(reconciliation.current_positions_after, 0);
+        assert_eq!(reconciliation.actual_gross, 0.0);
+    }
+
+    #[tokio::test]
+    async fn pending_open_reconcile_waits_when_open_reduction_covers_target() {
+        let broker = PendingReconcileTestBroker::new(
+            HashMap::from([("UNH".to_string(), (6.0, 390.0))]),
+            vec![
+                BrokerOpenOrder {
+                    id: "open-unh".to_string(),
+                    status: "accepted".to_string(),
+                    symbol: "UNH".to_string(),
+                    side: "sell".to_string(),
+                    qty: "6".to_string(),
+                    filled_qty: Some("0".to_string()),
+                },
+                BrokerOpenOrder {
+                    id: "manual-tsla".to_string(),
+                    status: "accepted".to_string(),
+                    symbol: "TSLA".to_string(),
+                    side: "buy".to_string(),
+                    qty: "1".to_string(),
+                    filled_qty: Some("0".to_string()),
+                },
+            ],
+        );
+        let tmp = tempdir().unwrap();
+        let pending_path = tmp.path().join("state.json.pending-open.json");
+        let mut pending_state = Some(PendingOpenReconcileState {
+            trading_day: NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+            target_shares: HashMap::from([("AIG".to_string(), 4.0)]),
+            closes: HashMap::from([
+                ("UNH".to_string(), 390.0),
+                ("AIG".to_string(), 75.0),
+                ("TSLA".to_string(), 200.0),
+            ]),
+            attempted_reconcile_day: None,
+            broker_order_ids: Vec::new(),
+            next_reconcile_after_utc_ms: None,
+        });
+        let mut current_shares = HashMap::new();
+
+        maybe_run_pending_open_reconcile(
+            &broker,
+            BrokerExecutionMode::Paper,
+            BasketExecution::Paper,
+            Utc.with_ymd_and_hms(2026, 5, 29, 13, 31, 0).unwrap(),
+            &mut current_shares,
+            &["UNH".to_string(), "AIG".to_string()],
+            &pending_path,
+            &mut pending_state,
+            None,
+            "test-run",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            broker
+                .session_open_reconcile_orders
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        let pending = pending_state.as_ref().unwrap();
+        assert!(pending.next_reconcile_after_utc_ms.is_some());
+        assert!(pending_path.exists());
+        assert_eq!(current_shares.get("UNH"), Some(&6.0));
+    }
+
+    #[tokio::test]
+    async fn pending_open_reconcile_clears_sidecar_when_broker_already_matches_target() {
+        let broker = PendingReconcileTestBroker::new(
+            HashMap::from([("AIG".to_string(), (4.0, 75.0))]),
+            Vec::new(),
+        );
+        let tmp = tempdir().unwrap();
+        let pending_path = tmp.path().join("state.json.pending-open.json");
+        let pending = PendingOpenReconcileState {
+            trading_day: NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+            target_shares: HashMap::from([("AIG".to_string(), 4.0)]),
+            closes: HashMap::from([("AIG".to_string(), 75.0)]),
+            attempted_reconcile_day: None,
+            broker_order_ids: Vec::new(),
+            next_reconcile_after_utc_ms: None,
+        };
+        save_pending_open_reconcile_state(&pending_path, &pending).unwrap();
+        let mut pending_state = Some(pending);
+        let mut current_shares = HashMap::new();
+
+        maybe_run_pending_open_reconcile(
+            &broker,
+            BrokerExecutionMode::Paper,
+            BasketExecution::Paper,
+            Utc.with_ymd_and_hms(2026, 5, 29, 13, 31, 0).unwrap(),
+            &mut current_shares,
+            &["AIG".to_string()],
+            &pending_path,
+            &mut pending_state,
+            None,
+            "test-run",
+        )
+        .await
+        .unwrap();
+
+        assert!(pending_state.is_none());
+        assert!(!pending_path.exists());
+        assert_eq!(current_shares.get("AIG"), Some(&4.0));
+    }
+
+    #[tokio::test]
+    async fn pending_open_reconcile_refreshes_persisted_order_ids_before_clearing() {
+        let broker = PendingReconcileTestBroker::new(
+            HashMap::from([("AIG".to_string(), (4.0, 75.0))]),
+            Vec::new(),
+        )
+        .with_order_lookup(vec![BrokerOrder {
+            id: "oid-aig".to_string(),
+            status: "filled".to_string(),
+            symbol: "AIG".to_string(),
+            side: "buy".to_string(),
+            qty: "4".to_string(),
+            submitted_at: Some("2026-05-28T19:45:00Z".to_string()),
+            filled_at: Some("2026-05-28T19:45:02Z".to_string()),
+            filled_qty: Some("4".to_string()),
+            filled_avg_price: Some("75.25".to_string()),
+        }]);
+        let tmp = tempdir().unwrap();
+        let pending_path = tmp.path().join("state.json.pending-open.json");
+        let journal_path = tmp.path().join("journal.sqlite3");
+        let journal = BasketJournal::open(&journal_path).unwrap();
+        let trading_day = NaiveDate::from_ymd_opt(2026, 5, 28).unwrap();
+        journal
+            .record_order_event(&BasketOrderEvent {
+                run_id: "test-run",
+                trading_day,
+                seq: 0,
+                symbol: "AIG",
+                side: "buy",
+                requested_qty: 4.0,
+                intended_notional: Some(300.0),
+                reason: "aggregated",
+                basket_id: None,
+                broker_order_id: Some("oid-aig"),
+                broker_status: Some("accepted"),
+                submission_status: "accepted",
+                submission_purpose: Some(OrderSubmissionPurpose::SessionClose.label()),
+                broker_submitted_at: Some("2026-05-28T19:45:00Z"),
+                broker_filled_at: None,
+                broker_filled_qty: None,
+                broker_filled_avg_price: None,
+                broker_final_status: Some("accepted"),
+                error_text: None,
+            })
+            .unwrap();
+        let pending = PendingOpenReconcileState {
+            trading_day,
+            target_shares: HashMap::from([("AIG".to_string(), 4.0)]),
+            closes: HashMap::from([("AIG".to_string(), 75.0)]),
+            attempted_reconcile_day: None,
+            broker_order_ids: vec!["oid-aig".to_string()],
+            next_reconcile_after_utc_ms: None,
+        };
+        save_pending_open_reconcile_state(&pending_path, &pending).unwrap();
+        let mut pending_state = Some(pending);
+        let mut current_shares = HashMap::new();
+
+        maybe_run_pending_open_reconcile(
+            &broker,
+            BrokerExecutionMode::Paper,
+            BasketExecution::Paper,
+            Utc.with_ymd_and_hms(2026, 5, 29, 13, 31, 0).unwrap(),
+            &mut current_shares,
+            &["AIG".to_string()],
+            &pending_path,
+            &mut pending_state,
+            Some(&journal),
+            "test-run",
+        )
+        .await
+        .unwrap();
+
+        assert!(pending_state.is_none());
+        let conn = rusqlite::Connection::open(&journal_path).unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT broker_final_status FROM basket_order_events WHERE broker_order_id = 'oid-aig'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let filled_qty: f64 = conn
+            .query_row(
+                "SELECT broker_filled_qty FROM basket_order_events WHERE broker_order_id = 'oid-aig'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "filled");
+        assert_eq!(filled_qty, 4.0);
     }
 
     #[tokio::test]
@@ -5649,6 +6519,26 @@ mod tests {
     }
 
     #[test]
+    fn test_noop_shadow_equity_marks_prior_book_before_rebalance() {
+        let mut shadow_cash = 10_000.0;
+        let prior_shares = HashMap::from([("AMD".to_string(), 10.0)]);
+        let closes = HashMap::from([("AMD".to_string(), 110.0), ("NVDA".to_string(), 50.0)]);
+
+        let equity = mark_to_market_equity(shadow_cash, &prior_shares, &closes);
+        assert_eq!(equity, 11_100.0);
+
+        let rebalanced_shares =
+            HashMap::from([("AMD".to_string(), 5.0), ("NVDA".to_string(), 20.0)]);
+        shadow_cash = equity - share_book_market_value(&rebalanced_shares, &closes);
+
+        let next_closes = HashMap::from([("AMD".to_string(), 120.0), ("NVDA".to_string(), 40.0)]);
+        assert_eq!(
+            mark_to_market_equity(shadow_cash, &rebalanced_shares, &next_closes),
+            10_950.0
+        );
+    }
+
+    #[test]
     fn test_top_abs_notional_legs_sorts_by_magnitude() {
         let targets = HashMap::from([
             ("AMD".to_string(), 1000.0),
@@ -5681,6 +6571,48 @@ mod tests {
         assert_eq!(scaled.get("AMD"), Some(&500.0));
         assert_eq!(scaled.get("NVDA"), Some(&-250.0));
         assert!(scale_notionals(&targets, 0.0).is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_for_day_from_series_uses_latest_available_bar() {
+        let day = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
+        let symbols = vec!["AIG".to_string(), "USB".to_string()];
+        let closes = HashMap::from([
+            (
+                "AIG".to_string(),
+                vec![
+                    (day, 1_780_600_000_000_000, 75.0),
+                    (day, 1_780_601_000_000_000, 76.0),
+                ],
+            ),
+            ("USB".to_string(), vec![(day, 1_780_600_000_000_000, 54.0)]),
+        ]);
+
+        let (snapshot, missing) = snapshot_for_day_from_series(&symbols, day, &closes, None);
+
+        assert!(missing.is_empty());
+        assert_eq!(snapshot.get("AIG"), Some(&76.0));
+        assert_eq!(snapshot.get("USB"), Some(&54.0));
+    }
+
+    #[test]
+    fn test_snapshot_for_day_from_series_can_require_final_bar() {
+        let day = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
+        let symbols = vec!["AIG".to_string(), "USB".to_string()];
+        let final_ts = 1_780_601_000_000_000;
+        let closes = HashMap::from([
+            (
+                "AIG".to_string(),
+                vec![(day, 1_780_600_000_000_000, 75.0), (day, final_ts, 76.0)],
+            ),
+            ("USB".to_string(), vec![(day, 1_780_600_000_000_000, 54.0)]),
+        ]);
+
+        let (snapshot, missing) =
+            snapshot_for_day_from_series(&symbols, day, &closes, Some(final_ts));
+
+        assert_eq!(snapshot.get("AIG"), Some(&76.0));
+        assert_eq!(missing, vec!["USB".to_string()]);
     }
 
     #[test]
@@ -5779,6 +6711,65 @@ mod tests {
     }
 
     #[test]
+    fn test_broker_inventory_matches_target_uses_share_order_tolerance() {
+        let actual = HashMap::from([("AMD".to_string(), 10.2)]);
+        let target = HashMap::from([("AMD".to_string(), 10.0)]);
+        assert!(broker_inventory_matches_target(&actual, &target));
+
+        let actual = HashMap::from([("AMD".to_string(), 9.0)]);
+        assert!(!broker_inventory_matches_target(&actual, &target));
+    }
+
+    #[test]
+    fn test_should_persist_pending_reconcile_requires_unfilled_mismatch() {
+        let actual = HashMap::from([("AMD".to_string(), 9.0)]);
+        let target = HashMap::from([("AMD".to_string(), 10.0)]);
+        assert!(should_persist_pending_reconcile(true, 1, &actual, &target));
+        assert!(!should_persist_pending_reconcile(
+            false, 1, &actual, &target
+        ));
+        assert!(!should_persist_pending_reconcile(true, 0, &actual, &target));
+
+        let actual = HashMap::from([("AMD".to_string(), 10.0)]);
+        assert!(!should_persist_pending_reconcile(true, 1, &actual, &target));
+    }
+
+    #[test]
+    fn test_apply_open_orders_projects_broker_held_reduction() {
+        let current = HashMap::from([("UNH".to_string(), 6.0), ("AIG".to_string(), 32.0)]);
+        let open_orders = vec![BrokerOpenOrder {
+            id: "open-unh".to_string(),
+            status: "accepted".to_string(),
+            symbol: "UNH".to_string(),
+            side: "sell".to_string(),
+            qty: "6".to_string(),
+            filled_qty: Some("0".to_string()),
+        }];
+
+        let projected = apply_open_orders_to_shares(&current, &open_orders);
+        assert!(!projected.contains_key("UNH"));
+        assert_eq!(projected.get("AIG"), Some(&32.0));
+        assert!(has_open_reducing_orders(&current, &open_orders));
+    }
+
+    #[test]
+    fn test_apply_open_orders_uses_remaining_quantity() {
+        let current = HashMap::from([("USB".to_string(), 52.0)]);
+        let open_orders = vec![BrokerOpenOrder {
+            id: "open-usb".to_string(),
+            status: "partially_filled".to_string(),
+            symbol: "USB".to_string(),
+            side: "buy".to_string(),
+            qty: "7".to_string(),
+            filled_qty: Some("3".to_string()),
+        }];
+
+        let projected = apply_open_orders_to_shares(&current, &open_orders);
+        assert_eq!(projected.get("USB"), Some(&56.0));
+        assert!(!has_open_reducing_orders(&current, &open_orders));
+    }
+
+    #[test]
     fn test_apply_orders_to_shares_handles_flatten_then_flip_open() {
         let current = HashMap::from([("AIG".to_string(), 10.0)]);
         let reducing = vec![OrderIntent {
@@ -5838,6 +6829,8 @@ mod tests {
             target_shares: HashMap::from([("XOM".to_string(), 21.0)]),
             closes: HashMap::from([("XOM".to_string(), 101.0)]),
             attempted_reconcile_day: None,
+            broker_order_ids: Vec::new(),
+            next_reconcile_after_utc_ms: None,
         };
         let at_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 30, 0).unwrap();
         let one_minute_after_open = Utc.with_ymd_and_hms(2026, 5, 29, 13, 31, 0).unwrap();
@@ -5857,6 +6850,23 @@ mod tests {
             one_minute_after_open,
             1
         ));
+
+        let mut deferred = pending.clone();
+        deferred.next_reconcile_after_utc_ms = Some(
+            Utc.with_ymd_and_hms(2026, 5, 29, 13, 32, 0)
+                .unwrap()
+                .timestamp_millis(),
+        );
+        assert!(!pending_open_reconcile_due(
+            &deferred,
+            one_minute_after_open,
+            1
+        ));
+        assert!(pending_open_reconcile_due(
+            &deferred,
+            Utc.with_ymd_and_hms(2026, 5, 29, 13, 32, 0).unwrap(),
+            1
+        ));
     }
 
     #[test]
@@ -5868,6 +6878,8 @@ mod tests {
             target_shares: HashMap::from([("XOM".to_string(), 21.0)]),
             closes: HashMap::from([("XOM".to_string(), 101.0)]),
             attempted_reconcile_day: Some(NaiveDate::from_ymd_opt(2026, 5, 29).unwrap()),
+            broker_order_ids: vec!["oid-1".to_string()],
+            next_reconcile_after_utc_ms: Some(1_780_000_000_000),
         };
 
         save_pending_open_reconcile_state(&path, &pending).unwrap();

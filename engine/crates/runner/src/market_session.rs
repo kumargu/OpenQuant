@@ -78,6 +78,15 @@ pub fn is_after_close_grace_utc(dt_utc: DateTime<Utc>, grace_min: u32) -> bool {
     session_minute(local) >= (cfg.close.hour() * 60 + cfg.close.minute() + grace_min)
 }
 
+pub fn is_at_or_after_close_decision_utc(dt_utc: DateTime<Utc>, minutes_before_close: u32) -> bool {
+    let cfg = session_config();
+    let local = dt_utc.with_timezone(&cfg.tz);
+    let minute = session_minute(local);
+    let close = cfg.close.hour() * 60 + cfg.close.minute();
+    let decision = close.saturating_sub(minutes_before_close);
+    minute >= decision && minute < close
+}
+
 pub fn minutes_from_open_utc(dt_utc: DateTime<Utc>) -> Option<u32> {
     let cfg = session_config();
     let local = dt_utc.with_timezone(&cfg.tz);
@@ -158,6 +167,19 @@ mod tests {
                 .time(),
             NaiveTime::from_hms_opt(21, 0, 0).unwrap()
         );
+    }
+
+    #[test]
+    fn test_pre_close_decision_window_handles_us_dst_defaults() {
+        let before_decision = Utc.with_ymd_and_hms(2026, 7, 1, 19, 44, 0).unwrap();
+        let at_decision = Utc.with_ymd_and_hms(2026, 7, 1, 19, 45, 0).unwrap();
+        let before_close = Utc.with_ymd_and_hms(2026, 7, 1, 19, 59, 0).unwrap();
+        let at_close = Utc.with_ymd_and_hms(2026, 7, 1, 20, 0, 0).unwrap();
+
+        assert!(!is_at_or_after_close_decision_utc(before_decision, 15));
+        assert!(is_at_or_after_close_decision_utc(at_decision, 15));
+        assert!(is_at_or_after_close_decision_utc(before_close, 15));
+        assert!(!is_at_or_after_close_decision_utc(at_close, 15));
     }
 
     #[test]

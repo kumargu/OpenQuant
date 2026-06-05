@@ -34,6 +34,7 @@ pub struct BasketOverlayPickerFeatures {
     pub leadership_short_conflict_ratio: f64,
     pub strategy_return_20d: f64,
     pub strategy_drawdown_20d: f64,
+    pub strategy_equity_observations: usize,
     pub basket_only_scale_if_sleeve: f64,
 }
 
@@ -446,6 +447,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.0,
             strategy_drawdown_20d: 0.0,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 1.0,
         };
 
@@ -465,6 +467,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.0,
             strategy_drawdown_20d: 0.0,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 1.0,
         };
 
@@ -491,6 +494,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.25,
             strategy_return_20d: 0.10,
             strategy_drawdown_20d: 0.0,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 1.0,
         };
 
@@ -515,6 +519,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: -0.02,
             strategy_drawdown_20d: 0.06,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.75,
         };
 
@@ -539,6 +544,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.07,
             strategy_drawdown_20d: 0.01,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.75,
         };
 
@@ -561,6 +567,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.10,
             strategy_return_20d: 0.08,
             strategy_drawdown_20d: 0.01,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.90,
         };
 
@@ -583,6 +590,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.10,
             strategy_return_20d: 0.12,
             strategy_drawdown_20d: 0.01,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.90,
         };
 
@@ -605,6 +613,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.18,
             strategy_return_20d: 0.08,
             strategy_drawdown_20d: 0.01,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.90,
         };
 
@@ -627,6 +636,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: -0.02,
             strategy_drawdown_20d: 0.04,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.90,
         };
         let recovered_features = BasketOverlayPickerFeatures {
@@ -635,6 +645,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.12,
             strategy_drawdown_20d: 0.0,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.90,
         };
 
@@ -663,6 +674,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.25,
             strategy_return_20d: -0.01,
             strategy_drawdown_20d: 0.04,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.90,
         };
 
@@ -685,6 +697,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: 0.02,
             strategy_drawdown_20d: 0.08,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.90,
         };
 
@@ -707,6 +720,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.0,
             strategy_return_20d: -0.02,
             strategy_drawdown_20d: 0.08,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.90,
         };
 
@@ -726,6 +740,7 @@ mod tests {
             leadership_short_conflict_ratio: 0.25,
             strategy_return_20d: 0.08,
             strategy_drawdown_20d: 0.01,
+            strategy_equity_observations: 21,
             basket_only_scale_if_sleeve: 0.75,
         };
         let mut picker =
