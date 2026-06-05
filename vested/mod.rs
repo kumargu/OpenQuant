@@ -42,6 +42,6 @@
 //! `data/{paper,live,replay}/vested_model`. Those are operational artifacts and
 //! should not be committed.
 
-mod vested;
+mod core;
 
-pub use self::vested::*;
+pub use self::core::*;
